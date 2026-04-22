@@ -56,7 +56,7 @@ pre-commit install --install-hooks
 
 # Change Validation Workflow
 
-本节保留为全局验证闸门，用于承接 superpower 实现阶段之后的统一质量检查。
+本节保留为全局验证闸门，用于承接 Trellis `Execute` 阶段之后的统一质量检查。
 
 在声明完成、准备 `commit`、准备 `push`、准备发起 PR 之前，应满足以下要求：
 
@@ -130,7 +130,7 @@ pre-commit install --install-hooks
 
 ## 默认行为
 
-- superpower 工作流可在适当时机执行 `commit`、`push`、`PR`、merge 或分支收尾。
+- Trellis 工作流可在适当时机执行 `commit`、`push`、`PR`、merge 或分支收尾。
 - 如果仓库自身存在更明确的 Git 规范或发布流程，应优先遵循仓库规范。
 
 ## 提交粒度
@@ -414,14 +414,18 @@ pre-commit install --install-hooks
   ## 技能（Skills）
 
   - 技能存放位置：`~/.codex/skills/`（个人）与 `.codex/skills/`（项目共享，可选）。
-  - 开始任务前，应优先判断是否存在匹配的 superpower 或 skill。
+  - 开始任务前，应优先判断是否存在匹配的 skill。
   - 若任务命中 skill，阅读其 `SKILL.md` 并按流程执行。
-  - 本文件默认采用以下主干整合方式：
-   - `brainstorming / writing-plans / executing-plans / test-driven-development`（注：TryTrellis 当前不再强制使用上述 superpowers 技能，是否启用由项目需求与团队决策）
-    - `-> Change Validation Workflow`
-    - `-> requesting-code-review`
-    - `-> Commit Workflow`
-    - `-> finishing-a-development-branch`
+   - 本文件默认采用以下主干整合方式：
+      - `Trellis Plan -> Execute -> Finish`
+      - `Plan`：创建/启动 task，补充 `prd.md`，按需研究，并初始化任务上下文。
+      - `Execute`：优先走 `trellis-before-dev`、实现、`trellis-check` 的闭环，不再默认依赖旧的外部流程编排。
+      - `Finish`：执行质量验证，按需做 debug retrospective，随后运行 `trellis-update-spec` 更新规范并完成收尾。
+      - 若团队仍保留旧流程，可作为可选增强接入，但不再是 TryTrellis 的默认前置能力。
+      - `-> Change Validation Workflow`
+      - `-> requesting-code-review`
+      - `-> Commit Workflow`
+      - `-> finishing-a-development-branch`
   - 在回复中声明本次使用了哪些技能。
   - 前端设计务必使用ui-ux-pro-max技能。
   - 当你完成工作时，请调用提问工具（askQuestions）来获取进一步的指示，而不是直接结束对话。
