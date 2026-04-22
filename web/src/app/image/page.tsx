@@ -4,7 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ImageLightbox } from "@/components/image-lightbox";
-import { editImage, fetchAccounts, generateImage, type Account, type ImageModel } from "@/lib/api";
+import {
+  editImage,
+  fetchAccounts,
+  generateImage,
+  type Account,
+  type ImageBackground,
+  type ImageModel,
+  type ImageOutputFormat,
+  type ImageQuality,
+  type ImageRequestOptions,
+} from "@/lib/api";
+import type { UserRole } from "@/lib/auth-types";
 import { getCachedOrSyncAuthSession, syncStoredAuthSession } from "@/lib/auth-session";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults } from "@/app/image/components/image-results";
@@ -23,6 +34,32 @@ import {
 const imageModelOptions: Array<{ label: string; value: ImageModel }> = [
   { label: "gpt-image-1", value: "gpt-image-1" },
   { label: "gpt-image-2", value: "gpt-image-2" },
+];
+const imageSizeSuggestions = [
+  "auto",
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "2048x2048",
+  "2048x1152",
+  "3840x2160",
+  "2160x3840",
+];
+const imageQualityOptions: Array<{ label: string; value: ImageQuality }> = [
+  { label: "自动质量", value: "auto" },
+  { label: "低", value: "low" },
+  { label: "中", value: "medium" },
+  { label: "高", value: "high" },
+];
+const imageBackgroundOptions: Array<{ label: string; value: ImageBackground }> = [
+  { label: "自动背景", value: "auto" },
+  { label: "透明", value: "transparent" },
+  { label: "不透明", value: "opaque" },
+];
+const imageOutputFormatOptions: Array<{ label: string; value: ImageOutputFormat }> = [
+  { label: "PNG", value: "png" },
+  { label: "JPEG", value: "jpeg" },
+  { label: "WEBP", value: "webp" },
 ];
 
 function buildConversationTitle(prompt: string) {
@@ -51,37 +88,6 @@ function formatAvailableQuota(accounts: Account[]) {
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
 }
 
-async function normalizeConversationHistory(items: ImageConversation[]) {
-  const normalized = items.map((item) =>
-    item.status === "generating"
-      ? {
-          ...item,
-          status: "error" as const,
-          error: item.images.some((image) => image.status === "success")
-            ? item.error || "生成已中断"
-            : "页面已刷新，生成已中断",
-          images: item.images.map((image) =>
-            image.status === "loading"
-              ? {
-                  ...image,
-                  status: "error" as const,
-                  error: "页面已刷新，生成已中断",
-                }
-              : image,
-          ),
-        }
-      : item,
-  );
-
-  await Promise.all(
-    normalized
-      .filter((item, index) => item !== items[index])
-      .map((item) => saveImageConversation(item)),
-  );
-
-  return normalized;
-}
-
 function createId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -97,6 +103,22 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function dataUrlToFile(dataUrl: string, fileName: string) {
+  const [header, encoded = ""] = dataUrl.split(",", 2);
+  const mimeMatch = header.match(/^data:(.*?)(;base64)?$/i);
+  const mimeType = mimeMatch?.[1] || "image/png";
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new File([bytes], fileName, { type: mimeType });
+}
+
+function buildGeneratedImageDataUrl(image: Pick<StoredImage, "b64_json" | "mime_type">) {
+  return `data:${image.mime_type || "image/png"};base64,${image.b64_json}`;
+}
+
 export default function ImagePage() {
   const didLoadQuotaRef = useRef(false);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -107,6 +129,11 @@ export default function ImagePage() {
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
   const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-2");
+  const [imageSize, setImageSize] = useState("auto");
+  const [imageQuality, setImageQuality] = useState<ImageQuality>("auto");
+  const [imageBackground, setImageBackground] = useState<ImageBackground>("auto");
+  const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>("png");
+  const [imageCompression, setImageCompression] = useState("");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -114,6 +141,7 @@ export default function ImagePage() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
   const [availableQuota, setAvailableQuota] = useState("加载中");
+  const [viewerRole, setViewerRole] = useState<UserRole | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
@@ -124,6 +152,26 @@ export default function ImagePage() {
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const isSelectedGenerating = selectedConversationId !== null && generatingIds.has(selectedConversationId);
   const hasAnyGenerating = generatingIds.size > 0;
+  const showConversationOwner = viewerRole === "admin";
+  const supportsTransparentBackground = imageModel !== "gpt-image-2";
+  const supportsCompression = imageOutputFormat === "jpeg" || imageOutputFormat === "webp";
+  const parsedCompression = useMemo(() => {
+    if (!supportsCompression || imageCompression.trim() === "") {
+      return undefined;
+    }
+    const value = Number(imageCompression);
+    return Number.isFinite(value) ? value : undefined;
+  }, [imageCompression, supportsCompression]);
+  const imageRequestOptions = useMemo<ImageRequestOptions>(
+    () => ({
+      size: imageSize.trim() || "auto",
+      quality: imageQuality,
+      background: imageBackground,
+      output_format: imageOutputFormat,
+      compression: parsedCompression,
+    }),
+    [imageBackground, imageOutputFormat, imageQuality, imageSize, parsedCompression],
+  );
 
   const addGeneratingId = useCallback((id: string) => {
     setGeneratingIds((prev) => new Set(prev).add(id));
@@ -141,9 +189,16 @@ export default function ImagePage() {
     () =>
       (selectedConversation?.images ?? [])
         .filter((img): img is StoredImage & { b64_json: string } => img.status === "success" && !!img.b64_json)
-        .map((img) => ({ id: img.id, src: `data:image/png;base64,${img.b64_json}` })),
+        .map((img) => ({ id: img.id, src: buildGeneratedImageDataUrl(img) })),
     [selectedConversation],
   );
+
+  const handleImageModelChange = useCallback((value: ImageModel) => {
+    setImageModel(value);
+    if (value === "gpt-image-2") {
+      setImageBackground((prev) => (prev === "transparent" ? "auto" : prev));
+    }
+  }, []);
 
   const openLightbox = useCallback(
     (imageId: string) => {
@@ -162,11 +217,10 @@ export default function ImagePage() {
     const loadHistory = async () => {
       try {
         const items = await listImageConversations();
-        const normalizedItems = await normalizeConversationHistory(items);
         if (cancelled) {
           return;
         }
-        setConversations(normalizedItems);
+        setConversations(items);
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取会话记录失败";
         toast.error(message);
@@ -190,6 +244,7 @@ export default function ImagePage() {
         setAvailableQuota("—");
         return;
       }
+      setViewerRole(session.role);
       if (session.role === "admin") {
         const data = await fetchAccounts();
         setAvailableQuota(formatAvailableQuota(data.items));
@@ -336,6 +391,24 @@ export default function ImagePage() {
     await appendReferenceImages(files);
   }, [appendReferenceImages]);
 
+  const handleReuseGeneratedImage = useCallback(async (
+    payload: { id?: string; dataUrl: string },
+  ) => {
+    try {
+      setImageMode("edit");
+      const file = dataUrlToFile(payload.dataUrl, `generated-${payload.id || createId()}.png`);
+      await appendReferenceImages([file]);
+      requestAnimationFrame(() => {
+        textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        textareaRef.current?.focus();
+      });
+      toast.success("已加入参考图");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加入参考图失败";
+      toast.error(message);
+    }
+  }, [appendReferenceImages]);
+
   const handleRemoveReferenceImage = useCallback((index: number) => {
     setReferenceImageFiles((prev) => {
       const next = prev.filter((_, currentIndex) => currentIndex !== index);
@@ -358,6 +431,10 @@ export default function ImagePage() {
       toast.error("请先上传参考图");
       return;
     }
+    if (!supportsTransparentBackground && imageBackground === "transparent") {
+      toast.error('gpt-image-2 暂不支持 transparent 背景');
+      return;
+    }
 
     const now = new Date().toISOString();
     const conversationId = createId();
@@ -377,6 +454,9 @@ export default function ImagePage() {
       })),
       createdAt: now,
       status: "generating",
+      ownerRole: viewerRole === "admin" ? "admin" : "user",
+      ownerId: viewerRole === "admin" ? "admin" : "self",
+      ownerName: viewerRole === "admin" ? "管理员" : "普通用户",
     };
 
     addGeneratingId(conversationId);
@@ -390,8 +470,8 @@ export default function ImagePage() {
         try {
           const data =
             imageMode === "edit" && referenceImageFiles.length > 0
-              ? await editImage(referenceImageFiles, prompt, imageModel)
-              : await generateImage(prompt, imageModel);
+              ? await editImage(referenceImageFiles, prompt, imageModel, imageRequestOptions)
+              : await generateImage(prompt, imageModel, imageRequestOptions);
           const first = data.data?.[0];
           if (!first?.b64_json) {
             throw new Error(`第 ${index + 1} 张没有返回图片数据`);
@@ -401,6 +481,7 @@ export default function ImagePage() {
             id: `${conversationId}-${index}`,
             status: "success",
             b64_json: first.b64_json,
+            mime_type: first.mime_type || "image/png",
           };
 
           await updateConversation(conversationId, (current) => ({
@@ -476,9 +557,10 @@ export default function ImagePage() {
 
   return (
     <>
-      <section className="mx-auto grid h-[calc(100vh-5rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <section className="mx-auto grid min-h-[calc(100dvh-5rem)] w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:h-[calc(100vh-5rem)] lg:min-h-0 lg:grid-cols-[240px_minmax(0,1fr)]">
         <ImageSidebar
           conversations={conversations}
+          showConversationOwner={showConversationOwner}
           isLoadingHistory={isLoadingHistory}
           generatingIds={generatingIds}
           selectedConversationId={selectedConversationId}
@@ -492,12 +574,14 @@ export default function ImagePage() {
         <div className="flex min-h-0 flex-col gap-4">
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4"
+            className="hide-scrollbar min-h-[36vh] flex-1 overflow-y-auto px-1 py-2 sm:min-h-0 sm:px-4 sm:py-4"
           >
             <ImageResults
               selectedConversation={selectedConversation}
+              showConversationOwner={showConversationOwner}
               isSelectedGenerating={isSelectedGenerating}
               openLightbox={openLightbox}
+              onReuseAsReference={handleReuseGeneratedImage}
               formatConversationTime={formatConversationTime}
             />
           </div>
@@ -506,6 +590,11 @@ export default function ImagePage() {
             mode={imageMode}
             prompt={imagePrompt}
             model={imageModel}
+            size={imageSize}
+            quality={imageQuality}
+            background={imageBackground}
+            outputFormat={imageOutputFormat}
+            compression={imageCompression}
             imageCount={imageCount}
             availableQuota={availableQuota}
             hasAnyGenerating={hasAnyGenerating}
@@ -514,13 +603,25 @@ export default function ImagePage() {
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
             imageModelOptions={imageModelOptions}
+            imageSizeSuggestions={imageSizeSuggestions}
+            imageQualityOptions={imageQualityOptions}
+            imageBackgroundOptions={imageBackgroundOptions}
+            imageOutputFormatOptions={imageOutputFormatOptions}
+            supportsTransparentBackground={supportsTransparentBackground}
+            supportsCompression={supportsCompression}
             onModeChange={setImageMode}
             onPromptChange={setImagePrompt}
-            onModelChange={setImageModel}
+            onModelChange={handleImageModelChange}
+            onSizeChange={setImageSize}
+            onQualityChange={setImageQuality}
+            onBackgroundChange={setImageBackground}
+            onOutputFormatChange={setImageOutputFormat}
+            onCompressionChange={setImageCompression}
             onImageCountChange={setImageCount}
             onSubmit={handleGenerateImage}
             onPickReferenceImage={() => fileInputRef.current?.click()}
             onReferenceImageChange={handleReferenceImageChange}
+            onReferenceImageReuse={handleReuseGeneratedImage}
             onRemoveReferenceImage={handleRemoveReferenceImage}
           />
         </div>

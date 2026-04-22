@@ -179,7 +179,8 @@ def build_chat_image_completion(
         b64_json = str(item.get("b64_json") or "").strip()
         if not b64_json:
             continue
-        image_data_url = f"data:image/png;base64,{b64_json}"
+        mime_type = str(item.get("mime_type") or "image/png").strip() or "image/png"
+        image_data_url = f"data:{mime_type};base64,{b64_json}"
         markdown_images.append(f"![image_{index}]({image_data_url})")
 
     text_content = "\n\n".join(markdown_images) if markdown_images else "Image generation completed."

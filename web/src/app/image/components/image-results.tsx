@@ -1,5 +1,5 @@
 "use client";
-import { LoaderCircle } from "lucide-react";
+import { ImagePlus, LoaderCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -7,15 +7,19 @@ import type { ImageConversation, StoredImage } from "@/store/image-conversations
 
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
+  showConversationOwner?: boolean;
   isSelectedGenerating: boolean;
   openLightbox: (imageId: string) => void;
+  onReuseAsReference?: (image: { id: string; dataUrl: string }) => void | Promise<void>;
   formatConversationTime: (value: string) => string;
 };
 
 export function ImageResults({
   selectedConversation,
+  showConversationOwner = false,
   isSelectedGenerating,
   openLightbox,
+  onReuseAsReference,
   formatConversationTime,
 }: ImageResultsProps) {
   const [referenceLightboxOpen, setReferenceLightboxOpen] = useState(false);
@@ -111,6 +115,9 @@ export function ImageResults({
             <span className="rounded-full bg-stone-100 px-3 py-1">
               {formatConversationTime(selectedConversation.createdAt)}
             </span>
+            {showConversationOwner ? (
+              <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.ownerName}</span>
+            ) : null}
             {isSelectedGenerating && (
               <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">处理中</span>
             )}
@@ -126,7 +133,12 @@ export function ImageResults({
             <div className="columns-1 gap-4 space-y-4 sm:columns-2 xl:columns-3">
               {selectedConversation.images.map((image, index) => (
                 <div key={image.id} className="break-inside-avoid overflow-hidden rounded-[22px]">
-                  <ImageResultCard image={image} index={index} onOpen={openLightbox} />
+                  <ImageResultCard
+                    image={image}
+                    index={index}
+                    onOpen={openLightbox}
+                    onReuseAsReference={onReuseAsReference}
+                  />
                 </div>
               ))}
             </div>
@@ -147,20 +159,47 @@ function ImageResultCard({
   image,
   index,
   onOpen,
+  onReuseAsReference,
 }: {
   image: StoredImage;
   index: number;
   onOpen: (imageId: string) => void;
+  onReuseAsReference?: (image: { id: string; dataUrl: string }) => void | Promise<void>;
 }) {
   if (image.status === "success" && image.b64_json) {
+    const dataUrl = `data:${image.mime_type || "image/png"};base64,${image.b64_json}`;
+    const dragPayload = JSON.stringify({ id: image.id, dataUrl });
     return (
-      <button type="button" onClick={() => onOpen(image.id)} className="group block w-full cursor-zoom-in">
-        <img
-          src={`data:image/png;base64,${image.b64_json}`}
-          alt={`Generated result ${index + 1}`}
-          className="block h-auto w-full transition duration-200 group-hover:brightness-90"
-        />
-      </button>
+      <div className="overflow-hidden rounded-[22px] border border-stone-200/70 bg-white p-2">
+        <button
+          type="button"
+          onClick={() => onOpen(image.id)}
+          draggable
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "copy";
+            event.dataTransfer.setData("application/x-chatgpt2api-reference-image", dragPayload);
+            event.dataTransfer.setData("text/plain", dataUrl);
+          }}
+          className="group block w-full cursor-zoom-in overflow-hidden rounded-[18px]"
+          aria-label={`预览生成结果 ${index + 1}`}
+        >
+          <img
+            src={dataUrl}
+            alt={`Generated result ${index + 1}`}
+            className="block h-auto w-full transition duration-200 group-hover:brightness-90"
+          />
+        </button>
+        {onReuseAsReference ? (
+          <button
+            type="button"
+            onClick={() => void onReuseAsReference({ id: image.id, dataUrl })}
+            className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-full border border-stone-200 bg-stone-50 px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-100"
+          >
+            <ImagePlus className="size-4" />
+            作为参考图
+          </button>
+        ) : null}
+      </div>
     );
   }
 

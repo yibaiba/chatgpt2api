@@ -6,6 +6,21 @@ export type { AuthSession, AuthUser } from "@/lib/auth-types";
 export type AccountType = "Free" | "Plus" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-1" | "gpt-image-2";
+export type ImageQuality = "auto" | "low" | "medium" | "high";
+export type ImageBackground = "auto" | "transparent" | "opaque";
+export type ImageOutputFormat = "png" | "jpeg" | "webp";
+export type ImageRequestOptions = {
+  size?: string;
+  quality?: ImageQuality;
+  background?: ImageBackground;
+  output_format?: ImageOutputFormat;
+  compression?: number;
+};
+export type GeneratedImageResponseItem = {
+  b64_json: string;
+  revised_prompt?: string;
+  mime_type?: string;
+};
 export type ProxySettings = {
   proxy_url: string;
   enabled: boolean;
@@ -227,8 +242,12 @@ export async function deleteProxyEntry(proxyId: string) {
   });
 }
 
-export async function generateImage(prompt: string, model: ImageModel = "gpt-image-1") {
-  return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
+export async function generateImage(
+  prompt: string,
+  model: ImageModel = "gpt-image-1",
+  options: ImageRequestOptions = {},
+) {
+  return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/generations",
     {
       method: "POST",
@@ -237,12 +256,18 @@ export async function generateImage(prompt: string, model: ImageModel = "gpt-ima
         model,
         n: 1,
         response_format: "b64_json",
+        ...options,
       },
     },
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-1") {
+export async function editImage(
+  files: File | File[],
+  prompt: string,
+  model: ImageModel = "gpt-image-1",
+  options: ImageRequestOptions = {},
+) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -252,8 +277,13 @@ export async function editImage(files: File | File[], prompt: string, model: Ima
   formData.append("prompt", prompt);
   formData.append("model", model);
   formData.append("n", "1");
+  Object.entries(options).forEach(([key, value]) => {
+    if (typeof value === "string" && value.trim()) {
+      formData.append(key, value);
+    }
+  });
 
-  return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
+  return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/edits",
     {
       method: "POST",

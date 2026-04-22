@@ -8,14 +8,15 @@ from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, Uploa
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from services.account_service import account_service
 from services.auth_service import auth_service
 from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
-from services.image_service import ImageGenerationError
+from services.image_history_service import image_history_service
+from services.image_service import ImageGenerationError, normalize_image_request_options
 from services.system_settings import system_settings_service
 from services.utils import parse_image_count
 from services.version import get_app_version
@@ -25,11 +26,28 @@ WEB_DIST_DIR = BASE_DIR / "web_dist"
 
 
 class ImageGenerationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     prompt: str = Field(..., min_length=1)
     model: str = "gpt-4o"
     n: int = Field(default=1, ge=1, le=4)
     response_format: str = "b64_json"
     history_disabled: bool = True
+    size: str | None = None
+    quality: str | None = None
+    background: str | None = Field(default=None, validation_alias=AliasChoices("background", "background:"))
+    output_format: str | None = None
+    compression: int | None = Field(default=None, ge=0, le=100)
+
+    def build_image_options(self):
+        return normalize_image_request_options(
+            model=self.model,
+            size=self.size,
+            quality=self.quality,
+            background=self.background,
+            output_format=self.output_format,
+            compression=self.compression,
+        )
 
 
 class AccountCreateRequest(BaseModel):
@@ -112,6 +130,38 @@ class ProxyPoolEntryCreateRequest(BaseModel):
 class ProxyPoolEntryUpdateRequest(BaseModel):
     name: str | None = None
     proxy_url: str | None = None
+
+
+class StoredReferenceImagePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = ""
+    type: str = ""
+    data_url: str = Field(default="", alias="dataUrl")
+
+
+class StoredImagePayload(BaseModel):
+    id: str = Field(default="")
+    status: str | None = None
+    b64_json: str | None = None
+    mime_type: str | None = None
+    error: str | None = None
+
+
+class ImageConversationPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(default="")
+    title: str = ""
+    prompt: str = ""
+    model: str = ""
+    mode: str | None = None
+    reference_images: list[StoredReferenceImagePayload] = Field(default_factory=list, alias="referenceImages")
+    count: int = Field(default=1)
+    images: list[StoredImagePayload] = Field(default_factory=list)
+    created_at: str = Field(default="", alias="createdAt")
+    status: str = "success"
+    error: str | None = None
 
 
 def build_model_item(model_id: str) -> dict[str, object]:
@@ -399,6 +449,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail={"error": "user not found"})
         return {"items": auth_service.list_users()}
 
+    @router.get("/api/image-conversations")
+    async def list_image_conversations(authorization: str | None = Header(default=None)):
+        identity = require_session(authorization)
+        return {"items": image_history_service.list_conversations(identity)}
+
+    @router.post("/api/image-conversations")
+    async def save_image_conversation(body: ImageConversationPayload, authorization: str | None = Header(default=None)):
+        identity = require_session(authorization)
+        try:
+            item = image_history_service.save_conversation(identity, body.model_dump(mode="python", by_alias=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+        return {"item": item}
+
+    @router.delete("/api/image-conversations")
+    async def clear_image_conversations(authorization: str | None = Header(default=None)):
+        identity = require_session(authorization)
+        return {"removed": image_history_service.clear_conversations(identity)}
+
+    @router.delete("/api/image-conversations/{conversation_id}")
+    async def delete_image_conversation(conversation_id: str, authorization: str | None = Header(default=None)):
+        identity = require_session(authorization)
+        if not image_history_service.delete_conversation(identity, conversation_id):
+            raise HTTPException(status_code=404, detail={"error": "conversation not found"})
+        return {"ok": True}
+
     @router.get("/api/settings/proxy")
     async def get_proxy_settings(authorization: str | None = Header(default=None)):
         require_admin_session(authorization)
@@ -465,11 +543,15 @@ def create_app() -> FastAPI:
         reserved_count = int(body.n or 1)
         auth_key = str(identity.get("auth_key") or "")
         try:
+            image_options = body.build_image_options()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        try:
             auth_service.reserve_images(auth_key, reserved_count)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
         try:
-            result = await run_in_threadpool(chatgpt_service.generate_with_pool, body.prompt, body.model, body.n)
+            result = await run_in_threadpool(chatgpt_service.generate_with_pool, body.prompt, body.model, body.n, image_options)
         except ImageGenerationError as exc:
             auth_service.settle_images(auth_key, reserved_count, 0)
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
@@ -486,11 +568,27 @@ def create_app() -> FastAPI:
             prompt: str = Form(...),
             model: str = Form(default="gpt-image-1"),
             n: int = Form(default=1),
+            size: str | None = Form(default=None),
+            quality: str | None = Form(default=None),
+            background: str | None = Form(default=None),
+            output_format: str | None = Form(default=None),
+            compression: int | None = Form(default=None),
     ):
         identity = require_session(authorization)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
         auth_key = str(identity.get("auth_key") or "")
+        try:
+            image_options = normalize_image_request_options(
+                model=model,
+                size=size,
+                quality=quality,
+                background=background,
+                output_format=output_format,
+                compression=compression,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
         images: list[tuple[bytes, str, str]] = []
         for upload in image:
@@ -508,7 +606,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
         try:
             result = await run_in_threadpool(
-                chatgpt_service.edit_with_pool, prompt, images, model, n
+                chatgpt_service.edit_with_pool, prompt, images, model, n, image_options
             )
         except ImageGenerationError as exc:
             auth_service.settle_images(auth_key, n, 0)

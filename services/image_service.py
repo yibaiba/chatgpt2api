@@ -7,9 +7,11 @@ import random
 import time
 import uuid
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Optional
 
 from curl_cffi.requests import Session
+from PIL import Image, ImageOps
 
 from services.account_service import account_service
 from services import proof_of_work
@@ -24,6 +26,11 @@ USER_AGENT = (
 )
 DEFAULT_MODEL = "gpt-4o"
 MAX_POW_ATTEMPTS = 500000
+MAX_OUTPUT_IMAGE_SIDE = 3840
+MIN_OUTPUT_IMAGE_PIXELS = 655_360
+MAX_OUTPUT_IMAGE_PIXELS = 8_294_400
+MAX_OUTPUT_IMAGE_RATIO = 3
+EXPERIMENTAL_IMAGE_PIXELS = 3_686_400
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -53,10 +60,197 @@ class ImageGenerationError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class ImageRequestOptions:
+    size: tuple[int, int] | None = None
+    quality: str = "auto"
+    background: str = "auto"
+    output_format: str = "png"
+    compression: int | None = None
+
+
+def _looks_like_image_bytes(content: bytes) -> bool:
+    return (
+        content.startswith(b"\x89PNG\r\n\x1a\n")
+        or content.startswith(b"\xff\xd8\xff")
+        or content.startswith((b"GIF87a", b"GIF89a"))
+        or (len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP")
+    )
+
+
+def _extract_response_preview(response, limit: int = 200) -> str:
+    text = ""
+    try:
+        text = str(response.text or "").strip()
+    except Exception:
+        text = ""
+    if not text:
+        try:
+            text = response.content[:limit].decode("utf-8", errors="replace").strip()
+        except Exception:
+            text = ""
+    return " ".join(text.split())[:limit]
+
+
+def normalize_image_request_options(
+    *,
+    model: object = None,
+    size: object = None,
+    quality: object = None,
+    background: object = None,
+    output_format: object = None,
+    compression: object = None,
+) -> ImageRequestOptions:
+    normalized_size: tuple[int, int] | None = None
+    size_value = str(size or "").strip().lower()
+    if size_value and size_value != "auto":
+        width_text, separator, height_text = size_value.partition("x")
+        if separator != "x":
+            raise ValueError("size must use WIDTHxHEIGHT format")
+        try:
+            width = int(width_text)
+            height = int(height_text)
+        except ValueError as exc:
+            raise ValueError("size must use WIDTHxHEIGHT format") from exc
+        if width < 1 or height < 1:
+            raise ValueError("size must be positive")
+        if width > MAX_OUTPUT_IMAGE_SIDE or height > MAX_OUTPUT_IMAGE_SIDE:
+            raise ValueError(f"size must not exceed {MAX_OUTPUT_IMAGE_SIDE} on either side")
+        if width % 16 != 0 or height % 16 != 0:
+            raise ValueError("both size dimensions must be multiples of 16")
+        long_edge = max(width, height)
+        short_edge = min(width, height)
+        if long_edge / short_edge > MAX_OUTPUT_IMAGE_RATIO:
+            raise ValueError("long edge to short edge ratio must not exceed 3:1")
+        total_pixels = width * height
+        if total_pixels < MIN_OUTPUT_IMAGE_PIXELS or total_pixels > MAX_OUTPUT_IMAGE_PIXELS:
+            raise ValueError(
+                f"total pixels must be between {MIN_OUTPUT_IMAGE_PIXELS} and {MAX_OUTPUT_IMAGE_PIXELS}"
+            )
+        normalized_size = (width, height)
+
+    normalized_quality = str(quality or "auto").strip().lower() or "auto"
+    if normalized_quality not in {"auto", "low", "medium", "high"}:
+        raise ValueError("quality must be one of auto, low, medium, high")
+
+    normalized_background = str(background or "auto").strip().lower() or "auto"
+    if normalized_background not in {"auto", "transparent", "opaque"}:
+        raise ValueError("background must be one of auto, transparent, opaque")
+
+    normalized_output_format = str(output_format or "png").strip().lower() or "png"
+    if normalized_output_format == "jpg":
+        normalized_output_format = "jpeg"
+    if normalized_output_format not in {"png", "jpeg", "webp"}:
+        raise ValueError("output_format must be one of png, jpeg, webp")
+
+    if normalized_background == "transparent" and normalized_output_format == "jpeg":
+        raise ValueError("jpeg does not support transparent background")
+    normalized_model = str(model or "").strip().lower()
+    if normalized_model == "gpt-image-2" and normalized_background == "transparent":
+        raise ValueError('gpt-image-2 does not support background="transparent"')
+
+    normalized_compression: int | None = None
+    if compression not in (None, ""):
+        try:
+            normalized_compression = int(compression)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("compression must be an integer between 0 and 100") from exc
+        if normalized_compression < 0 or normalized_compression > 100:
+            raise ValueError("compression must be between 0 and 100")
+        if normalized_output_format not in {"jpeg", "webp"}:
+            raise ValueError("compression is only supported for jpeg and webp output_format")
+
+    return ImageRequestOptions(
+        size=normalized_size,
+        quality=normalized_quality,
+        background=normalized_background,
+        output_format=normalized_output_format,
+        compression=normalized_compression,
+    )
+
+
+def _build_image_prompt(prompt: str, options: ImageRequestOptions) -> str:
+    requirements: list[str] = []
+    if options.size:
+        width, height = options.size
+        orientation = "portrait" if height > width else "landscape" if width > height else "square"
+        requirements.append(f"Target aspect ratio: {width}:{height} ({orientation}).")
+    if options.quality == "high":
+        requirements.append("Render with high detail and polished quality.")
+    elif options.quality == "medium":
+        requirements.append("Render with balanced quality and detail.")
+    elif options.quality == "low":
+        requirements.append("A simpler, lower-detail render is acceptable.")
+    if options.background == "transparent":
+        requirements.append("Use a transparent background with no extra backdrop elements.")
+    elif options.background == "opaque":
+        requirements.append("Use a fully opaque background.")
+    if options.size:
+        total_pixels = options.size[0] * options.size[1]
+        if total_pixels > EXPERIMENTAL_IMAGE_PIXELS:
+            requirements.append("This is a large experimental canvas size; keep composition stable and coherent.")
+
+    if not requirements:
+        return prompt
+    return f"{prompt}\n\nOutput requirements:\n- " + "\n- ".join(requirements)
+
+
+def _encode_processed_image(content: bytes, options: ImageRequestOptions) -> str:
+    try:
+        with Image.open(BytesIO(content)) as opened_image:
+            image = opened_image.convert("RGBA")
+    except Exception as exc:
+        raise ImageGenerationError("failed to decode upstream image") from exc
+
+    if options.size:
+        fitted = ImageOps.contain(image, options.size, method=Image.Resampling.LANCZOS)
+        background_color = (0, 0, 0, 0) if options.background == "transparent" else (255, 255, 255, 255)
+        canvas = Image.new("RGBA", options.size, background_color)
+        offset = ((options.size[0] - fitted.width) // 2, (options.size[1] - fitted.height) // 2)
+        canvas.alpha_composite(fitted, offset)
+        image = canvas
+
+    if options.background == "opaque" or options.output_format == "jpeg":
+        opaque_canvas = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        opaque_canvas.alpha_composite(image)
+        final_image = opaque_canvas.convert("RGB")
+    else:
+        final_image = image
+
+    quality_map = {
+        "auto": 90,
+        "low": 75,
+        "medium": 85,
+        "high": 95,
+    }
+    encoder_quality = (
+        max(1, 100 - options.compression)
+        if options.compression is not None
+        else quality_map[options.quality]
+    )
+    output = BytesIO()
+    if options.output_format == "png":
+        final_image.save(output, format="PNG", optimize=True)
+    elif options.output_format == "jpeg":
+        final_image.save(output, format="JPEG", optimize=True, quality=encoder_quality)
+    else:
+        final_image.save(output, format="WEBP", quality=encoder_quality, method=6)
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def _output_mime_type(options: ImageRequestOptions) -> str:
+    if options.output_format == "jpeg":
+        return "image/jpeg"
+    if options.output_format == "webp":
+        return "image/webp"
+    return "image/png"
+
+
 @dataclass
 class GeneratedImage:
     b64_json: str
     revised_prompt: str
+    mime_type: str = "image/png"
     url: str = ""
 
 
@@ -477,7 +671,7 @@ def _send_conversation(
 def _parse_sse(response) -> dict:
     file_ids: list[str] = []
     conversation_id = ""
-    text_parts: list[str] = []
+    latest_text = ""
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -524,8 +718,10 @@ def _parse_sse(response) -> dict:
         if content.get("content_type") == "text":
             parts = content.get("parts") or []
             if parts:
-                text_parts.append(str(parts[0]))
-    return {"conversation_id": conversation_id, "file_ids": file_ids, "text": "".join(text_parts)}
+                part_text = str(parts[0] or "").strip()
+                if part_text:
+                    latest_text = part_text
+    return {"conversation_id": conversation_id, "file_ids": file_ids, "text": latest_text}
 
 
 def _extract_image_ids(mapping: dict) -> list[str]:
@@ -616,11 +812,22 @@ def _fetch_download_url(session: Session, access_token: str, device_id: str, con
     return str((response.json() or {}).get("download_url") or "")
 
 
-def _download_as_base64(session: Session, download_url: str) -> str:
+def _download_as_base64(session: Session, download_url: str, options: ImageRequestOptions) -> tuple[str, str]:
     response = session.get(download_url, timeout=60)
     if not response.ok or not response.content:
-        raise ImageGenerationError("download image failed")
-    return base64.b64encode(response.content).decode("ascii")
+        detail = _extract_response_preview(response)
+        if detail:
+            raise ImageGenerationError(f"download image failed: {detail}")
+        raise ImageGenerationError(f"download image failed: status {response.status_code}")
+    content_type = str(response.headers.get("content-type") or "").lower()
+    if not content_type.startswith("image/") and not _looks_like_image_bytes(response.content):
+        detail = _extract_response_preview(response)
+        if detail:
+            raise ImageGenerationError(f"upstream download did not return an image: {detail}")
+        if content_type:
+            raise ImageGenerationError(f"upstream download did not return an image: {content_type}")
+        raise ImageGenerationError("upstream download did not return an image")
+    return _encode_processed_image(response.content, options), _output_mime_type(options)
 
 
 def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
@@ -635,20 +842,30 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
     return str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
-def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL) -> dict:
+def generate_image_result(
+    access_token: str,
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    options: ImageRequestOptions | None = None,
+) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
     if not prompt:
         raise ImageGenerationError("prompt is required")
     if not access_token:
         raise ImageGenerationError("token is required")
+    normalized_options = options or ImageRequestOptions()
+    effective_prompt = _build_image_prompt(prompt, normalized_options)
 
     session, fp = _new_session(access_token)
     try:
         upstream_model = _resolve_upstream_model(access_token, model)
         print(
             f"[image-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model}"
+            f"requested_model={model} upstream_model={upstream_model} "
+            f"size={normalized_options.size or 'auto'} quality={normalized_options.quality} "
+            f"background={normalized_options.background} output_format={normalized_options.output_format} "
+            f"compression={normalized_options.compression if normalized_options.compression is not None else 'auto'}"
         )
         device_id = _bootstrap(session, fp)
         chat_token, pow_info = _chat_requirements(session, access_token, device_id)
@@ -668,7 +885,7 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
             chat_token,
             proof_token,
             parent_message_id,
-            prompt,
+            effective_prompt,
             upstream_model,
         )
         parsed = _parse_sse(response)
@@ -685,15 +902,17 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
         download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
         if not download_url:
             raise ImageGenerationError("failed to get download url")
+        encoded_image, mime_type = _download_as_base64(session, download_url, normalized_options)
         result = GeneratedImage(
-            b64_json=_download_as_base64(session, download_url),
+            b64_json=encoded_image,
             revised_prompt=prompt,
+            mime_type=mime_type,
             url=download_url,
         )
         print(f"[image-upstream] success token={access_token[:12]}... images=1")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
+            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt, "mime_type": result.mime_type}],
         }
     except Exception as exc:
         print(f"[image-upstream] fail token={access_token[:12]}... error={exc}")
@@ -742,6 +961,7 @@ def edit_image_result(
     prompt: str,
     images: list[tuple[bytes, str, str]],
     model: str = DEFAULT_MODEL,
+    options: ImageRequestOptions | None = None,
 ) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -751,13 +971,18 @@ def edit_image_result(
         raise ImageGenerationError("token is required")
     if not images:
         raise ImageGenerationError("image is required")
+    normalized_options = options or ImageRequestOptions()
+    effective_prompt = _build_image_prompt(prompt, normalized_options)
 
     session, fp = _new_session(access_token)
     try:
         upstream_model = _resolve_upstream_model(access_token, model)
         print(
             f"[image-edit-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model} images={len(images)}"
+            f"requested_model={model} upstream_model={upstream_model} images={len(images)} "
+            f"size={normalized_options.size or 'auto'} quality={normalized_options.quality} "
+            f"background={normalized_options.background} output_format={normalized_options.output_format} "
+            f"compression={normalized_options.compression if normalized_options.compression is not None else 'auto'}"
         )
         device_id = _bootstrap(session, fp)
 
@@ -797,7 +1022,7 @@ def edit_image_result(
             chat_token,
             proof_token,
             parent_message_id,
-            prompt,
+            effective_prompt,
             upstream_model,
             uploaded_images,
         )
@@ -819,15 +1044,17 @@ def edit_image_result(
         download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
         if not download_url:
             raise ImageGenerationError("failed to get download url")
+        encoded_image, mime_type = _download_as_base64(session, download_url, normalized_options)
         result = GeneratedImage(
-            b64_json=_download_as_base64(session, download_url),
+            b64_json=encoded_image,
             revised_prompt=prompt,
+            mime_type=mime_type,
             url=download_url,
         )
         print(f"[image-edit-upstream] success token={access_token[:12]}... inputs={len(uploaded_images)}")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
+            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt, "mime_type": result.mime_type}],
         }
     except Exception as exc:
         print(f"[image-edit-upstream] fail token={access_token[:12]}... error={exc}")
