@@ -177,10 +177,13 @@ class SystemSettingsService:
         return _load_json_object(CONFIG_FILE, name="config.json")
 
     def _write_raw_config(self, raw_config: dict[str, object]) -> None:
-        CONFIG_FILE.write_text(
-            json.dumps(raw_config, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        try:
+            CONFIG_FILE.write_text(
+                json.dumps(raw_config, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise ValueError("config.json is not writable; remove the read-only mount from /app/config.json") from exc
 
     def _load_proxy_pool(self) -> list[dict]:
         raw_config = self._read_raw_config()
