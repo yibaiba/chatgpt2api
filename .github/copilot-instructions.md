@@ -80,18 +80,25 @@ pre-commit install --install-hooks
 
 ## 默认总线
 
-1. 需求模糊、需要设计澄清时：
-   - `brainstorming -> writing-plans`
-2. 已有计划文档并开始执行时：
-   - `executing-plans` 或 `subagent-driven-development`
-3. 进入具体功能、bug、行为变更实现时：
-   - `test-driven-development`
+1. 进入任务时，先按 `Plan` 阶段推进：
+   - 创建或启动当前 `task`
+   - 澄清需求并维护 `prd.md`
+   - 按需补充 research/context
+2. 开始实现时，进入 `Execute` 阶段：
+   - 先走 `trellis-before-dev`
+   - 再执行实现、局部验证与 `trellis-check`
+3. 实现过程中若发现需求缺口或上下文错误：
+   - 回退到 `Plan` 修正 `prd.md` 或 context
+   - 然后重新进入 `Execute`
 4. 阶段性完成、准备提交或准备交付前：
-   - `Change Validation Workflow`
+   - 进入 `Finish` 阶段
+   - 执行 `Change Validation Workflow`
+   - 必要时执行 debug retrospective
+   - 使用 `trellis-update-spec` 回写规范
 5. 合并前：
-   - `requesting-code-review`
+   - 执行 `requesting-code-review`
 6. 开发结束后的分支收尾与交付：
-   - `Commit Workflow -> finishing-a-development-branch`
+   - 执行 `Commit Workflow -> finishing-a-development-branch`
 
 ## 快速上手
 
@@ -108,7 +115,7 @@ pre-commit install --install-hooks
 
 ## 文档维护
 
-- 每当以下任何一项发生变化时，请更新 `<path/to/plan.md>` ：计划、目标、约束/假设、关键决策、经验教训、步骤、进度状态（已完成/进行中/下一步）。写计划前可使用`brainstorming`。
+- 每当以下任何一项发生变化时，请更新 `<path/to/plan.md>` ：计划、目标、约束/假设、关键决策、经验教训、步骤、进度状态（已完成/进行中/下一步）。写计划前可使用 `trellis-brainstorm`。
 - 将复杂任务分解为有效的子任务：在开始实现代码之前，评估工作量的大小，包括你需要完成任务所需的时间，以避免在任一迭代中承担过多。如果任务复杂，将其分解为范围受限的更小子任务，保持因果依赖。将第一步子任务的范围设定为具有挑战性但在约 5-10 分钟内可完成。将其余任务推迟到下一次迭代，输出到步骤 8（“迭代”）的待办事项中。跟踪待办事项和所选的（第一）子任务。
 
 - 迭代：报告尚未完成或目前仍在待办事项中的任务，并为下一个任务/待办项从第 1 步重新开始工作流程（不等待新的用户消息）。
