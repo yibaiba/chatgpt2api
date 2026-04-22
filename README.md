@@ -23,6 +23,7 @@
 
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
+cp docker-compose-example.yml docker-compose.yml
 # 按需编辑 config.json 的密钥、`refresh_account_interval_minute` 和 `proxy_pool`
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
 # 普通用户密钥与剩余额度可在「设置 -> 普通用户权限」中管理，数据会落到 data/auth_users.json

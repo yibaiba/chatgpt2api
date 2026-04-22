@@ -15,4 +15,5 @@ edit
 test
 
 docker-compose-local.yml
+docker-compose.yml
 .ace-tool/

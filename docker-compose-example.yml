@@ -1,0 +1,36 @@
+services:
+  warp:
+    image: ghcr.io/ccbkkb/microwarp:v1.0.0-rc.1
+    container_name: warp
+    restart: always
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    expose:
+      - "1080"
+    environment:
+      - AUTO_RENEW_DAYS=7
+      - BIND_ADDR=0.0.0.0
+      - BIND_PORT=1080
+      - SOCKS_USER=${WARP_SOCKS_USER}
+      - SOCKS_PASS=${WARP_SOCKS_PASS}
+      - IPV6_MODE=dual
+      - ENDPOINT_IP=162.159.192.1:4500
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - ./warp-data:/etc/wireguard
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatgpt2api
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - ./data:/app/data
+      - ./config.json:/app/config.json:ro
