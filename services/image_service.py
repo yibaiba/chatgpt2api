@@ -13,6 +13,7 @@ from curl_cffi.requests import Session
 
 from services.account_service import account_service
 from services import proof_of_work
+from services.system_settings import system_settings_service
 
 
 BASE_URL = "https://chatgpt.com"
@@ -96,10 +97,10 @@ def _build_fp(access_token: str) -> dict:
 
 def _new_session(access_token: str) -> tuple[Session, dict]:
     fp = _build_fp(access_token)
-    session = Session(
+    session = system_settings_service.apply_next_proxy(Session(
         impersonate=fp.get("impersonate") or "edge101",
         verify=True,
-    )
+    ))
     session.headers.update(
         {
             "user-agent": fp.get("user-agent") or USER_AGENT,

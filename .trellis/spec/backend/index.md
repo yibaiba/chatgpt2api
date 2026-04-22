@@ -15,6 +15,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Auth and Permissions](./auth-and-permissions.md) | Role-based auth, admin-only routes, and normal-user image quota contracts | Filled |
+| [Network and Proxy](./network-and-proxy.md) | Global backend proxy config, admin API, and outbound session wiring | Filled |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |

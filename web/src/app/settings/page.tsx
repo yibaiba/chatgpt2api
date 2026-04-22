@@ -43,19 +43,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  createProxyEntry,
   createAuthUser,
   createCPAPool,
+  deleteProxyEntry,
   deleteAuthUser,
   deleteCPAPool,
   fetchAuthUsers,
   fetchCPAPoolFiles,
   fetchCPAPools,
+  fetchProxyPoolSettings,
   startCPAImport,
+  updateProxyEntry,
   updateAuthUser,
   updateCPAPool,
   type AuthUser,
   type CPAPool,
   type CPARemoteFile,
+  type ProxyPoolEntry,
+  type ProxyPoolSettings,
 } from "@/lib/api";
 import { syncStoredAuthSession } from "@/lib/auth-session";
 
@@ -82,6 +88,19 @@ function formatDateTime(value?: string | null) {
   return value || "—";
 }
 
+function maskProxyUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (!url.password) {
+      return value;
+    }
+    const username = url.username ? `${decodeURIComponent(url.username)}:` : "";
+    return `${url.protocol}//${username}***@${url.host}`;
+  } catch {
+    return value;
+  }
+}
+
 export default function SettingsPage() {
   const didLoadRef = useRef(false);
   const pollTimerRef = useRef<number | null>(null);
@@ -91,6 +110,19 @@ export default function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [authUsers, setAuthUsers] = useState<AuthUser[]>([]);
   const [isUsersLoading, setIsUsersLoading] = useState(true);
+  const [proxyPoolSettings, setProxyPoolSettings] = useState<ProxyPoolSettings>({
+    items: [],
+    enabled: false,
+    selection_strategy: "round_robin",
+    validate_on_save: true,
+  });
+  const [isProxyLoading, setIsProxyLoading] = useState(true);
+  const [proxyDialogOpen, setProxyDialogOpen] = useState(false);
+  const [editingProxy, setEditingProxy] = useState<ProxyPoolEntry | null>(null);
+  const [proxyFormName, setProxyFormName] = useState("");
+  const [proxyFormUrl, setProxyFormUrl] = useState("");
+  const [isSavingProxy, setIsSavingProxy] = useState(false);
+  const [deletingProxyId, setDeletingProxyId] = useState<string | null>(null);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingPool, setEditingPool] = useState<CPAPool | null>(null);
@@ -144,6 +176,18 @@ export default function SettingsPage() {
     }
   };
 
+  const loadProxyPool = async () => {
+    setIsProxyLoading(true);
+    try {
+      const data = await fetchProxyPoolSettings();
+      setProxyPoolSettings(data);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载代理设置失败");
+    } finally {
+      setIsProxyLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (didLoadRef.current) {
       return;
@@ -161,7 +205,7 @@ export default function SettingsPage() {
           router.replace("/image");
           return;
         }
-        await Promise.all([loadPools(), loadAuthUsers()]);
+        await Promise.all([loadPools(), loadAuthUsers(), loadProxyPool()]);
       } catch {
         if (!cancelled) {
           router.replace("/login");
@@ -425,6 +469,60 @@ export default function SettingsPage() {
     }
   };
 
+  const openAddProxyDialog = () => {
+    setEditingProxy(null);
+    setProxyFormName("");
+    setProxyFormUrl("");
+    setProxyDialogOpen(true);
+  };
+
+  const openEditProxyDialog = (proxy: ProxyPoolEntry) => {
+    setEditingProxy(proxy);
+    setProxyFormName(proxy.name);
+    setProxyFormUrl(proxy.proxy_url);
+    setProxyDialogOpen(true);
+  };
+
+  const handleSaveProxy = async () => {
+    if (!proxyFormUrl.trim()) {
+      toast.error("请输入 SOCKS5 代理地址");
+      return;
+    }
+
+    setIsSavingProxy(true);
+    try {
+      const data = editingProxy
+        ? await updateProxyEntry(editingProxy.id, {
+            name: proxyFormName.trim(),
+            proxy_url: proxyFormUrl.trim(),
+          })
+        : await createProxyEntry({
+            name: proxyFormName.trim(),
+            proxy_url: proxyFormUrl.trim(),
+          });
+      setProxyPoolSettings(data);
+      setProxyDialogOpen(false);
+      toast.success(editingProxy ? "代理已更新" : "代理已添加");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存代理失败");
+    } finally {
+      setIsSavingProxy(false);
+    }
+  };
+
+  const handleDeleteProxy = async (proxy: ProxyPoolEntry) => {
+    setDeletingProxyId(proxy.id);
+    try {
+      const data = await deleteProxyEntry(proxy.id);
+      setProxyPoolSettings(data);
+      toast.success("代理已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除代理失败");
+    } finally {
+      setDeletingProxyId(null);
+    }
+  };
+
   return (
     <>
       <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -435,6 +533,122 @@ export default function SettingsPage() {
       </section>
 
       <section className="space-y-6">
+        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="space-y-6 p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
+                  <Unplug className="size-5 text-stone-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight">SOCKS5 代理池</h2>
+                  <p className="text-sm text-stone-500">仅作用于图片生成/编辑与账号刷新，请求会按轮询策略切换代理。</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {proxyPoolSettings.enabled ? (
+                  <>
+                    <Badge variant="success" className="rounded-md px-2.5 py-1">
+                      {proxyPoolSettings.items.length} 条代理
+                    </Badge>
+                    <Badge className="rounded-md px-2.5 py-1">轮询切换</Badge>
+                  </>
+                ) : (
+                  <Badge className="rounded-md px-2.5 py-1">未启用</Badge>
+                )}
+                <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openAddProxyDialog}>
+                  <Plus className="size-4" />
+                  添加代理
+                </Button>
+              </div>
+            </div>
+
+            {isProxyLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <LoaderCircle className="size-5 animate-spin text-stone-400" />
+              </div>
+            ) : proxyPoolSettings.items.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-stone-50 px-6 py-10 text-center">
+                <Unplug className="size-8 text-stone-300" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-stone-600">暂无代理</p>
+                  <p className="text-sm text-stone-400">添加后，图片生成/编辑与账号刷新会按请求轮询使用这些 SOCKS5 代理。</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  {proxyPoolSettings.items.map((proxy) => {
+                    const isDeletingProxy = deletingProxyId === proxy.id;
+                    const validationBadge =
+                      proxy.last_check_ok === null
+                        ? { variant: "outline" as const, label: "未校验" }
+                        : proxy.last_check_ok
+                          ? { variant: "success" as const, label: `校验成功${proxy.last_check_status ? ` · HTTP ${proxy.last_check_status}` : ""}` }
+                          : { variant: "danger" as const, label: "校验失败" };
+                    return (
+                      <div key={proxy.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-stone-800">{proxy.name || "SOCKS5 代理"}</div>
+                            <div className="truncate font-mono text-xs text-stone-400">{maskProxyUrl(proxy.proxy_url)}</div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                              onClick={() => openEditProxyDialog(proxy)}
+                              disabled={isDeletingProxy}
+                              title="编辑"
+                            >
+                              <Pencil className="size-4" />
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-lg p-2 text-stone-400 transition hover:bg-rose-50 hover:text-rose-500"
+                              onClick={() => void handleDeleteProxy(proxy)}
+                              disabled={isDeletingProxy}
+                              title="删除"
+                            >
+                              {isDeletingProxy ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 text-xs text-stone-500">
+                          <Badge variant="outline" className="rounded-md px-2.5 py-1">
+                            {proxy.scheme.toUpperCase()}
+                          </Badge>
+                          <Badge variant={validationBadge.variant} className="rounded-md px-2.5 py-1">
+                            {validationBadge.label}
+                          </Badge>
+                          <div className="rounded-full bg-stone-100 px-3 py-1.5">最近校验 {formatDateTime(proxy.last_checked_at)}</div>
+                          <div className="rounded-full bg-stone-100 px-3 py-1.5">更新时间 {formatDateTime(proxy.updated_at)}</div>
+                        </div>
+
+                        {proxy.last_check_ok === false && proxy.last_check_error ? (
+                          <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-600">
+                            {proxy.last_check_error}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="rounded-xl bg-stone-50 px-4 py-3 text-sm leading-6 text-stone-500">
+                  <p className="font-medium text-stone-600">使用说明</p>
+                  <ul className="mt-1 list-inside list-disc space-y-0.5">
+                    <li>仅支持 `socks5://` 与 `socks5h://`，保存时会立即做一次连通性校验。</li>
+                    <li>当前只覆盖图片生成/编辑和账号刷新，CPA 远程读取保持直连。</li>
+                    <li>新的后端请求会按添加顺序轮询使用代理池中的条目。</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex items-start justify-between">
@@ -668,6 +882,58 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       </section>
+
+      <Dialog open={proxyDialogOpen} onOpenChange={setProxyDialogOpen}>
+        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+          <DialogHeader className="gap-2">
+            <DialogTitle>{editingProxy ? "编辑代理" : "添加代理"}</DialogTitle>
+            <DialogDescription className="text-sm leading-6">
+              保存时会立即校验该代理是否可用，当前仅支持 SOCKS5 / SOCKS5H。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">名称（可选）</label>
+              <Input
+                value={proxyFormName}
+                onChange={(event) => setProxyFormName(event.target.value)}
+                placeholder="例如：WARP-1、备用线路"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+                <Link2 className="size-3.5" />
+                代理地址
+              </label>
+              <Input
+                value={proxyFormUrl}
+                onChange={(event) => setProxyFormUrl(event.target.value)}
+                placeholder="socks5h://user:pass@127.0.0.1:1080"
+                className="h-11 rounded-xl border-stone-200 bg-white font-mono"
+              />
+            </div>
+          </div>
+          <DialogFooter className="pt-2">
+            <Button
+              variant="secondary"
+              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              onClick={() => setProxyDialogOpen(false)}
+              disabled={isSavingProxy}
+            >
+              取消
+            </Button>
+            <Button
+              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              onClick={() => void handleSaveProxy()}
+              disabled={isSavingProxy}
+            >
+              {isSavingProxy ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+              {editingProxy ? "保存修改" : "添加"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent showCloseButton={false} className="rounded-2xl p-6">

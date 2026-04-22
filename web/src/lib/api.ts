@@ -6,6 +6,29 @@ export type { AuthSession, AuthUser } from "@/lib/auth-types";
 export type AccountType = "Free" | "Plus" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-1" | "gpt-image-2";
+export type ProxySettings = {
+  proxy_url: string;
+  enabled: boolean;
+  scheme: string | null;
+};
+export type ProxyPoolEntry = {
+  id: string;
+  name: string;
+  proxy_url: string;
+  scheme: "socks5" | "socks5h";
+  last_checked_at: string | null;
+  last_check_ok: boolean | null;
+  last_check_status: number | null;
+  last_check_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type ProxyPoolSettings = {
+  items: ProxyPoolEntry[];
+  enabled: boolean;
+  selection_strategy: "round_robin";
+  validate_on_save: boolean;
+};
 
 export type Account = {
   id: string;
@@ -70,6 +93,10 @@ type AuthUserMutationResponse = {
   items: AuthUser[];
 };
 
+type ProxySettingsResponse = {
+  item: ProxySettings;
+};
+type ProxyPoolSettingsResponse = ProxyPoolSettings;
 export async function login(authKey: string) {
   const normalizedAuthKey = String(authKey || "").trim();
   return httpRequest<AuthLoginResponse>("/auth/login", {
@@ -155,6 +182,47 @@ export async function updateAuthUser(
 
 export async function deleteAuthUser(userId: string) {
   return httpRequest<AuthUserMutationResponse>(`/api/auth-users/${userId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchProxySettings() {
+  return httpRequest<ProxySettingsResponse>("/api/settings/proxy");
+}
+
+export async function updateProxySettings(proxyUrl: string) {
+  return httpRequest<ProxySettingsResponse>("/api/settings/proxy", {
+    method: "POST",
+    body: { proxy_url: proxyUrl },
+  });
+}
+
+export async function fetchProxyPoolSettings() {
+  return httpRequest<ProxyPoolSettingsResponse>("/api/settings/proxies");
+}
+
+export async function createProxyEntry(payload: { name: string; proxy_url: string }) {
+  return httpRequest<ProxyPoolSettingsResponse>("/api/settings/proxies", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateProxyEntry(
+  proxyId: string,
+  updates: {
+    name?: string;
+    proxy_url?: string;
+  },
+) {
+  return httpRequest<ProxyPoolSettingsResponse>(`/api/settings/proxies/${proxyId}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteProxyEntry(proxyId: string) {
+  return httpRequest<ProxyPoolSettingsResponse>(`/api/settings/proxies/${proxyId}`, {
     method: "DELETE",
   });
 }

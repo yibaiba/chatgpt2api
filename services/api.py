@@ -15,8 +15,8 @@ from services.auth_service import auth_service
 from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
-
 from services.image_service import ImageGenerationError
+from services.system_settings import system_settings_service
 from services.utils import parse_image_count
 from services.version import get_app_version
 
@@ -98,6 +98,20 @@ class AuthUserUpdateRequest(BaseModel):
     name: str | None = None
     auth_key: str | None = None
     image_quota: int | None = Field(default=None, ge=0)
+
+
+class ProxySettingsUpdateRequest(BaseModel):
+    proxy_url: str = ""
+
+
+class ProxyPoolEntryCreateRequest(BaseModel):
+    name: str = ""
+    proxy_url: str = ""
+
+
+class ProxyPoolEntryUpdateRequest(BaseModel):
+    name: str | None = None
+    proxy_url: str | None = None
 
 
 def build_model_item(model_id: str) -> dict[str, object]:
@@ -384,6 +398,66 @@ def create_app() -> FastAPI:
         if not auth_service.delete_user(user_id):
             raise HTTPException(status_code=404, detail={"error": "user not found"})
         return {"items": auth_service.list_users()}
+
+    @router.get("/api/settings/proxy")
+    async def get_proxy_settings(authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        return {"item": system_settings_service.get_proxy_settings()}
+
+    @router.post("/api/settings/proxy")
+    async def update_proxy_settings(body: ProxySettingsUpdateRequest, authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        try:
+            item = system_settings_service.update_proxy_url(body.proxy_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"item": item}
+
+    @router.get("/api/settings/proxies")
+    async def get_proxy_pool_settings(authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        return system_settings_service.get_proxy_pool_settings()
+
+    @router.post("/api/settings/proxies")
+    async def create_proxy_entry(body: ProxyPoolEntryCreateRequest, authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        try:
+            system_settings_service.create_proxy_entry(body.name, body.proxy_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return system_settings_service.get_proxy_pool_settings()
+
+    @router.post("/api/settings/proxies/{proxy_id}")
+    async def update_proxy_entry(
+            proxy_id: str,
+            body: ProxyPoolEntryUpdateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        updates = {
+            key: value
+            for key, value in {
+                "name": body.name,
+                "proxy_url": body.proxy_url,
+            }.items()
+            if value is not None
+        }
+        if not updates:
+            raise HTTPException(status_code=400, detail={"error": "no updates provided"})
+        try:
+            item = system_settings_service.update_proxy_entry(proxy_id, updates)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "proxy not found"})
+        return system_settings_service.get_proxy_pool_settings()
+
+    @router.delete("/api/settings/proxies/{proxy_id}")
+    async def delete_proxy_entry(proxy_id: str, authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        if not system_settings_service.delete_proxy_entry(proxy_id):
+            raise HTTPException(status_code=404, detail={"error": "proxy not found"})
+        return system_settings_service.get_proxy_pool_settings()
 
     @router.post("/v1/images/generations")
     async def generate_images(body: ImageGenerationRequest, authorization: str | None = Header(default=None)):

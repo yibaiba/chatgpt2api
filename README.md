@@ -23,7 +23,7 @@
 
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
-# 按需编辑 config.json 的密钥和 `refresh_account_interval_minute`
+# 按需编辑 config.json 的密钥、`refresh_account_interval_minute` 和 `proxy_pool`
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
 # 普通用户密钥与剩余额度可在「设置 -> 普通用户权限」中管理，数据会落到 data/auth_users.json
 docker compose up -d
@@ -48,6 +48,7 @@ docker compose up -d
 - 前端支持多图生成交互
 - 本地保存图片会话历史，支持回看、删除和清空
 - 支持管理员 / 普通用户双角色登录，普通用户仅保留画图能力
+- 支持 SOCKS5 代理池，可轮询代理图片生成/编辑与账号刷新请求
 
 ### 号池管理功能
 
@@ -64,6 +65,7 @@ docker compose up -d
 - `auth-key` 仍然是管理员密钥，拥有全部页面和接口权限
 - 普通用户密钥只能访问图片相关接口和画图页面，不能访问号池管理与设置
 - 普通用户图片额度按成功出图张数扣减，请求失败时会自动退回未实际消耗的额度
+- 管理员可在设置页或 `config.json` 中配置 SOCKS5 代理池，支持 `socks5://`、`socks5h://`
 
 ### 实验性 / 规划中
 
