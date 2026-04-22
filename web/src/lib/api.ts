@@ -1,4 +1,7 @@
 import { httpRequest } from "@/lib/request";
+import type { AuthSession, AuthUser } from "@/lib/auth-types";
+
+export type { AuthSession, AuthUser } from "@/lib/auth-types";
 
 export type AccountType = "Free" | "Plus" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
@@ -48,9 +51,28 @@ type AccountUpdateResponse = {
   items: Account[];
 };
 
+type AuthLoginResponse = {
+  ok: boolean;
+  version: string;
+  session: AuthSession;
+};
+
+type AuthSessionResponse = {
+  session: AuthSession;
+};
+
+type AuthUserListResponse = {
+  items: AuthUser[];
+};
+
+type AuthUserMutationResponse = {
+  item?: AuthUser;
+  items: AuthUser[];
+};
+
 export async function login(authKey: string) {
   const normalizedAuthKey = String(authKey || "").trim();
-  return httpRequest<{ ok: boolean }>("/auth/login", {
+  return httpRequest<AuthLoginResponse>("/auth/login", {
     method: "POST",
     body: {},
     headers: {
@@ -58,6 +80,10 @@ export async function login(authKey: string) {
     },
     redirectOnUnauthorized: false,
   });
+}
+
+export async function fetchSession() {
+  return httpRequest<AuthSessionResponse>("/auth/session");
 }
 
 export async function fetchAccounts() {
@@ -99,6 +125,37 @@ export async function updateAccount(
       access_token: accessToken,
       ...updates,
     },
+  });
+}
+
+export async function fetchAuthUsers() {
+  return httpRequest<AuthUserListResponse>("/api/auth-users");
+}
+
+export async function createAuthUser(payload: { name: string; auth_key: string; image_quota: number }) {
+  return httpRequest<AuthUserMutationResponse>("/api/auth-users", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateAuthUser(
+  userId: string,
+  updates: {
+    name?: string;
+    auth_key?: string;
+    image_quota?: number;
+  },
+) {
+  return httpRequest<AuthUserMutationResponse>(`/api/auth-users/${userId}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteAuthUser(userId: string) {
+  return httpRequest<AuthUserMutationResponse>(`/api/auth-users/${userId}`, {
+    method: "DELETE",
   });
 }
 

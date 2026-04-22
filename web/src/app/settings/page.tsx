@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
+  Copy,
   Eye,
   EyeOff,
   Import,
+  KeyRound,
   Link2,
   LoaderCircle,
   Pencil,
@@ -12,8 +15,10 @@ import {
   Save,
   Search,
   ServerCog,
+  Shield,
   Trash2,
   Unplug,
+  UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -38,15 +43,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  createAuthUser,
   createCPAPool,
+  deleteAuthUser,
   deleteCPAPool,
+  fetchAuthUsers,
   fetchCPAPoolFiles,
   fetchCPAPools,
   startCPAImport,
+  updateAuthUser,
   updateCPAPool,
+  type AuthUser,
   type CPAPool,
   type CPARemoteFile,
 } from "@/lib/api";
+import { syncStoredAuthSession } from "@/lib/auth-session";
 
 const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
@@ -67,12 +78,19 @@ function normalizeFiles(items: CPARemoteFile[]) {
   return files;
 }
 
+function formatDateTime(value?: string | null) {
+  return value || "—";
+}
+
 export default function SettingsPage() {
   const didLoadRef = useRef(false);
   const pollTimerRef = useRef<number | null>(null);
+  const router = useRouter();
 
   const [pools, setPools] = useState<CPAPool[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [authUsers, setAuthUsers] = useState<AuthUser[]>([]);
+  const [isUsersLoading, setIsUsersLoading] = useState(true);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingPool, setEditingPool] = useState<CPAPool | null>(null);
@@ -94,6 +112,14 @@ export default function SettingsPage() {
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>("100");
   const [isStartingImport, setIsStartingImport] = useState(false);
 
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<AuthUser | null>(null);
+  const [userFormName, setUserFormName] = useState("");
+  const [userFormAuthKey, setUserFormAuthKey] = useState("");
+  const [userFormQuota, setUserFormQuota] = useState("0");
+  const [isSavingUser, setIsSavingUser] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+
   const loadPools = async () => {
     setIsLoading(true);
     try {
@@ -106,13 +132,47 @@ export default function SettingsPage() {
     }
   };
 
+  const loadAuthUsers = async () => {
+    setIsUsersLoading(true);
+    try {
+      const data = await fetchAuthUsers();
+      setAuthUsers(data.items);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载普通用户失败");
+    } finally {
+      setIsUsersLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (didLoadRef.current) {
       return;
     }
     didLoadRef.current = true;
-    void loadPools();
-  }, []);
+    let cancelled = false;
+    const init = async () => {
+      try {
+        const session = await syncStoredAuthSession();
+        if (cancelled) {
+          return;
+        }
+        if (session.role !== "admin") {
+          toast.error("只有管理员可以访问设置");
+          router.replace("/image");
+          return;
+        }
+        await Promise.all([loadPools(), loadAuthUsers()]);
+      } catch {
+        if (!cancelled) {
+          router.replace("/login");
+        }
+      }
+    };
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   useEffect(() => {
     const runningPoolIds = pools
@@ -294,6 +354,77 @@ export default function SettingsPage() {
     }
   };
 
+  const openAddUserDialog = () => {
+    setEditingUser(null);
+    setUserFormName("");
+    setUserFormAuthKey("");
+    setUserFormQuota("0");
+    setUserDialogOpen(true);
+  };
+
+  const openEditUserDialog = (user: AuthUser) => {
+    setEditingUser(user);
+    setUserFormName(user.name);
+    setUserFormAuthKey(user.auth_key);
+    setUserFormQuota(String(user.image_quota));
+    setUserDialogOpen(true);
+  };
+
+  const handleSaveUser = async () => {
+    if (!userFormAuthKey.trim()) {
+      toast.error("请输入普通用户密钥");
+      return;
+    }
+
+    setIsSavingUser(true);
+    try {
+      if (editingUser) {
+        const data = await updateAuthUser(editingUser.id, {
+          name: userFormName.trim(),
+          auth_key: userFormAuthKey.trim(),
+          image_quota: Math.max(0, Number(userFormQuota || 0)),
+        });
+        setAuthUsers(data.items);
+        toast.success("普通用户已更新");
+      } else {
+        const data = await createAuthUser({
+          name: userFormName.trim(),
+          auth_key: userFormAuthKey.trim(),
+          image_quota: Math.max(0, Number(userFormQuota || 0)),
+        });
+        setAuthUsers(data.items);
+        toast.success("普通用户已添加");
+      }
+      setUserDialogOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存普通用户失败");
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (user: AuthUser) => {
+    setDeletingUserId(user.id);
+    try {
+      const data = await deleteAuthUser(user.id);
+      setAuthUsers(data.items);
+      toast.success("普通用户已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除普通用户失败");
+    } finally {
+      setDeletingUserId(null);
+    }
+  };
+
+  const handleCopyUserKey = async (authKey: string) => {
+    try {
+      await navigator.clipboard.writeText(authKey);
+      toast.success("已复制普通用户密钥");
+    } catch {
+      toast.error("复制密钥失败");
+    }
+  };
+
   return (
     <>
       <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -304,6 +435,105 @@ export default function SettingsPage() {
       </section>
 
       <section className="space-y-6">
+        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="space-y-6 p-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
+                  <Shield className="size-5 text-stone-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight">普通用户权限</h2>
+                  <p className="text-sm text-stone-500">普通用户只可使用画图页，不能进入号池管理和设置。</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {authUsers.length > 0 ? <Badge className="rounded-md px-2.5 py-1">{authUsers.length} 个普通用户</Badge> : null}
+                <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openAddUserDialog}>
+                  <Plus className="size-4" />
+                  添加普通用户
+                </Button>
+              </div>
+            </div>
+
+            {isUsersLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <LoaderCircle className="size-5 animate-spin text-stone-400" />
+              </div>
+            ) : authUsers.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-stone-50 px-6 py-10 text-center">
+                <UserRound className="size-8 text-stone-300" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-stone-600">暂无普通用户</p>
+                  <p className="text-sm text-stone-400">添加后即可把密钥分发给普通用户单独登录使用。</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {authUsers.map((user) => {
+                  const isDeletingUser = deletingUserId === user.id;
+                  return (
+                    <div key={user.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-stone-800">{user.name || "普通用户"}</div>
+                          <div className="truncate font-mono text-xs text-stone-400">{user.auth_key}</div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                            onClick={() => void handleCopyUserKey(user.auth_key)}
+                            title="复制密钥"
+                          >
+                            <Copy className="size-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                            onClick={() => openEditUserDialog(user)}
+                            disabled={isDeletingUser}
+                            title="编辑"
+                          >
+                            <Pencil className="size-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg p-2 text-stone-400 transition hover:bg-rose-50 hover:text-rose-500"
+                            onClick={() => void handleDeleteUser(user)}
+                            disabled={isDeletingUser}
+                            title="删除"
+                          >
+                            {isDeletingUser ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 text-xs text-stone-500">
+                        <div className="rounded-full bg-stone-100 px-3 py-1.5 font-medium text-stone-700">
+                          剩余可生成 {user.image_quota} 张
+                        </div>
+                        <div className="rounded-full bg-stone-100 px-3 py-1.5">累计已生成 {user.total_generated} 张</div>
+                        <div className="rounded-full bg-stone-100 px-3 py-1.5">最近使用 {formatDateTime(user.last_used_at)}</div>
+                        <div className="rounded-full bg-stone-100 px-3 py-1.5">更新时间 {formatDateTime(user.updated_at)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="rounded-xl bg-stone-50 px-4 py-3 text-sm leading-6 text-stone-500">
+              <p className="font-medium text-stone-600">权限说明</p>
+              <ul className="mt-1 list-inside list-disc space-y-0.5">
+                <li>管理员继续使用主密钥，可访问全部页面和全部接口。</li>
+                <li>普通用户登录后只显示「画图」入口，后台接口也会拦截号池管理与设置操作。</li>
+                <li>图片额度按成功生成的图片张数扣减，失败请求会自动退回未消耗的额度。</li>
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex items-start justify-between">
@@ -508,6 +738,72 @@ export default function SettingsPage() {
             >
               {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
               {editingPool ? "保存修改" : "添加"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
+        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+          <DialogHeader className="gap-2">
+            <DialogTitle>{editingUser ? "编辑普通用户" : "添加普通用户"}</DialogTitle>
+            <DialogDescription className="text-sm leading-6">
+              设置普通用户登录密钥和可继续生成的图片数量。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+                <UserRound className="size-3.5" />
+                用户名称（可选）
+              </label>
+              <Input
+                value={userFormName}
+                onChange={(event) => setUserFormName(event.target.value)}
+                placeholder="例如：设计师A、运营同学"
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+                <KeyRound className="size-3.5" />
+                普通用户密钥
+              </label>
+              <Input
+                value={userFormAuthKey}
+                onChange={(event) => setUserFormAuthKey(event.target.value)}
+                placeholder="请输入普通用户登录密钥"
+                className="h-11 rounded-xl border-stone-200 bg-white font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">剩余可生成图片数</label>
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={userFormQuota}
+                onChange={(event) => setUserFormQuota(event.target.value)}
+                className="h-11 rounded-xl border-stone-200 bg-white"
+              />
+            </div>
+          </div>
+          <DialogFooter className="pt-2">
+            <Button
+              variant="secondary"
+              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              onClick={() => setUserDialogOpen(false)}
+              disabled={isSavingUser}
+            >
+              取消
+            </Button>
+            <Button
+              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              onClick={() => void handleSaveUser()}
+              disabled={isSavingUser}
+            >
+              {isSavingUser ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+              {editingUser ? "保存修改" : "添加"}
             </Button>
           </DialogFooter>
         </DialogContent>

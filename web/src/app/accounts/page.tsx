@@ -19,6 +19,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ import {
   type AccountStatus,
   type AccountType,
 } from "@/lib/api";
+import { syncStoredAuthSession } from "@/lib/auth-session";
 import { cn } from "@/lib/utils";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
@@ -159,6 +161,7 @@ function normalizeAccounts(items: Account[]): Account[] {
 
 export default function AccountsPage() {
   const didLoadRef = useRef(false);
+  const router = useRouter();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -198,8 +201,30 @@ export default function AccountsPage() {
       return;
     }
     didLoadRef.current = true;
-    void loadAccounts();
-  }, []);
+    let cancelled = false;
+    const init = async () => {
+      try {
+        const session = await syncStoredAuthSession();
+        if (cancelled) {
+          return;
+        }
+        if (session.role !== "admin") {
+          toast.error("只有管理员可以访问号池管理");
+          router.replace("/image");
+          return;
+        }
+        await loadAccounts();
+      } catch {
+        if (!cancelled) {
+          router.replace("/login");
+        }
+      }
+    };
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   const filteredAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();

@@ -25,6 +25,7 @@
 git clone git@github.com:basketikun/chatgpt2api.git
 # 按需编辑 config.json 的密钥和 `refresh_account_interval_minute`
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
+# 普通用户密钥与剩余额度可在「设置 -> 普通用户权限」中管理，数据会落到 data/auth_users.json
 docker compose up -d
 ```
 
@@ -46,6 +47,7 @@ docker compose up -d
 - 编辑模式支持参考图上传
 - 前端支持多图生成交互
 - 本地保存图片会话历史，支持回看、删除和清空
+- 支持管理员 / 普通用户双角色登录，普通用户仅保留画图能力
 
 ### 号池管理功能
 
@@ -55,6 +57,13 @@ docker compose up -d
 - 定时检查限流账号并自动刷新
 - 支持搜索、筛选、批量刷新、导出、手动编辑和清理账号
 - 支持三种导入方式：本地 CPA JSON 文件导入、远程 CPA 服务器导入、`access_token` 导入
+- 设置页可管理普通用户密钥，并控制每个普通用户还能生成多少张图片
+
+### 权限与额度
+
+- `auth-key` 仍然是管理员密钥，拥有全部页面和接口权限
+- 普通用户密钥只能访问图片相关接口和画图页面，不能访问号池管理与设置
+- 普通用户图片额度按成功出图张数扣减，请求失败时会自动退回未实际消耗的额度
 
 ### 实验性 / 规划中
 
@@ -86,6 +95,11 @@ Cherry Studio 中使用：
 ```http
 Authorization: Bearer <auth-key>
 ```
+
+其中：
+
+- 管理员密钥：可访问全部接口与前端管理页面
+- 普通用户密钥：仅可访问图片生成/编辑相关接口与画图页面
 
 <details>
 <summary><code>GET /v1/models</code></summary>

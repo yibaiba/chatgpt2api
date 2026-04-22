@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { ImageLightbox } from "@/components/image-lightbox";
 import { editImage, fetchAccounts, generateImage, type Account, type ImageModel } from "@/lib/api";
+import { getCachedOrSyncAuthSession, syncStoredAuthSession } from "@/lib/auth-session";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
@@ -182,10 +183,19 @@ export default function ImagePage() {
     };
   }, []);
 
-  const loadQuota = useCallback(async () => {
+  const loadQuota = useCallback(async (forceSyncSession = false) => {
     try {
-      const data = await fetchAccounts();
-      setAvailableQuota(formatAvailableQuota(data.items));
+      const session = forceSyncSession ? await syncStoredAuthSession() : await getCachedOrSyncAuthSession();
+      if (!session) {
+        setAvailableQuota("—");
+        return;
+      }
+      if (session.role === "admin") {
+        const data = await fetchAccounts();
+        setAvailableQuota(formatAvailableQuota(data.items));
+        return;
+      }
+      setAvailableQuota(String(Math.max(0, session.image_quota ?? 0)));
     } catch {
       setAvailableQuota((prev) => (prev === "加载中" ? "—" : prev));
     }
@@ -197,15 +207,15 @@ export default function ImagePage() {
     }
     didLoadQuotaRef.current = true;
 
-    const syncQuota = async () => {
-      await loadQuota();
+    const syncQuota = async (forceSyncSession = false) => {
+      await loadQuota(forceSyncSession);
     };
 
     const handleFocus = () => {
-      void syncQuota();
+      void syncQuota(true);
     };
 
-    void syncQuota();
+    void syncQuota(true);
     window.addEventListener("focus", handleFocus);
     return () => {
       window.removeEventListener("focus", handleFocus);
@@ -435,7 +445,7 @@ export default function ImagePage() {
         status: failedCount > 0 ? "error" : "success",
         error: failedCount > 0 ? `其中 ${failedCount} 张生成失败` : undefined,
       }));
-      await loadQuota();
+      await loadQuota(true);
 
       if (failedCount > 0) {
         toast.error(`已完成 ${successCount} 张，另有 ${failedCount} 张未生成成功`);
