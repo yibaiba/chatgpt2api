@@ -153,6 +153,9 @@ export function ImageComposer({
               onPaste={handleTextareaPaste}
               placeholder={mode === "edit" ? "描述你希望如何修改这张参考图，可直接粘贴图片" : "输入你想要生成的画面"}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) {
+                  return;
+                }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   void onSubmit();
