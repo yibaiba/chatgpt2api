@@ -1,14 +1,11 @@
 "use client";
 
 import type { UserRole } from "@/lib/auth-types";
-import type { ImageBackground, ImageModel, ImageOutputFormat, ImageQuality } from "@/lib/api";
+import type { ImageModel } from "@/lib/api";
 import { httpRequest } from "@/lib/request";
 
 export type ImageConversationMode = "generate" | "edit";
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
-const IMAGE_QUALITY_VALUES = new Set<ImageQuality>(["auto", "low", "medium", "high"]);
-const IMAGE_BACKGROUND_VALUES = new Set<ImageBackground>(["auto", "transparent", "opaque"]);
-const IMAGE_OUTPUT_FORMAT_VALUES = new Set<ImageOutputFormat>(["png", "jpeg", "webp"]);
 
 export type StoredReferenceImage = {
   name: string;
@@ -29,11 +26,6 @@ export type ImageTurn = {
   prompt: string;
   model: ImageModel;
   mode: ImageConversationMode;
-  size: string;
-  quality: ImageQuality;
-  background: ImageBackground;
-  outputFormat: ImageOutputFormat;
-  compression?: number;
   referenceImages: StoredReferenceImage[];
   count: number;
   images: StoredImage[];
@@ -86,28 +78,6 @@ function dataUrlMimeType(dataUrl: string) {
   return match?.[1] || "image/png";
 }
 
-function normalizeImageQuality(value: unknown): ImageQuality {
-  const candidate = typeof value === "string" ? value : "";
-  return IMAGE_QUALITY_VALUES.has(candidate as ImageQuality) ? (candidate as ImageQuality) : "auto";
-}
-
-function normalizeImageBackground(value: unknown): ImageBackground {
-  const candidate = typeof value === "string" ? value : "";
-  return IMAGE_BACKGROUND_VALUES.has(candidate as ImageBackground) ? (candidate as ImageBackground) : "auto";
-}
-
-function normalizeImageOutputFormat(value: unknown): ImageOutputFormat {
-  const candidate = typeof value === "string" ? value : "";
-  return IMAGE_OUTPUT_FORMAT_VALUES.has(candidate as ImageOutputFormat) ? (candidate as ImageOutputFormat) : "png";
-}
-
-function normalizeImageCompression(value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
 function getLegacyReferenceImages(source: Record<string, unknown>): StoredReferenceImage[] {
   if (Array.isArray(source.referenceImages)) {
     return source.referenceImages
@@ -149,13 +119,8 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
   return {
     id: String(turn.id || `${Date.now()}`),
     prompt: String(turn.prompt || ""),
-    model: (turn.model as ImageModel) || "auto",
+    model: (turn.model as ImageModel) || "gpt-image-2",
     mode: turn.mode === "edit" ? "edit" : "generate",
-    size: typeof turn.size === "string" && turn.size.trim() ? turn.size.trim() : "auto",
-    quality: normalizeImageQuality(turn.quality),
-    background: normalizeImageBackground(turn.background),
-    outputFormat: normalizeImageOutputFormat(turn.outputFormat ?? turn.output_format),
-    compression: normalizeImageCompression(turn.compression),
     referenceImages: getLegacyReferenceImages(turn),
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     images: normalizedImages,

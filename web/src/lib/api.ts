@@ -6,16 +6,6 @@ export type { AuthSession, AuthUser } from "@/lib/auth-types";
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2";
-export type ImageQuality = "auto" | "low" | "medium" | "high";
-export type ImageBackground = "auto" | "transparent" | "opaque";
-export type ImageOutputFormat = "png" | "jpeg" | "webp";
-export type ImageRequestOptions = {
-  size?: string;
-  quality?: ImageQuality;
-  background?: ImageBackground;
-  output_format?: ImageOutputFormat;
-  compression?: number;
-};
 export type GeneratedImageResponseItem = {
   b64_json?: string;
   url?: string;
@@ -246,8 +236,7 @@ export async function deleteProxyEntry(proxyId: string) {
 
 export async function generateImage(
   prompt: string,
-  model: ImageModel = "auto",
-  options: ImageRequestOptions = {},
+  model: ImageModel = "gpt-image-2",
 ) {
   return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/generations",
@@ -258,7 +247,6 @@ export async function generateImage(
         model,
         n: 1,
         response_format: "b64_json",
-        ...options,
       },
     },
   );
@@ -267,8 +255,7 @@ export async function generateImage(
 export async function editImage(
   files: File | File[],
   prompt: string,
-  model: ImageModel = "auto",
-  options: ImageRequestOptions = {},
+  model: ImageModel = "gpt-image-2",
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -279,15 +266,6 @@ export async function editImage(
   formData.append("prompt", prompt);
   formData.append("model", model);
   formData.append("n", "1");
-  Object.entries(options).forEach(([key, value]) => {
-    if (typeof value === "string" && value.trim()) {
-      formData.append(key, value);
-      return;
-    }
-    if (typeof value === "number" && Number.isFinite(value)) {
-      formData.append(key, String(value));
-    }
-  });
 
   return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/edits",

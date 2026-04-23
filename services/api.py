@@ -8,7 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from services.account_service import account_service
 from services.auth_service import auth_service
@@ -23,7 +23,7 @@ from services.sub2api_service import (
     sub2api_config,
     sub2api_import_service,
 )
-from services.image_service import ImageGenerationError, normalize_image_request_options
+from services.image_service import ImageGenerationError
 from services.system_settings import system_settings_service
 from services.utils import parse_image_count
 from services.version import get_app_version
@@ -33,28 +33,11 @@ WEB_DIST_DIR = BASE_DIR / "web_dist"
 
 
 class ImageGenerationRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
     prompt: str = Field(..., min_length=1)
-    model: str = "auto"
+    model: str = "gpt-image-2"
     n: int = Field(default=1, ge=1, le=4)
     response_format: str = "b64_json"
     history_disabled: bool = True
-    size: str | None = None
-    quality: str | None = None
-    background: str | None = Field(default=None, validation_alias=AliasChoices("background", "background:"))
-    output_format: str | None = None
-    compression: int | None = Field(default=None, ge=0, le=100)
-
-    def build_image_options(self):
-        return normalize_image_request_options(
-            model=self.model,
-            size=self.size,
-            quality=self.quality,
-            background=self.background,
-            output_format=self.output_format,
-            compression=self.compression,
-        )
 
 
 class AccountCreateRequest(BaseModel):
@@ -166,11 +149,6 @@ class ImageTurnPayload(BaseModel):
     prompt: str = ""
     model: str = ""
     mode: str | None = None
-    size: str | None = None
-    quality: str | None = None
-    background: str | None = None
-    output_format: str | None = Field(default=None, alias="outputFormat")
-    compression: int | None = None
     reference_images: list[StoredReferenceImagePayload] = Field(default_factory=list, alias="referenceImages")
     count: int = Field(default=1)
     images: list[StoredImagePayload] = Field(default_factory=list)
@@ -663,7 +641,6 @@ def create_app() -> FastAPI:
         base_url = resolve_image_base_url(request)
         try:
             normalized_response_format = normalize_image_response_format(body.response_format)
-            image_options = body.build_image_options()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         try:
@@ -676,7 +653,6 @@ def create_app() -> FastAPI:
                 body.prompt,
                 body.model,
                 body.n,
-                image_options,
                 response_format=normalized_response_format,
                 base_url=base_url,
             )
@@ -696,14 +672,9 @@ def create_app() -> FastAPI:
             image: list[UploadFile] | None = File(default=None),
             image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
             prompt: str = Form(...),
-            model: str = Form(default="auto"),
+            model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
             response_format: str = Form(default="b64_json"),
-            size: str | None = Form(default=None),
-            quality: str | None = Form(default=None),
-            background: str | None = Form(default=None),
-            output_format: str | None = Form(default=None),
-            compression: int | None = Form(default=None),
     ):
         identity = require_session(authorization)
         if n < 1 or n > 4:
@@ -716,14 +687,6 @@ def create_app() -> FastAPI:
         base_url = resolve_image_base_url(request)
         try:
             normalized_response_format = normalize_image_response_format(response_format)
-            image_options = normalize_image_request_options(
-                model=model,
-                size=size,
-                quality=quality,
-                background=background,
-                output_format=output_format,
-                compression=compression,
-            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
@@ -749,7 +712,6 @@ def create_app() -> FastAPI:
                 images,
                 model,
                 n,
-                image_options,
                 response_format=normalized_response_format,
                 base_url=base_url,
             )

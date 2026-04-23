@@ -11,7 +11,6 @@ from services.image_service import (
     edit_image_result,
     generate_image_result,
     is_token_invalid_error,
-    normalize_image_request_options,
 )
 from services.utils import (
     build_chat_image_completion,
@@ -203,30 +202,19 @@ class ChatGPTService:
         if bool(body.get("stream")):
             raise HTTPException(status_code=400, detail={"error": "stream is not supported for image generation"})
 
-        model = str(body.get("model") or "gpt-image-1").strip() or "gpt-image-1"
+        model = str(body.get("model") or "gpt-image-2").strip() or "gpt-image-2"
         n = parse_image_count(body.get("n"))
         prompt = extract_chat_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "prompt is required"})
-        try:
-            options = normalize_image_request_options(
-                model=model,
-                size=body.get("size"),
-                quality=body.get("quality"),
-                background=body.get("background") or body.get("background:"),
-                output_format=body.get("output_format"),
-                compression=body.get("compression"),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
         image_info = extract_chat_image(body)
         try:
             if image_info:
                 image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], model, n, options)
+                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], model, n)
             else:
-                image_result = self.generate_with_pool(prompt, model, n, options)
+                image_result = self.generate_with_pool(prompt, model, n)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
@@ -249,22 +237,11 @@ class ChatGPTService:
         image_info = _extract_response_image(body.get("input"))
         model = str(body.get("model") or "gpt-5").strip() or "gpt-5"
         try:
-            options = normalize_image_request_options(
-                model="gpt-image-1",
-                size=body.get("size"),
-                quality=body.get("quality"),
-                background=body.get("background") or body.get("background:"),
-                output_format=body.get("output_format"),
-                compression=body.get("compression"),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-        try:
             if image_info:
                 image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], "gpt-image-1", 1, options)
+                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], "gpt-image-2", 1)
             else:
-                image_result = self.generate_with_pool(prompt, "gpt-image-1", 1, options)
+                image_result = self.generate_with_pool(prompt, "gpt-image-2", 1)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 

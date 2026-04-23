@@ -435,5 +435,5 @@ pre-commit install --install-hooks
    - `-> finishing-a-development-branch`
 - 在回复中声明本次使用了哪些技能。
 - 前端设计务必使用ui-ux-pro-max技能。
-- 当你完成工作时，请调用提问工具（Asked user）来获取进一步的指示，而不是直接结束对话。
-When you finish the task, call the Asked user tool to request further instructions instead of ending the conversation.
+- 当你完成工作时，请调用提问工具（Asking user）来获取进一步的指示，而不是直接结束对话。
+When you finish the task, call the Asking user tool to request further instructions instead of ending the conversation.

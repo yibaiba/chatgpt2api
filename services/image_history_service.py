@@ -12,9 +12,6 @@ IMAGE_HISTORY_FILE = DATA_DIR / "image_history.json"
 ALLOWED_CONVERSATION_MODES = {"generate", "edit"}
 ALLOWED_TURN_STATUSES = {"queued", "generating", "success", "error"}
 ALLOWED_IMAGE_STATUSES = {"loading", "success", "error"}
-ALLOWED_IMAGE_QUALITIES = {"auto", "low", "medium", "high"}
-ALLOWED_IMAGE_BACKGROUNDS = {"auto", "transparent", "opaque"}
-ALLOWED_IMAGE_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
 DEFAULT_CONVERSATION_TITLE_LENGTH = 12
 
 
@@ -144,33 +141,11 @@ class ImageHistoryService:
         if mode not in ALLOWED_CONVERSATION_MODES:
             mode = "generate"
 
-        size = self._clean_text(raw.get("size")) or "auto"
-
-        quality = self._clean_text(raw.get("quality")).lower() or "auto"
-        if quality not in ALLOWED_IMAGE_QUALITIES:
-            quality = "auto"
-
-        background = self._clean_text(raw.get("background")).lower() or "auto"
-        if background not in ALLOWED_IMAGE_BACKGROUNDS:
-            background = "auto"
-
-        output_format = self._clean_text(raw.get("outputFormat") or raw.get("output_format")).lower() or "png"
-        if output_format not in ALLOWED_IMAGE_OUTPUT_FORMATS:
-            output_format = "png"
-
-        compression = raw.get("compression")
-        normalized_compression = None if compression is None else self._clean_count(compression, minimum=0, maximum=100)
-
         return {
             "id": turn_id,
             "prompt": prompt,
             "model": model,
             "mode": mode,
-            "size": size,
-            "quality": quality,
-            "background": background,
-            "outputFormat": output_format,
-            "compression": normalized_compression,
             "referenceImages": self._legacy_reference_images(raw),
             "count": self._clean_count(raw.get("count"), minimum=1, maximum=10),
             "images": images,

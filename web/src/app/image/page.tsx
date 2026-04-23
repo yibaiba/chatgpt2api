@@ -14,11 +14,7 @@ import {
   fetchAccounts,
   generateImage,
   type Account,
-  type ImageBackground,
   type ImageModel,
-  type ImageOutputFormat,
-  type ImageQuality,
-  type ImageRequestOptions,
 } from "@/lib/api";
 import {
   clearImageConversations,
@@ -34,28 +30,7 @@ import {
   type StoredReferenceImage,
 } from "@/store/image-conversations";
 
-const imageModelOptions: Array<{ label: string; value: ImageModel }> = [
-  { label: "auto", value: "auto" },
-  { label: "gpt-image-1", value: "gpt-image-1" },
-  { label: "gpt-image-2", value: "gpt-image-2" },
-];
-const imageSizeSuggestions = ["auto", "1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "3840x2160", "2160x3840"];
-const imageQualityOptions: Array<{ label: string; value: ImageQuality }> = [
-  { label: "自动质量", value: "auto" },
-  { label: "低", value: "low" },
-  { label: "中", value: "medium" },
-  { label: "高", value: "high" },
-];
-const imageBackgroundOptions: Array<{ label: string; value: ImageBackground }> = [
-  { label: "自动背景", value: "auto" },
-  { label: "透明", value: "transparent" },
-  { label: "不透明", value: "opaque" },
-];
-const imageOutputFormatOptions: Array<{ label: string; value: ImageOutputFormat }> = [
-  { label: "PNG", value: "png" },
-  { label: "JPEG", value: "jpeg" },
-  { label: "WEBP", value: "webp" },
-];
+const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const activeConversationQueueIds = new Set<string>();
 
@@ -201,12 +176,6 @@ export default function ImagePage() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
-  const [imageModel, setImageModel] = useState<ImageModel>("auto");
-  const [imageSize, setImageSize] = useState("auto");
-  const [imageQuality, setImageQuality] = useState<ImageQuality>("auto");
-  const [imageBackground, setImageBackground] = useState<ImageBackground>("auto");
-  const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>("png");
-  const [imageCompression, setImageCompression] = useState("");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -232,26 +201,10 @@ export default function ImagePage() {
     [conversations],
   );
   const showConversationOwner = viewerRole === "admin";
-  const supportsTransparentBackground = imageModel !== "gpt-image-2";
-  const supportsCompression = imageOutputFormat === "jpeg" || imageOutputFormat === "webp";
-  const parsedCompression = useMemo(() => {
-    if (!supportsCompression || imageCompression.trim() === "") {
-      return undefined;
-    }
-    const value = Number(imageCompression);
-    return Number.isFinite(value) ? value : undefined;
-  }, [imageCompression, supportsCompression]);
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
-
-  const handleImageModelChange = useCallback((value: ImageModel) => {
-    setImageModel(value);
-    if (value === "gpt-image-2") {
-      setImageBackground((prev) => (prev === "transparent" ? "auto" : prev));
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -415,12 +368,6 @@ export default function ImagePage() {
   const clearComposerInputs = useCallback(() => {
     setImagePrompt("");
     setImageCount("1");
-    setImageModel("auto");
-    setImageSize("auto");
-    setImageQuality("auto");
-    setImageBackground("auto");
-    setImageOutputFormat("png");
-    setImageCompression("");
     setReferenceImageFiles([]);
     setReferenceImages([]);
     if (fileInputRef.current) {
@@ -588,13 +535,6 @@ export default function ImagePage() {
         const referenceFiles = queuedTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${queuedTurn.id}-${index + 1}.png`, image.type),
         );
-        const turnOptions: ImageRequestOptions = {
-          size: queuedTurn.size,
-          quality: queuedTurn.quality,
-          background: queuedTurn.background,
-          output_format: queuedTurn.outputFormat,
-          compression: queuedTurn.compression,
-        };
         const pendingImages = queuedTurn.images.filter((image) => image.status === "loading");
 
         if (queuedTurn.mode === "edit" && referenceFiles.length === 0) {
@@ -627,8 +567,8 @@ export default function ImagePage() {
           try {
             const data =
               queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, turnOptions)
-                : await generateImage(queuedTurn.prompt, queuedTurn.model, turnOptions);
+                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model)
+                : await generateImage(queuedTurn.prompt, queuedTurn.model);
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
@@ -781,11 +721,6 @@ export default function ImagePage() {
       toast.error("请先上传参考图");
       return;
     }
-    if (!supportsTransparentBackground && imageBackground === "transparent") {
-      toast.error("gpt-image-2 暂不支持 transparent 背景");
-      return;
-    }
-
     const targetConversation = selectedConversationId
       ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
       : null;
@@ -795,13 +730,12 @@ export default function ImagePage() {
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: imageModel,
+      model: DEFAULT_IMAGE_MODEL,
       mode: imageMode,
-      size: imageSize.trim() || "auto",
-      quality: imageQuality,
-      background: imageBackground,
-      outputFormat: imageOutputFormat,
-      compression: parsedCompression,
+      size: "auto",
+      quality: "auto",
+      background: "auto",
+      outputFormat: "png",
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
       images: Array.from({ length: parsedCount }, (_, index) => ({
@@ -874,34 +808,14 @@ export default function ImagePage() {
           <ImageComposer
             mode={imageMode}
             prompt={imagePrompt}
-            model={imageModel}
-            size={imageSize}
-            quality={imageQuality}
-            background={imageBackground}
-            outputFormat={imageOutputFormat}
-            compression={imageCompression}
             imageCount={imageCount}
             availableQuota={availableQuota}
-            hasAnyGenerating={activeTaskCount > 0}
-            generatingCount={activeTaskCount}
+            activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
-            imageModelOptions={imageModelOptions}
-            imageSizeSuggestions={imageSizeSuggestions}
-            imageQualityOptions={imageQualityOptions}
-            imageBackgroundOptions={imageBackgroundOptions}
-            imageOutputFormatOptions={imageOutputFormatOptions}
-            supportsTransparentBackground={supportsTransparentBackground}
-            supportsCompression={supportsCompression}
             onModeChange={setImageMode}
             onPromptChange={setImagePrompt}
-            onModelChange={handleImageModelChange}
-            onSizeChange={setImageSize}
-            onQualityChange={setImageQuality}
-            onBackgroundChange={setImageBackground}
-            onOutputFormatChange={setImageOutputFormat}
-            onCompressionChange={setImageCompression}
             onImageCountChange={setImageCount}
             onSubmit={handleSubmit}
             onPickReferenceImage={() => fileInputRef.current?.click()}
