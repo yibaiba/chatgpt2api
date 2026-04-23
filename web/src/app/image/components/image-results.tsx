@@ -14,6 +14,16 @@ type ImageResultsProps = {
   formatConversationTime: (value: string) => string;
 };
 
+type ImageDimensions = {
+  width: number;
+  height: number;
+};
+
+function formatMegapixels(width: number, height: number) {
+  const megapixels = (width * height) / 1_000_000;
+  return `${megapixels.toFixed(megapixels >= 10 ? 0 : 1).replace(/\.0$/, "")}M`;
+}
+
 export function ImageResults({
   selectedConversation,
   showConversationOwner = false,
@@ -166,6 +176,8 @@ function ImageResultCard({
   onOpen: (imageId: string) => void;
   onReuseAsReference?: (image: { id: string; dataUrl: string }) => void | Promise<void>;
 }) {
+  const [dimensions, setDimensions] = useState<ImageDimensions | null>(null);
+
   if (image.status === "success" && image.b64_json) {
     const dataUrl = `data:${image.mime_type || "image/png"};base64,${image.b64_json}`;
     const dragPayload = JSON.stringify({ id: image.id, dataUrl });
@@ -187,8 +199,29 @@ function ImageResultCard({
             src={dataUrl}
             alt={`Generated result ${index + 1}`}
             className="block h-auto w-full transition duration-200 group-hover:brightness-90"
+            onLoad={(event) => {
+              const nextWidth = event.currentTarget.naturalWidth;
+              const nextHeight = event.currentTarget.naturalHeight;
+              if (!nextWidth || !nextHeight) {
+                return;
+              }
+              setDimensions((current) => {
+                if (current?.width === nextWidth && current.height === nextHeight) {
+                  return current;
+                }
+                return { width: nextWidth, height: nextHeight };
+              });
+            }}
           />
         </button>
+        {dimensions ? (
+          <div className="mt-2 flex items-center justify-between gap-2 px-1 text-[11px] font-medium text-stone-500">
+            <span className="truncate">{dimensions.width} × {dimensions.height}</span>
+            <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-stone-600">
+              {formatMegapixels(dimensions.width, dimensions.height)}
+            </span>
+          </div>
+        ) : null}
         {onReuseAsReference ? (
           <button
             type="button"
