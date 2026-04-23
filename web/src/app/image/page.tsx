@@ -9,7 +9,11 @@ import {
   fetchAccounts,
   generateImage,
   type Account,
+  type ImageBackground,
   type ImageModel,
+  type ImageOutputFormat,
+  type ImageQuality,
+  type ImageRequestOptions,
 } from "@/lib/api";
 import type { UserRole } from "@/lib/auth-types";
 import { getCachedOrSyncAuthSession, syncStoredAuthSession } from "@/lib/auth-session";
@@ -28,20 +32,45 @@ import {
 } from "@/store/image-conversations";
 
 const imageModelOptions: Array<{ label: string; value: ImageModel }> = [
+  { label: "auto", value: "auto" },
   { label: "gpt-image-1", value: "gpt-image-1" },
   { label: "gpt-image-2", value: "gpt-image-2" },
 ];
-const imageCountOptions = Array.from({ length: 10 }, (_, index) => ({
-  label: `${index + 1} 张`,
-  value: String(index + 1),
-}));
+const imageSizeSuggestions = [
+  "auto",
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "2048x2048",
+  "2048x1152",
+  "3840x2160",
+  "2160x3840",
+];
+const imageQualityOptions: Array<{ label: string; value: ImageQuality }> = [
+  { label: "自动质量", value: "auto" },
+  { label: "低", value: "low" },
+  { label: "中", value: "medium" },
+  { label: "高", value: "high" },
+];
+const imageBackgroundOptions: Array<{ label: string; value: ImageBackground }> = [
+  { label: "自动背景", value: "auto" },
+  { label: "透明", value: "transparent" },
+  { label: "不透明", value: "opaque" },
+];
+const imageOutputFormatOptions: Array<{ label: string; value: ImageOutputFormat }> = [
+  { label: "PNG", value: "png" },
+  { label: "JPEG", value: "jpeg" },
+  { label: "WEBP", value: "webp" },
+];
+const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
+const ACTIVE_IMAGE_GENERATION_STORAGE_KEY = "chatgpt2api:image-active-generating-ids";
 
 function buildConversationTitle(prompt: string) {
   const trimmed = prompt.trim();
-  if (trimmed.length <= 5) {
+  if (trimmed.length <= 12) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 5)}...`;
+  return `${trimmed.slice(0, 12)}...`;
 }
 
 function formatConversationTime(value: string) {
@@ -58,7 +87,13 @@ function formatConversationTime(value: string) {
 }
 
 function formatAvailableQuota(accounts: Account[]) {
-  const availableAccounts = accounts.filter((account) => account.status !== "禁用");
+  const availableAccounts = accounts.filter((account) => account.status === "正常");
+  if (availableAccounts.some((account) => account.type === "Pro" || account.type === "ProLite")) {
+    return "∞";
+  }
+  if (availableAccounts.some((account) => account.imageQuotaUnknown)) {
+    return "未知";
+  }
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
 }
 
@@ -93,8 +128,111 @@ function buildGeneratedImageDataUrl(image: Pick<StoredImage, "b64_json" | "mime_
   return `data:${image.mime_type || "image/png"};base64,${image.b64_json}`;
 }
 
+function sortImageConversations(conversations: ImageConversation[]) {
+  return [...conversations].sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+}
+
+function pickFallbackConversationId(conversations: ImageConversation[]) {
+  const activeConversation = conversations.find((conversation) => conversation.status === "generating");
+  return activeConversation?.id ?? conversations[0]?.id ?? null;
+}
+
+function readActiveConversationId() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+}
+
+function writeActiveConversationId(conversationId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const normalized = String(conversationId || "").trim();
+  if (!normalized) {
+    window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, normalized);
+}
+
+function readActiveGeneratingConversationIds(): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_IMAGE_GENERATION_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeActiveGeneratingConversationIds(ids: Iterable<string>) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const normalized = Array.from(new Set(Array.from(ids, (id) => String(id).trim()).filter(Boolean)));
+  if (normalized.length === 0) {
+    window.localStorage.removeItem(ACTIVE_IMAGE_GENERATION_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(ACTIVE_IMAGE_GENERATION_STORAGE_KEY, JSON.stringify(normalized));
+}
+
+async function recoverInterruptedConversations(items: ImageConversation[]) {
+  const activeIds = new Set(readActiveGeneratingConversationIds());
+  if (activeIds.size === 0) {
+    return items;
+  }
+
+  const interruptedMessage = "页面刷新或任务中断，未完成的图片已标记为失败";
+  const recoveredAt = new Date().toISOString();
+  const nextItems = items.map((conversation) => {
+    if (!activeIds.has(conversation.id) || conversation.status !== "generating") {
+      return conversation;
+    }
+
+    let changed = false;
+    const images = conversation.images.map((image) => {
+      if (image.status !== "loading") {
+        return image;
+      }
+      changed = true;
+      return {
+        ...image,
+        status: "error" as const,
+        error: interruptedMessage,
+      };
+    });
+
+    if (!changed) {
+      return conversation;
+    }
+
+    return {
+      ...conversation,
+      updatedAt: recoveredAt,
+      status: "error" as const,
+      images,
+      error: interruptedMessage,
+    };
+  });
+
+  const changedItems = nextItems.filter((conversation, index) => conversation !== items[index]);
+  if (changedItems.length > 0) {
+    await Promise.all(changedItems.map((conversation) => saveImageConversation(conversation)));
+  }
+  writeActiveGeneratingConversationIds([]);
+  return nextItems;
+}
+
 export default function ImagePage() {
   const didLoadQuotaRef = useRef(false);
+  const conversationsRef = useRef<ImageConversation[]>([]);
+  const persistenceQueueRef = useRef(new Map<string, Promise<void>>());
+  const pendingPersistenceRef = useRef(new Set<string>());
   const resultsViewportRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -102,7 +240,12 @@ export default function ImagePage() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
-  const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-2");
+  const [imageModel, setImageModel] = useState<ImageModel>("auto");
+  const [imageSize, setImageSize] = useState("auto");
+  const [imageQuality, setImageQuality] = useState<ImageQuality>("auto");
+  const [imageBackground, setImageBackground] = useState<ImageBackground>("auto");
+  const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>("png");
+  const [imageCompression, setImageCompression] = useState("");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -122,15 +265,43 @@ export default function ImagePage() {
   const isSelectedGenerating = selectedConversationId !== null && generatingIds.has(selectedConversationId);
   const hasAnyGenerating = generatingIds.size > 0;
   const showConversationOwner = viewerRole === "admin";
+  const supportsTransparentBackground = imageModel !== "gpt-image-2";
+  const supportsCompression = imageOutputFormat === "jpeg" || imageOutputFormat === "webp";
+  const parsedCompression = useMemo(() => {
+    if (!supportsCompression || imageCompression.trim() === "") {
+      return undefined;
+    }
+    const value = Number(imageCompression);
+    return Number.isFinite(value) ? value : undefined;
+  }, [imageCompression, supportsCompression]);
+  const imageRequestOptions = useMemo<ImageRequestOptions>(
+    () => ({
+      size: imageSize.trim() || "auto",
+      quality: imageQuality,
+      background: imageBackground,
+      output_format: imageOutputFormat,
+      compression: parsedCompression,
+    }),
+    [imageBackground, imageOutputFormat, imageQuality, imageSize, parsedCompression],
+  );
+  const selectConversation = useCallback((conversationId: string | null) => {
+    writeActiveConversationId(conversationId);
+    setSelectedConversationId(conversationId);
+  }, []);
 
   const addGeneratingId = useCallback((id: string) => {
-    setGeneratingIds((prev) => new Set(prev).add(id));
+    setGeneratingIds((prev) => {
+      const next = new Set(prev).add(id);
+      writeActiveGeneratingConversationIds(next);
+      return next;
+    });
   }, []);
 
   const removeGeneratingId = useCallback((id: string) => {
     setGeneratingIds((prev) => {
       const next = new Set(prev);
       next.delete(id);
+      writeActiveGeneratingConversationIds(next);
       return next;
     });
   }, []);
@@ -142,6 +313,17 @@ export default function ImagePage() {
         .map((img) => ({ id: img.id, src: buildGeneratedImageDataUrl(img) })),
     [selectedConversation],
   );
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  const handleImageModelChange = useCallback((value: ImageModel) => {
+    setImageModel(value);
+    if (value === "gpt-image-2") {
+      setImageBackground((prev) => (prev === "transparent" ? "auto" : prev));
+    }
+  }, []);
 
   const openLightbox = useCallback(
     (imageId: string) => {
@@ -160,10 +342,19 @@ export default function ImagePage() {
     const loadHistory = async () => {
       try {
         const items = await listImageConversations();
+        const recoveredItems = await recoverInterruptedConversations(items);
         if (cancelled) {
           return;
         }
-        setConversations(items);
+        conversationsRef.current = recoveredItems;
+        setConversations(recoveredItems);
+        const storedConversationId = readActiveConversationId();
+        const nextSelectedConversationId =
+          (storedConversationId && recoveredItems.some((conversation) => conversation.id === storedConversationId)
+            ? storedConversationId
+            : null) ?? pickFallbackConversationId(recoveredItems);
+        writeActiveConversationId(nextSelectedConversationId);
+        setSelectedConversationId(nextSelectedConversationId);
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取会话记录失败";
         toast.error(message);
@@ -178,6 +369,32 @@ export default function ImagePage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  const scheduleConversationPersistence = useCallback((conversationId: string) => {
+    pendingPersistenceRef.current.add(conversationId);
+
+    const activeTask = persistenceQueueRef.current.get(conversationId);
+    if (activeTask) {
+      return activeTask;
+    }
+
+    const task = (async () => {
+      while (pendingPersistenceRef.current.has(conversationId)) {
+        pendingPersistenceRef.current.delete(conversationId);
+        const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+        if (!conversation) {
+          continue;
+        }
+        await saveImageConversation(conversation);
+      }
+    })().finally(() => {
+      persistenceQueueRef.current.delete(conversationId);
+      pendingPersistenceRef.current.delete(conversationId);
+    });
+
+    persistenceQueueRef.current.set(conversationId, task);
+    return task;
   }, []);
 
   const loadQuota = useCallback(async (forceSyncSession = false) => {
@@ -232,29 +449,35 @@ export default function ImagePage() {
   }, [selectedConversation, isSelectedGenerating]);
 
   const persistConversation = async (conversation: ImageConversation) => {
-    setConversations((prev) => {
-      const next = [conversation, ...prev.filter((item) => item.id !== conversation.id)];
-      return next.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    });
-    await saveImageConversation(conversation);
+    const nextConversation = {
+      ...conversation,
+      updatedAt: conversation.updatedAt || conversation.createdAt,
+    };
+    const nextConversations = sortImageConversations([
+      nextConversation,
+      ...conversationsRef.current.filter((item) => item.id !== conversation.id),
+    ]);
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
+    await scheduleConversationPersistence(nextConversation.id);
   };
 
   const updateConversation = async (
     conversationId: string,
     updater: (current: ImageConversation | null) => ImageConversation,
   ) => {
-    let nextConversation: ImageConversation | null = null;
-
-    setConversations((prev) => {
-      const current = prev.find((item) => item.id === conversationId) ?? null;
-      nextConversation = updater(current);
-      const next = [nextConversation, ...prev.filter((item) => item.id !== conversationId)];
-      return next.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    });
-
-    if (nextConversation) {
-      await saveImageConversation(nextConversation);
-    }
+    const current = conversationsRef.current.find((item) => item.id === conversationId) ?? null;
+    const nextConversation = {
+      ...updater(current),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextConversations = sortImageConversations([
+      nextConversation,
+      ...conversationsRef.current.filter((item) => item.id !== conversationId),
+    ]);
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
+    await scheduleConversationPersistence(conversationId);
   };
 
   const resetComposer = useCallback(() => {
@@ -268,15 +491,18 @@ export default function ImagePage() {
   }, []);
 
   const handleCreateDraft = () => {
-    setSelectedConversationId(null);
+    selectConversation(null);
     resetComposer();
     textareaRef.current?.focus();
   };
 
   const handleDeleteConversation = async (id: string) => {
     const nextConversations = conversations.filter((item) => item.id !== id);
+    conversationsRef.current = nextConversations;
     setConversations(nextConversations);
-    setSelectedConversationId((prev) => (prev === id ? null : prev));
+    const nextSelectedConversationId =
+      selectedConversationId === id ? pickFallbackConversationId(nextConversations) : selectedConversationId;
+    selectConversation(nextSelectedConversationId);
 
     try {
       await deleteImageConversation(id);
@@ -284,6 +510,7 @@ export default function ImagePage() {
       const message = error instanceof Error ? error.message : "删除会话失败";
       toast.error(message);
       const items = await listImageConversations();
+      conversationsRef.current = items;
       setConversations(items);
     }
   };
@@ -291,8 +518,9 @@ export default function ImagePage() {
   const handleClearHistory = async () => {
     try {
       await clearImageConversations();
+      conversationsRef.current = [];
       setConversations([]);
-      setSelectedConversationId(null);
+      selectConversation(null);
       toast.success("已清空历史记录");
     } catch (error) {
       const message = error instanceof Error ? error.message : "清空历史记录失败";
@@ -335,22 +563,26 @@ export default function ImagePage() {
   }, [appendReferenceImages]);
 
   const handleReuseGeneratedImage = useCallback(async (
-    payload: { id?: string; dataUrl: string },
+    payload: { conversationId?: string; id?: string; dataUrl: string },
   ) => {
     try {
+      if (payload.conversationId) {
+        selectConversation(payload.conversationId);
+      }
       setImageMode("edit");
+      setImagePrompt("");
       const file = dataUrlToFile(payload.dataUrl, `generated-${payload.id || createId()}.png`);
       await appendReferenceImages([file]);
       requestAnimationFrame(() => {
         textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
         textareaRef.current?.focus();
       });
-      toast.success("已加入参考图");
+      toast.success("已加入当前参考图，继续输入描述即可编辑");
     } catch (error) {
       const message = error instanceof Error ? error.message : "加入参考图失败";
       toast.error(message);
     }
-  }, [appendReferenceImages]);
+  }, [appendReferenceImages, selectConversation]);
 
   const handleRemoveReferenceImage = useCallback((index: number) => {
     setReferenceImageFiles((prev) => {
@@ -374,6 +606,10 @@ export default function ImagePage() {
       toast.error("请先上传参考图");
       return;
     }
+    if (!supportsTransparentBackground && imageBackground === "transparent") {
+      toast.error('gpt-image-2 暂不支持 transparent 背景');
+      return;
+    }
 
     const now = new Date().toISOString();
     const conversationId = createId();
@@ -392,6 +628,7 @@ export default function ImagePage() {
         status: "loading",
       })),
       createdAt: now,
+      updatedAt: now,
       status: "generating",
       ownerRole: viewerRole === "admin" ? "admin" : "user",
       ownerId: viewerRole === "admin" ? "admin" : "self",
@@ -399,21 +636,21 @@ export default function ImagePage() {
     };
 
     addGeneratingId(conversationId);
-    setSelectedConversationId(conversationId);
+    selectConversation(conversationId);
     resetComposer();
 
     try {
       await persistConversation(draftConversation);
 
-        const tasks = Array.from({ length: parsedCount }, async (_, index) => {
-          try {
-            const data =
-              imageMode === "edit" && referenceImageFiles.length > 0
-                ? await editImage(referenceImageFiles, prompt, imageModel)
-                : await generateImage(prompt, imageModel);
-            const first = data.data?.[0];
-            if (!first?.b64_json) {
-              throw new Error(`第 ${index + 1} 张没有返回图片数据`);
+      const tasks = Array.from({ length: parsedCount }, async (_, index) => {
+        try {
+          const data =
+            imageMode === "edit" && referenceImageFiles.length > 0
+              ? await editImage(referenceImageFiles, prompt, imageModel, imageRequestOptions)
+              : await generateImage(prompt, imageModel, imageRequestOptions);
+          const first = data.data?.[0];
+          if (!first?.b64_json) {
+            throw new Error(`第 ${index + 1} 张没有返回图片数据`);
           }
 
           const nextImage: StoredImage = {
@@ -505,7 +742,7 @@ export default function ImagePage() {
           selectedConversationId={selectedConversationId}
           onCreateDraft={handleCreateDraft}
           onClearHistory={handleClearHistory}
-          onSelectConversation={setSelectedConversationId}
+          onSelectConversation={selectConversation}
           onDeleteConversation={handleDeleteConversation}
           formatConversationTime={formatConversationTime}
         />
@@ -529,6 +766,11 @@ export default function ImagePage() {
             mode={imageMode}
             prompt={imagePrompt}
             model={imageModel}
+            size={imageSize}
+            quality={imageQuality}
+            background={imageBackground}
+            outputFormat={imageOutputFormat}
+            compression={imageCompression}
             imageCount={imageCount}
             availableQuota={availableQuota}
             hasAnyGenerating={hasAnyGenerating}
@@ -537,10 +779,20 @@ export default function ImagePage() {
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
             imageModelOptions={imageModelOptions}
-            imageCountOptions={imageCountOptions}
+            imageSizeSuggestions={imageSizeSuggestions}
+            imageQualityOptions={imageQualityOptions}
+            imageBackgroundOptions={imageBackgroundOptions}
+            imageOutputFormatOptions={imageOutputFormatOptions}
+            supportsTransparentBackground={supportsTransparentBackground}
+            supportsCompression={supportsCompression}
             onModeChange={setImageMode}
             onPromptChange={setImagePrompt}
-            onModelChange={setImageModel}
+            onModelChange={handleImageModelChange}
+            onSizeChange={setImageSize}
+            onQualityChange={setImageQuality}
+            onBackgroundChange={setImageBackground}
+            onOutputFormatChange={setImageOutputFormat}
+            onCompressionChange={setImageCompression}
             onImageCountChange={setImageCount}
             onSubmit={handleGenerateImage}
             onPickReferenceImage={() => fileInputRef.current?.click()}

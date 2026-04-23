@@ -49,6 +49,7 @@ docker compose up -d
 - 编辑模式支持参考图上传
 - 支持将已生成图片直接作为参考图继续编辑（桌面端可拖拽，移动端可一键加入）
 - 前端支持多图生成交互
+- 兼容 `size`、`quality`、`background`、`output_format`、`compression` 等图片生成参数
 - 图片会话历史保存在服务端，普通用户仅能看到自己的记录，管理员可查看全部记录并区分归属人
 - 支持管理员 / 普通用户双角色登录，普通用户仅保留画图能力
 - 支持 SOCKS5 代理池，可轮询代理图片生成/编辑与账号刷新请求
@@ -145,7 +146,12 @@ curl http://localhost:8000/v1/images/generations \
     "model": "gpt-image-2",
     "prompt": "一只漂浮在太空里的猫",
     "n": 1,
-    "response_format": "b64_json"
+    "response_format": "b64_json",
+    "size": "2160x3840",
+    "quality": "high",
+    "background": "auto",
+    "output_format": "png",
+    "compression": 20
   }'
 ```
 
@@ -158,7 +164,18 @@ curl http://localhost:8000/v1/images/generations \
 | `model`           | 图片模型，当前可用值以 `/v1/models` 返回结果为准，推荐使用 `gpt-image-1` |
 | `prompt`          | 图片生成提示词                                            |
 | `n`               | 生成数量，当前后端限制为 `1-4`                                 |
-| `response_format` | 当前请求模型中包含该字段，默认值为 `b64_json`                       |
+| `response_format` | 返回格式，支持 `b64_json` 与 `url`，默认值为 `b64_json`            |
+| `size`            | 目标输出尺寸，支持 `auto` 或 `WIDTHxHEIGHT`；最长边 ≤ `3840`，宽高均需是 `16` 的倍数，长宽比 ≤ `3:1`，总像素需介于 `655,360` 到 `8,294,400` |
+| `quality`         | 输出质量，支持 `auto`、`low`、`medium`、`high`               |
+| `background`      | 背景模式，支持 `auto`、`transparent`、`opaque`；`gpt-image-2` 不支持 `transparent` |
+| `output_format`   | 输出格式，支持 `png`、`jpeg`、`webp`                              |
+| `compression`     | JPEG / WebP 压缩级别，范围 `0-100`；`png` 不支持该参数 |
+
+补充说明：
+
+- `size`、`quality`、`background` 都支持 `auto`
+- 超过 `2560x1440`（`3,686,400` 像素）的输出属于实验性范围
+- `response_format=url` 时，服务会把处理后的图片保存到本地 `data/images/` 并返回 `/images/...` 的可访问地址
 
 <br>
 </details>
@@ -185,10 +202,11 @@ curl http://localhost:8000/v1/images/edits \
 
 | 字段       | 说明                                  |
 |:---------|:------------------------------------|
-| `model`  | 图片模型，推荐使用 `gpt-image-1`             |
-| `prompt` | 图片编辑提示词                             |
-| `n`      | 生成数量，当前后端限制为 `1-4`                  |
-| `image`  | 需要编辑的图片文件，使用 multipart/form-data 上传 |
+| `model`           | 图片模型，推荐使用 `gpt-image-1`                          |
+| `prompt`          | 图片编辑提示词                                          |
+| `n`               | 生成数量，当前后端限制为 `1-4`                               |
+| `response_format` | 返回格式，支持 `b64_json` 与 `url`，默认值为 `b64_json`     |
+| `image`           | 需要编辑的图片文件，使用 multipart/form-data 上传              |
 
 <br>
 </details>

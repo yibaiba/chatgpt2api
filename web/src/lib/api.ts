@@ -3,19 +3,29 @@ import type { AuthSession, AuthUser } from "@/lib/auth-types";
 
 export type { AuthSession, AuthUser } from "@/lib/auth-types";
 
-export type AccountType = "Free" | "Plus" | "Pro" | "Team";
+export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
-export type ImageModel = "gpt-image-1" | "gpt-image-2";
+export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2";
+export type ImageQuality = "auto" | "low" | "medium" | "high";
+export type ImageBackground = "auto" | "transparent" | "opaque";
+export type ImageOutputFormat = "png" | "jpeg" | "webp";
+export type ImageRequestOptions = {
+  size?: string;
+  quality?: ImageQuality;
+  background?: ImageBackground;
+  output_format?: ImageOutputFormat;
+  compression?: number;
+};
 export type GeneratedImageResponseItem = {
-  b64_json: string;
+  b64_json?: string;
+  url?: string;
   revised_prompt?: string;
   mime_type?: string;
 };
 export type ProxySettings = {
+  proxy_url: string;
   enabled: boolean;
-  proxy_url?: string;
-  url?: string;
-  scheme?: string | null;
+  scheme: string | null;
 };
 export type ProxyPoolEntry = {
   id: string;
@@ -35,19 +45,6 @@ export type ProxyPoolSettings = {
   selection_strategy: "round_robin";
   validate_on_save: boolean;
 };
-export type ProxyTestResult = {
-  ok: boolean;
-  status: number;
-  latency_ms: number;
-  error: string | null;
-};
-export type SettingsConfig = {
-  proxy: string;
-  base_url?: string;
-  "auth-key"?: string;
-  refresh_account_interval_minute?: number | string;
-  [key: string]: unknown;
-};
 
 export type Account = {
   id: string;
@@ -55,6 +52,7 @@ export type Account = {
   type: AccountType;
   status: AccountStatus;
   quota: number;
+  imageQuotaUnknown?: boolean;
   email?: string | null;
   user_id?: string | null;
   limits_progress?: Array<{
@@ -216,45 +214,6 @@ export async function updateProxySettings(proxyUrl: string) {
   });
 }
 
-export async function fetchSettingsConfig() {
-  return httpRequest<{ config: SettingsConfig }>("/api/settings");
-}
-
-export async function updateSettingsConfig(settings: SettingsConfig) {
-  return httpRequest<{ config: SettingsConfig }>("/api/settings", {
-    method: "POST",
-    body: settings,
-  });
-}
-
-export async function fetchProxy() {
-  const data = await fetchProxySettings();
-  return {
-    proxy: {
-      enabled: Boolean(data.item.enabled),
-      url: String(data.item.proxy_url || ""),
-    },
-  };
-}
-
-export async function updateProxy(updates: { enabled?: boolean; url?: string }) {
-  const proxyUrl = updates.enabled === false ? "" : String(updates.url || "").trim();
-  const data = await updateProxySettings(proxyUrl);
-  return {
-    proxy: {
-      enabled: Boolean(data.item.enabled),
-      url: String(data.item.proxy_url || ""),
-    },
-  };
-}
-
-export async function testProxy(url?: string) {
-  return httpRequest<{ result: ProxyTestResult }>("/api/proxy/test", {
-    method: "POST",
-    body: { url: url ?? "" },
-  });
-}
-
 export async function fetchProxyPoolSettings() {
   return httpRequest<ProxyPoolSettingsResponse>("/api/settings/proxies");
 }
@@ -287,7 +246,8 @@ export async function deleteProxyEntry(proxyId: string) {
 
 export async function generateImage(
   prompt: string,
-  model: ImageModel = "gpt-image-1",
+  model: ImageModel = "auto",
+  options: ImageRequestOptions = {},
 ) {
   return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/generations",
@@ -298,6 +258,7 @@ export async function generateImage(
         model,
         n: 1,
         response_format: "b64_json",
+        ...options,
       },
     },
   );
@@ -306,7 +267,8 @@ export async function generateImage(
 export async function editImage(
   files: File | File[],
   prompt: string,
-  model: ImageModel = "gpt-image-1",
+  model: ImageModel = "auto",
+  options: ImageRequestOptions = {},
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -317,6 +279,11 @@ export async function editImage(
   formData.append("prompt", prompt);
   formData.append("model", model);
   formData.append("n", "1");
+  Object.entries(options).forEach(([key, value]) => {
+    if (typeof value === "string" && value.trim()) {
+      formData.append(key, value);
+    }
+  });
 
   return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/edits",
@@ -395,94 +362,4 @@ export async function startCPAImport(poolId: string, names: string[]) {
 
 export async function fetchCPAPoolImportJob(poolId: string) {
   return httpRequest<{ import_job: CPAImportJob | null }>(`/api/cpa/pools/${poolId}/import`);
-}
-
-export type Sub2APIServer = {
-  id: string;
-  name: string;
-  base_url: string;
-  email: string;
-  has_api_key: boolean;
-  group_id: string;
-  import_job?: CPAImportJob | null;
-};
-
-export type Sub2APIRemoteAccount = {
-  id: string;
-  name: string;
-  email: string;
-  plan_type: string;
-  status: string;
-  expires_at: string;
-  has_refresh_token: boolean;
-};
-
-export type Sub2APIRemoteGroup = {
-  id: string;
-  name: string;
-  description: string;
-  platform: string;
-  status: string;
-  account_count: number;
-  active_account_count: number;
-};
-
-export async function fetchSub2APIServers() {
-  return httpRequest<{ servers: Sub2APIServer[] }>("/api/sub2api/servers");
-}
-
-export async function createSub2APIServer(server: {
-  name: string;
-  base_url: string;
-  email: string;
-  password: string;
-  api_key: string;
-  group_id: string;
-}) {
-  return httpRequest<{ server: Sub2APIServer; servers: Sub2APIServer[] }>("/api/sub2api/servers", {
-    method: "POST",
-    body: server,
-  });
-}
-
-export async function updateSub2APIServer(
-  serverId: string,
-  updates: {
-    name?: string;
-    base_url?: string;
-    email?: string;
-    password?: string;
-    api_key?: string;
-    group_id?: string;
-  },
-) {
-  return httpRequest<{ server: Sub2APIServer; servers: Sub2APIServer[] }>(`/api/sub2api/servers/${serverId}`, {
-    method: "POST",
-    body: updates,
-  });
-}
-
-export async function fetchSub2APIServerGroups(serverId: string) {
-  return httpRequest<{ server_id: string; groups: Sub2APIRemoteGroup[] }>(`/api/sub2api/servers/${serverId}/groups`);
-}
-
-export async function deleteSub2APIServer(serverId: string) {
-  return httpRequest<{ servers: Sub2APIServer[] }>(`/api/sub2api/servers/${serverId}`, {
-    method: "DELETE",
-  });
-}
-
-export async function fetchSub2APIServerAccounts(serverId: string) {
-  return httpRequest<{ server_id: string; accounts: Sub2APIRemoteAccount[] }>(`/api/sub2api/servers/${serverId}/accounts`);
-}
-
-export async function startSub2APIImport(serverId: string, accountIds: string[]) {
-  return httpRequest<{ import_job: CPAImportJob | null }>(`/api/sub2api/servers/${serverId}/import`, {
-    method: "POST",
-    body: { account_ids: accountIds },
-  });
-}
-
-export async function fetchSub2APIImportJob(serverId: string) {
-  return httpRequest<{ import_job: CPAImportJob | null }>(`/api/sub2api/servers/${serverId}/import`);
 }

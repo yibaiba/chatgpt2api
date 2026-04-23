@@ -51,6 +51,30 @@ class ImageHistoryService:
             "dataUrl": data_url,
         }
 
+    def _legacy_reference_images(self, raw: dict[str, Any]) -> list[dict]:
+        reference_images = [
+            image for item in list(raw.get("referenceImages") or raw.get("reference_images") or [])
+            if (image := self._normalize_reference_image(item)) is not None
+        ]
+        if reference_images:
+            return reference_images
+
+        source_image = raw.get("sourceImage") or raw.get("source_image")
+        if not isinstance(source_image, dict):
+            return []
+
+        data_url = self._clean_text(source_image.get("dataUrl") or source_image.get("data_url"))
+        if not data_url:
+            return []
+
+        return [
+            {
+                "name": self._clean_text(source_image.get("fileName") or source_image.get("file_name")) or "reference.png",
+                "type": self._clean_text(source_image.get("type")) or "image/png",
+                "dataUrl": data_url,
+            }
+        ]
+
     def _normalize_image(self, raw: object) -> dict | None:
         if not isinstance(raw, dict):
             return None
@@ -90,7 +114,7 @@ class ImageHistoryService:
             return None
         conversation_id = self._clean_text(raw.get("id"))
         prompt = self._clean_text(raw.get("prompt"))
-        title = self._clean_text(raw.get("title")) or prompt[:5]
+        title = self._clean_text(raw.get("title")) or prompt[:12]
         model = self._clean_text(raw.get("model"))
         if not conversation_id or not prompt or not model:
             return None
@@ -107,10 +131,7 @@ class ImageHistoryService:
         if not images:
             return None
 
-        reference_images = [
-            image for item in list(raw.get("referenceImages") or raw.get("reference_images") or [])
-            if (image := self._normalize_reference_image(item)) is not None
-        ]
+        reference_images = self._legacy_reference_images(raw)
 
         created_at = self._clean_text(raw.get("createdAt") or raw.get("created_at")) or _now_iso()
         return {
@@ -176,7 +197,11 @@ class ImageHistoryService:
 
     @staticmethod
     def _sort_items(items: list[dict]) -> list[dict]:
-        return sorted(items, key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+        return sorted(
+            items,
+            key=lambda item: str(item.get("updatedAt") or item.get("createdAt") or ""),
+            reverse=True,
+        )
 
     def list_conversations(self, identity: dict) -> list[dict]:
         with self._lock:

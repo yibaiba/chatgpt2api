@@ -32,6 +32,7 @@ export type ImageConversation = {
   count: number;
   images: StoredImage[];
   createdAt: string;
+  updatedAt?: string;
   status: ImageConversationStatus;
   error?: string;
   ownerRole: UserRole;
@@ -59,6 +60,7 @@ function normalizeConversation(conversation: ImageConversation): ImageConversati
     ...conversation,
     mode: conversation.mode === "edit" ? "edit" : "generate",
     images: (conversation.images || []).map(normalizeStoredImage),
+    updatedAt: String(conversation.updatedAt || conversation.createdAt || "").trim() || conversation.createdAt,
     ownerRole: conversation.ownerRole === "admin" ? "admin" : "user",
     ownerId: String(conversation.ownerId || "").trim() || (conversation.ownerRole === "admin" ? "admin" : "unknown"),
     ownerName:
@@ -69,7 +71,9 @@ function normalizeConversation(conversation: ImageConversation): ImageConversati
 
 export async function listImageConversations(): Promise<ImageConversation[]> {
   const data = await httpRequest<{ items: ImageConversation[] }>("/api/image-conversations");
-  return data.items.map(normalizeConversation).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return data.items
+    .map(normalizeConversation)
+    .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
 }
 
 export async function saveImageConversation(conversation: ImageConversation): Promise<void> {

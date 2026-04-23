@@ -7,9 +7,11 @@ from fastapi import HTTPException
 from services.account_service import AccountService
 from services.image_service import (
     ImageGenerationError,
+    ImageRequestOptions,
     edit_image_result,
     generate_image_result,
     is_token_invalid_error,
+    normalize_image_request_options,
 )
 from services.utils import (
     build_chat_image_completion,
@@ -49,10 +51,20 @@ class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
 
-    def generate_with_pool(self, prompt: str, model: str, n: int):
+    def generate_with_pool(
+        self,
+        prompt: str,
+        model: str,
+        n: int,
+        options: ImageRequestOptions | None = None,
+        *,
+        response_format: str = "b64_json",
+        base_url: str | None = None,
+    ):
         created = None
         image_items: list[dict[str, object]] = []
         last_error: str | None = None
+        normalized_options = options or ImageRequestOptions()
 
         for index in range(1, n + 1):
             while True:
@@ -65,7 +77,14 @@ class ChatGPTService:
 
                 print(f"[image-generate] start pooled token={request_token[:12]}... model={model} index={index}/{n}")
                 try:
-                    result = generate_image_result(request_token, prompt, model)
+                    result = generate_image_result(
+                        request_token,
+                        prompt,
+                        model,
+                        normalized_options,
+                        response_format=response_format,
+                        base_url=base_url,
+                    )
                     account = self.account_service.mark_image_result(request_token, success=True)
                     if created is None:
                         created = result.get("created")
@@ -105,10 +124,15 @@ class ChatGPTService:
         images: Iterable[tuple[bytes, str, str]],
         model: str,
         n: int,
+        options: ImageRequestOptions | None = None,
+        *,
+        response_format: str = "b64_json",
+        base_url: str | None = None,
     ):
         created = None
         image_items: list[dict[str, object]] = []
         last_error: str | None = None
+        normalized_options = options or ImageRequestOptions()
         normalized_images = list(images)
         if not normalized_images:
             raise ImageGenerationError("image is required")
@@ -127,7 +151,15 @@ class ChatGPTService:
                     f"model={model} index={index}/{n} images={len(normalized_images)}"
                 )
                 try:
-                    result = edit_image_result(request_token, prompt, normalized_images, model)
+                    result = edit_image_result(
+                        request_token,
+                        prompt,
+                        normalized_images,
+                        model,
+                        normalized_options,
+                        response_format=response_format,
+                        base_url=base_url,
+                    )
                     account = self.account_service.mark_image_result(request_token, success=True)
                     if created is None:
                         created = result.get("created")
@@ -176,14 +208,25 @@ class ChatGPTService:
         prompt = extract_chat_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "prompt is required"})
+        try:
+            options = normalize_image_request_options(
+                model=model,
+                size=body.get("size"),
+                quality=body.get("quality"),
+                background=body.get("background") or body.get("background:"),
+                output_format=body.get("output_format"),
+                compression=body.get("compression"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
         image_info = extract_chat_image(body)
         try:
             if image_info:
                 image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], model, n)
+                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], model, n, options)
             else:
-                image_result = self.generate_with_pool(prompt, model, n)
+                image_result = self.generate_with_pool(prompt, model, n, options)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
@@ -206,11 +249,22 @@ class ChatGPTService:
         image_info = _extract_response_image(body.get("input"))
         model = str(body.get("model") or "gpt-5").strip() or "gpt-5"
         try:
+            options = normalize_image_request_options(
+                model="gpt-image-1",
+                size=body.get("size"),
+                quality=body.get("quality"),
+                background=body.get("background") or body.get("background:"),
+                output_format=body.get("output_format"),
+                compression=body.get("compression"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        try:
             if image_info:
                 image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], "gpt-image-1", 1)
+                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], "gpt-image-1", 1, options)
             else:
-                image_result = self.generate_with_pool(prompt, "gpt-image-1", 1)
+                image_result = self.generate_with_pool(prompt, "gpt-image-1", 1, options)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 

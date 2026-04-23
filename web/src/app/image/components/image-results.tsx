@@ -1,5 +1,5 @@
 "use client";
-import { ImagePlus, LoaderCircle } from "lucide-react";
+import { LoaderCircle, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -10,19 +10,9 @@ type ImageResultsProps = {
   showConversationOwner?: boolean;
   isSelectedGenerating: boolean;
   openLightbox: (imageId: string) => void;
-  onReuseAsReference?: (image: { id: string; dataUrl: string }) => void | Promise<void>;
+  onReuseAsReference?: (image: { conversationId?: string; id: string; dataUrl: string }) => void | Promise<void>;
   formatConversationTime: (value: string) => string;
 };
-
-type ImageDimensions = {
-  width: number;
-  height: number;
-};
-
-function formatMegapixels(width: number, height: number) {
-  const megapixels = (width * height) / 1_000_000;
-  return `${megapixels.toFixed(megapixels >= 10 ? 0 : 1).replace(/\.0$/, "")}M`;
-}
 
 export function ImageResults({
   selectedConversation,
@@ -91,25 +81,56 @@ export function ImageResults({
                 style={{
                   gridTemplateColumns: `repeat(${Math.min(selectedConversation.referenceImages.length, 3)}, minmax(0, 1fr))`,
                 }}
-              >
-                {selectedConversation.referenceImages.map((image, index) => (
-                  <button
-                    key={`${image.name}-${index}`}
-                    type="button"
-                    onClick={() => {
-                      setReferenceLightboxIndex(index);
-                      setReferenceLightboxOpen(true);
-                    }}
-                    className="group relative aspect-square min-h-[112px] overflow-hidden rounded-[18px] border border-stone-200/80 bg-stone-100/60 text-left transition hover:border-stone-300 sm:min-h-[136px]"
-                    aria-label={`预览参考图 ${image.name || index + 1}`}
-                  >
-                    <img
-                      src={image.dataUrl}
-                      alt={image.name || `参考图 ${index + 1}`}
-                      className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
-                    />
-                  </button>
-                ))}
+                >
+                {selectedConversation.referenceImages.map((image, index) => {
+                  const imageId = `${image.name}-${index}`;
+                  const dragPayload = JSON.stringify({
+                    conversationId: selectedConversation.id,
+                    id: imageId,
+                    dataUrl: image.dataUrl,
+                  });
+                  return (
+                    <div key={imageId} className="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReferenceLightboxIndex(index);
+                          setReferenceLightboxOpen(true);
+                        }}
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "copy";
+                          event.dataTransfer.setData("application/x-chatgpt2api-reference-image", dragPayload);
+                          event.dataTransfer.setData("text/plain", image.dataUrl);
+                        }}
+                        className="group relative aspect-square min-h-[112px] overflow-hidden rounded-[18px] border border-stone-200/80 bg-stone-100/60 text-left transition hover:border-stone-300 sm:min-h-[136px]"
+                        aria-label={`预览参考图 ${image.name || index + 1}`}
+                      >
+                        <img
+                          src={image.dataUrl}
+                          alt={image.name || `参考图 ${index + 1}`}
+                          className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                        />
+                      </button>
+                      {onReuseAsReference ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void onReuseAsReference({
+                              conversationId: selectedConversation.id,
+                              id: imageId,
+                              dataUrl: image.dataUrl,
+                            })
+                          }
+                          className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-full border border-stone-200 bg-stone-50 px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-100"
+                        >
+                          <Sparkles className="size-4" />
+                          加入编辑
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -144,6 +165,7 @@ export function ImageResults({
               {selectedConversation.images.map((image, index) => (
                 <div key={image.id} className="break-inside-avoid overflow-hidden rounded-[22px]">
                   <ImageResultCard
+                    conversationId={selectedConversation.id}
                     image={image}
                     index={index}
                     onOpen={openLightbox}
@@ -166,21 +188,21 @@ export function ImageResults({
 }
 
 function ImageResultCard({
+  conversationId,
   image,
   index,
   onOpen,
   onReuseAsReference,
 }: {
+  conversationId: string;
   image: StoredImage;
   index: number;
   onOpen: (imageId: string) => void;
-  onReuseAsReference?: (image: { id: string; dataUrl: string }) => void | Promise<void>;
+  onReuseAsReference?: (image: { conversationId?: string; id: string; dataUrl: string }) => void | Promise<void>;
 }) {
-  const [dimensions, setDimensions] = useState<ImageDimensions | null>(null);
-
   if (image.status === "success" && image.b64_json) {
     const dataUrl = `data:${image.mime_type || "image/png"};base64,${image.b64_json}`;
-    const dragPayload = JSON.stringify({ id: image.id, dataUrl });
+    const dragPayload = JSON.stringify({ conversationId, id: image.id, dataUrl });
     return (
       <div className="overflow-hidden rounded-[22px] border border-stone-200/70 bg-white p-2">
         <button
@@ -199,38 +221,17 @@ function ImageResultCard({
             src={dataUrl}
             alt={`Generated result ${index + 1}`}
             className="block h-auto w-full transition duration-200 group-hover:brightness-90"
-            onLoad={(event) => {
-              const nextWidth = event.currentTarget.naturalWidth;
-              const nextHeight = event.currentTarget.naturalHeight;
-              if (!nextWidth || !nextHeight) {
-                return;
-              }
-              setDimensions((current) => {
-                if (current?.width === nextWidth && current.height === nextHeight) {
-                  return current;
-                }
-                return { width: nextWidth, height: nextHeight };
-              });
-            }}
           />
         </button>
-        {dimensions ? (
-          <div className="mt-2 flex items-center justify-between gap-2 px-1 text-[11px] font-medium text-stone-500">
-            <span className="truncate">{dimensions.width} × {dimensions.height}</span>
-            <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-stone-600">
-              {formatMegapixels(dimensions.width, dimensions.height)}
-            </span>
-          </div>
-        ) : null}
         {onReuseAsReference ? (
           <button
             type="button"
-            onClick={() => void onReuseAsReference({ id: image.id, dataUrl })}
+            onClick={() => void onReuseAsReference({ conversationId, id: image.id, dataUrl })}
             className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-full border border-stone-200 bg-stone-50 px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300 hover:bg-stone-100"
           >
-            <ImagePlus className="size-4" />
-            作为参考图
-          </button>
+              <Sparkles className="size-4" />
+              加入编辑
+            </button>
         ) : null}
       </div>
     );
