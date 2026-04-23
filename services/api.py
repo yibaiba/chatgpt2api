@@ -3,8 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event, Thread
-
-from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, Header, Request, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -17,6 +16,13 @@ from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.image_history_service import image_history_service
+from services.proxy_service import test_proxy
+from services.sub2api_service import (
+    list_remote_accounts as sub2api_list_remote_accounts,
+    list_remote_groups as sub2api_list_remote_groups,
+    sub2api_config,
+    sub2api_import_service,
+)
 from services.image_service import ImageGenerationError, normalize_image_request_options
 from services.system_settings import system_settings_service
 from services.utils import parse_image_count
@@ -24,7 +30,6 @@ from services.version import get_app_version
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIST_DIR = BASE_DIR / "web_dist"
-IMAGE_OUTPUT_DIR = BASE_DIR / "data" / "images"
 
 
 class ImageGenerationRequest(BaseModel):
@@ -120,6 +125,10 @@ class AuthUserUpdateRequest(BaseModel):
     image_quota: int | None = Field(default=None, ge=0)
 
 
+class SettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
 class ProxySettingsUpdateRequest(BaseModel):
     proxy_url: str = ""
 
@@ -150,20 +159,73 @@ class StoredImagePayload(BaseModel):
     error: str | None = None
 
 
-class ImageConversationPayload(BaseModel):
+class ImageTurnPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(default="")
-    title: str = ""
     prompt: str = ""
     model: str = ""
     mode: str | None = None
+    size: str | None = None
+    quality: str | None = None
+    background: str | None = None
+    output_format: str | None = Field(default=None, alias="outputFormat")
+    compression: int | None = None
     reference_images: list[StoredReferenceImagePayload] = Field(default_factory=list, alias="referenceImages")
     count: int = Field(default=1)
     images: list[StoredImagePayload] = Field(default_factory=list)
     created_at: str = Field(default="", alias="createdAt")
     status: str = "success"
     error: str | None = None
+
+
+class ImageConversationPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(default="")
+    title: str = ""
+    created_at: str = Field(default="", alias="createdAt")
+    updated_at: str = Field(default="", alias="updatedAt")
+    turns: list[ImageTurnPayload] = Field(default_factory=list)
+    prompt: str = ""
+    model: str = ""
+    mode: str | None = None
+    reference_images: list[StoredReferenceImagePayload] = Field(default_factory=list, alias="referenceImages")
+    count: int = Field(default=1)
+    images: list[StoredImagePayload] = Field(default_factory=list)
+    status: str = "success"
+    error: str | None = None
+
+
+class Sub2APIServerCreateRequest(BaseModel):
+    name: str = ""
+    base_url: str = ""
+    email: str = ""
+    password: str = ""
+    api_key: str = ""
+    group_id: str = ""
+
+
+class Sub2APIServerUpdateRequest(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    email: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+    group_id: str | None = None
+
+
+class Sub2APIImportRequest(BaseModel):
+    account_ids: list[str] = Field(default_factory=list)
+
+
+class ProxyUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    url: str | None = None
+
+
+class ProxyTestRequest(BaseModel):
+    url: str = ""
 
 
 def build_model_item(model_id: str) -> dict[str, object]:
@@ -189,6 +251,21 @@ def sanitize_cpa_pools(pools: list[dict]) -> list[dict]:
     return [sanitized for pool in pools if (sanitized := sanitize_cpa_pool(pool)) is not None]
 
 
+_SUB2API_HIDDEN_FIELDS = {"password", "api_key"}
+
+
+def sanitize_sub2api_server(server: dict | None) -> dict | None:
+    if not isinstance(server, dict):
+        return None
+    sanitized = {key: value for key, value in server.items() if key not in _SUB2API_HIDDEN_FIELDS}
+    sanitized["has_api_key"] = bool(str(server.get("api_key") or "").strip())
+    return sanitized
+
+
+def sanitize_sub2api_servers(servers: list[dict]) -> list[dict]:
+    return [sanitized for server in servers if (sanitized := sanitize_sub2api_server(server)) is not None]
+
+
 def extract_bearer_token(authorization: str | None) -> str:
     scheme, _, value = str(authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not value.strip():
@@ -197,7 +274,7 @@ def extract_bearer_token(authorization: str | None) -> str:
 
 
 def require_auth_key(authorization: str | None) -> None:
-    if auth_service.authenticate(extract_bearer_token(authorization)) is None:
+    if extract_bearer_token(authorization) != str(config.auth_key or "").strip():
         raise HTTPException(status_code=401, detail={"error": "authorization is invalid"})
 
 
@@ -241,8 +318,7 @@ def count_chat_completion_images(payload: dict[str, object]) -> int:
         message = choice.get("message")
         if not isinstance(message, dict):
             continue
-        content = str(message.get("content") or "")
-        count += content.count("![image_")
+        count += str(message.get("content") or "").count("![image_")
     return count
 
 
@@ -250,7 +326,11 @@ def count_response_images(payload: dict[str, object]) -> int:
     output = payload.get("output")
     if not isinstance(output, list):
         return 0
-    return sum(1 for item in output if isinstance(item, dict) and str(item.get("type") or "").strip() == "image_generation_call")
+    return sum(
+        1
+        for item in output
+        if isinstance(item, dict) and str(item.get("type") or "").strip() == "image_generation_call"
+    )
 
 
 def normalize_image_response_format(value: object) -> str:
@@ -261,10 +341,7 @@ def normalize_image_response_format(value: object) -> str:
 
 
 def resolve_image_base_url(request: Request) -> str:
-    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").strip()
-    scheme = forwarded_proto or request.url.scheme
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    return f"{scheme}://{host}"
+    return config.base_url or f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
 
 
 def start_limited_account_watcher(stop_event: Event) -> Thread:
@@ -334,8 +411,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    app.mount("/images", StaticFiles(directory=str(IMAGE_OUTPUT_DIR)), name="generated-images")
     router = APIRouter()
 
     @router.get("/v1/models")
@@ -365,6 +440,19 @@ def create_app() -> FastAPI:
     @router.get("/version")
     async def get_version():
         return {"version": app_version}
+
+    @router.get("/api/settings")
+    async def get_settings(authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        return {"config": config.get()}
+
+    @router.post("/api/settings")
+    async def save_settings(
+            body: SettingsUpdateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        return {"config": config.update(body.model_dump(mode="python"))}
 
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):
@@ -567,14 +655,15 @@ def create_app() -> FastAPI:
     async def generate_images(
             body: ImageGenerationRequest,
             request: Request,
-            authorization: str | None = Header(default=None),
+            authorization: str | None = Header(default=None)
     ):
         identity = require_session(authorization)
-        reserved_count = int(body.n or 1)
         auth_key = str(identity.get("auth_key") or "")
+        reserved_count = int(body.n or 1)
+        base_url = resolve_image_base_url(request)
         try:
+            normalized_response_format = normalize_image_response_format(body.response_format)
             image_options = body.build_image_options()
-            response_format = normalize_image_response_format(body.response_format)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         try:
@@ -588,8 +677,8 @@ def create_app() -> FastAPI:
                 body.model,
                 body.n,
                 image_options,
-                response_format=response_format,
-                base_url=resolve_image_base_url(request),
+                response_format=normalized_response_format,
+                base_url=base_url,
             )
         except ImageGenerationError as exc:
             auth_service.settle_images(auth_key, reserved_count, 0)
@@ -604,7 +693,8 @@ def create_app() -> FastAPI:
     async def edit_images(
             request: Request,
             authorization: str | None = Header(default=None),
-            image: list[UploadFile] = File(...),
+            image: list[UploadFile] | None = File(default=None),
+            image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
             prompt: str = Form(...),
             model: str = Form(default="auto"),
             n: int = Form(default=1),
@@ -618,7 +708,12 @@ def create_app() -> FastAPI:
         identity = require_session(authorization)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
-        auth_key = str(identity.get("auth_key") or "")
+
+        uploads = [*(image or []), *(image_list or [])]
+        if not uploads:
+            raise HTTPException(status_code=400, detail={"error": "image file is required"})
+
+        base_url = resolve_image_base_url(request)
         try:
             normalized_response_format = normalize_image_response_format(response_format)
             image_options = normalize_image_request_options(
@@ -633,7 +728,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
         images: list[tuple[bytes, str, str]] = []
-        for upload in image:
+        for upload in uploads:
             image_data = await upload.read()
             if not image_data:
                 raise HTTPException(status_code=400, detail={"error": "image file is empty"})
@@ -642,6 +737,7 @@ def create_app() -> FastAPI:
             mime_type = upload.content_type or "image/png"
             images.append((image_data, file_name, mime_type))
 
+        auth_key = str(identity.get("auth_key") or "")
         try:
             auth_service.reserve_images(auth_key, n)
         except ValueError as exc:
@@ -655,7 +751,7 @@ def create_app() -> FastAPI:
                 n,
                 image_options,
                 response_format=normalized_response_format,
-                base_url=resolve_image_base_url(request),
+                base_url=base_url,
             )
         except ImageGenerationError as exc:
             auth_service.settle_images(auth_key, n, 0)
@@ -789,7 +885,144 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail={"error": "pool not found"})
         return {"import_job": pool.get("import_job")}
 
+    # ── Sub2API endpoints ─────────────────────────────────────────────
+
+    @router.get("/api/sub2api/servers")
+    async def list_sub2api_servers(authorization: str | None = Header(default=None)):
+        require_admin_session(authorization)
+        return {"servers": sanitize_sub2api_servers(sub2api_config.list_servers())}
+
+    @router.post("/api/sub2api/servers")
+    async def create_sub2api_server(
+            body: Sub2APIServerCreateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        if not body.base_url.strip():
+            raise HTTPException(status_code=400, detail={"error": "base_url is required"})
+        has_login = body.email.strip() and body.password.strip()
+        has_api_key = bool(body.api_key.strip())
+        if not has_login and not has_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "email+password or api_key is required"},
+            )
+        server = sub2api_config.add_server(
+            name=body.name,
+            base_url=body.base_url,
+            email=body.email,
+            password=body.password,
+            api_key=body.api_key,
+            group_id=body.group_id,
+        )
+        return {
+            "server": sanitize_sub2api_server(server),
+            "servers": sanitize_sub2api_servers(sub2api_config.list_servers()),
+        }
+
+    @router.post("/api/sub2api/servers/{server_id}")
+    async def update_sub2api_server(
+            server_id: str,
+            body: Sub2APIServerUpdateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        server = sub2api_config.update_server(server_id, body.model_dump(exclude_none=True))
+        if server is None:
+            raise HTTPException(status_code=404, detail={"error": "server not found"})
+        return {
+            "server": sanitize_sub2api_server(server),
+            "servers": sanitize_sub2api_servers(sub2api_config.list_servers()),
+        }
+
+    @router.delete("/api/sub2api/servers/{server_id}")
+    async def delete_sub2api_server(
+            server_id: str,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        if not sub2api_config.delete_server(server_id):
+            raise HTTPException(status_code=404, detail={"error": "server not found"})
+        return {"servers": sanitize_sub2api_servers(sub2api_config.list_servers())}
+
+    @router.get("/api/sub2api/servers/{server_id}/groups")
+    async def sub2api_server_groups(
+            server_id: str,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        server = sub2api_config.get_server(server_id)
+        if server is None:
+            raise HTTPException(status_code=404, detail={"error": "server not found"})
+        try:
+            groups = await run_in_threadpool(sub2api_list_remote_groups, server)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+        return {"server_id": server_id, "groups": groups}
+
+    @router.get("/api/sub2api/servers/{server_id}/accounts")
+    async def sub2api_server_accounts(
+            server_id: str,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        server = sub2api_config.get_server(server_id)
+        if server is None:
+            raise HTTPException(status_code=404, detail={"error": "server not found"})
+        try:
+            accounts = await run_in_threadpool(sub2api_list_remote_accounts, server)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+        return {"server_id": server_id, "accounts": accounts}
+
+    @router.post("/api/sub2api/servers/{server_id}/import")
+    async def sub2api_server_import(
+            server_id: str,
+            body: Sub2APIImportRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        server = sub2api_config.get_server(server_id)
+        if server is None:
+            raise HTTPException(status_code=404, detail={"error": "server not found"})
+        try:
+            job = sub2api_import_service.start_import(server, body.account_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"import_job": job}
+
+    @router.get("/api/sub2api/servers/{server_id}/import")
+    async def sub2api_server_import_progress(
+            server_id: str,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        server = sub2api_config.get_server(server_id)
+        if server is None:
+            raise HTTPException(status_code=404, detail={"error": "server not found"})
+        return {"import_job": server.get("import_job")}
+
+    # ── Upstream proxy endpoints ─────────────────────────────────────
+
+    @router.post("/api/proxy/test")
+    async def test_proxy_endpoint(
+            body: ProxyTestRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(authorization)
+        candidate = (body.url or "").strip()
+        if not candidate:
+            candidate = config.get_proxy_settings()
+        if not candidate:
+            raise HTTPException(status_code=400, detail={"error": "proxy url is required"})
+        result = await run_in_threadpool(test_proxy, candidate)
+        return {"result": result}
+
     app.include_router(router)
+
+    # 挂载静态图片目录
+    if config.images_dir.exists():
+        app.mount("/images", StaticFiles(directory=str(config.images_dir)), name="images")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_web(full_path: str):

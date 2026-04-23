@@ -10,12 +10,23 @@ from services.config import DATA_DIR
 
 IMAGE_HISTORY_FILE = DATA_DIR / "image_history.json"
 ALLOWED_CONVERSATION_MODES = {"generate", "edit"}
-ALLOWED_CONVERSATION_STATUSES = {"generating", "success", "error"}
+ALLOWED_TURN_STATUSES = {"queued", "generating", "success", "error"}
 ALLOWED_IMAGE_STATUSES = {"loading", "success", "error"}
+ALLOWED_IMAGE_QUALITIES = {"auto", "low", "medium", "high"}
+ALLOWED_IMAGE_BACKGROUNDS = {"auto", "transparent", "opaque"}
+ALLOWED_IMAGE_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
+DEFAULT_CONVERSATION_TITLE_LENGTH = 12
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _build_default_title(prompt: str) -> str:
+    trimmed = str(prompt or "").strip()
+    if len(trimmed) <= DEFAULT_CONVERSATION_TITLE_LENGTH:
+        return trimmed
+    return f"{trimmed[:DEFAULT_CONVERSATION_TITLE_LENGTH]}..."
 
 
 class ImageHistoryService:
@@ -39,6 +50,16 @@ class ImageHistoryService:
             count = min(maximum, count)
         return count
 
+    @staticmethod
+    def _data_url_mime_type(data_url: str) -> str:
+        prefix = str(data_url or "").strip()
+        if prefix.startswith("data:"):
+            header = prefix.split(",", 1)[0]
+            mime_type = header.removeprefix("data:").split(";", 1)[0].strip()
+            if mime_type:
+                return mime_type
+        return "image/png"
+
     def _normalize_reference_image(self, raw: object) -> dict | None:
         if not isinstance(raw, dict):
             return None
@@ -46,14 +67,15 @@ class ImageHistoryService:
         if not data_url:
             return None
         return {
-            "name": self._clean_text(raw.get("name")),
-            "type": self._clean_text(raw.get("type")) or "image/png",
+            "name": self._clean_text(raw.get("name")) or "reference.png",
+            "type": self._clean_text(raw.get("type")) or self._data_url_mime_type(data_url),
             "dataUrl": data_url,
         }
 
     def _legacy_reference_images(self, raw: dict[str, Any]) -> list[dict]:
         reference_images = [
-            image for item in list(raw.get("referenceImages") or raw.get("reference_images") or [])
+            image
+            for item in list(raw.get("referenceImages") or raw.get("reference_images") or [])
             if (image := self._normalize_reference_image(item)) is not None
         ]
         if reference_images:
@@ -70,7 +92,7 @@ class ImageHistoryService:
         return [
             {
                 "name": self._clean_text(source_image.get("fileName") or source_image.get("file_name")) or "reference.png",
-                "type": self._clean_text(source_image.get("type")) or "image/png",
+                "type": self._clean_text(source_image.get("type")) or self._data_url_mime_type(data_url),
                 "dataUrl": data_url,
             }
         ]
@@ -95,6 +117,68 @@ class ImageHistoryService:
             "error": error,
         }
 
+    def _normalize_turn(self, raw: object) -> dict | None:
+        if not isinstance(raw, dict):
+            return None
+
+        turn_id = self._clean_text(raw.get("id")) or _now_iso()
+        prompt = self._clean_text(raw.get("prompt"))
+        model = self._clean_text(raw.get("model"))
+        if not prompt or not model:
+            return None
+
+        images = [image for item in list(raw.get("images") or []) if (image := self._normalize_image(item)) is not None]
+        if not images:
+            return None
+
+        raw_status = self._clean_text(raw.get("status")).lower()
+        if raw_status not in ALLOWED_TURN_STATUSES:
+            if any(image["status"] == "loading" for image in images):
+                raw_status = "generating"
+            elif any(image["status"] == "error" for image in images):
+                raw_status = "error"
+            else:
+                raw_status = "success"
+
+        mode = self._clean_text(raw.get("mode")).lower() or "generate"
+        if mode not in ALLOWED_CONVERSATION_MODES:
+            mode = "generate"
+
+        size = self._clean_text(raw.get("size")) or "auto"
+
+        quality = self._clean_text(raw.get("quality")).lower() or "auto"
+        if quality not in ALLOWED_IMAGE_QUALITIES:
+            quality = "auto"
+
+        background = self._clean_text(raw.get("background")).lower() or "auto"
+        if background not in ALLOWED_IMAGE_BACKGROUNDS:
+            background = "auto"
+
+        output_format = self._clean_text(raw.get("outputFormat") or raw.get("output_format")).lower() or "png"
+        if output_format not in ALLOWED_IMAGE_OUTPUT_FORMATS:
+            output_format = "png"
+
+        compression = raw.get("compression")
+        normalized_compression = None if compression is None else self._clean_count(compression, minimum=0, maximum=100)
+
+        return {
+            "id": turn_id,
+            "prompt": prompt,
+            "model": model,
+            "mode": mode,
+            "size": size,
+            "quality": quality,
+            "background": background,
+            "outputFormat": output_format,
+            "compression": normalized_compression,
+            "referenceImages": self._legacy_reference_images(raw),
+            "count": self._clean_count(raw.get("count"), minimum=1, maximum=10),
+            "images": images,
+            "createdAt": self._clean_text(raw.get("createdAt") or raw.get("created_at")) or _now_iso(),
+            "status": raw_status,
+            "error": self._clean_text(raw.get("error")) or None,
+        }
+
     def _normalize_owner(self, raw: object) -> dict | None:
         if not isinstance(raw, dict):
             return None
@@ -112,40 +196,49 @@ class ImageHistoryService:
     def _normalize_payload(self, raw: object) -> dict | None:
         if not isinstance(raw, dict):
             return None
+
         conversation_id = self._clean_text(raw.get("id"))
-        prompt = self._clean_text(raw.get("prompt"))
-        title = self._clean_text(raw.get("title")) or prompt[:12]
-        model = self._clean_text(raw.get("model"))
-        if not conversation_id or not prompt or not model:
+        if not conversation_id:
             return None
 
-        mode = self._clean_text(raw.get("mode")).lower() or "generate"
-        if mode not in ALLOWED_CONVERSATION_MODES:
-            mode = "generate"
+        raw_turns = raw.get("turns")
+        if isinstance(raw_turns, list):
+            turns = [turn for item in raw_turns if (turn := self._normalize_turn(item)) is not None]
+        else:
+            turns = []
 
-        status = self._clean_text(raw.get("status")).lower() or "success"
-        if status not in ALLOWED_CONVERSATION_STATUSES:
-            status = "success"
+        if not turns:
+            legacy_turn = self._normalize_turn(
+                {
+                    "id": conversation_id,
+                    "prompt": raw.get("prompt"),
+                    "model": raw.get("model"),
+                    "mode": raw.get("mode"),
+                    "referenceImages": raw.get("referenceImages") or raw.get("reference_images"),
+                    "sourceImage": raw.get("sourceImage") or raw.get("source_image"),
+                    "count": raw.get("count"),
+                    "images": raw.get("images"),
+                    "createdAt": raw.get("createdAt") or raw.get("created_at"),
+                    "status": raw.get("status"),
+                    "error": raw.get("error"),
+                }
+            )
+            if legacy_turn is None:
+                return None
+            turns = [legacy_turn]
 
-        images = [image for item in list(raw.get("images") or []) if (image := self._normalize_image(item)) is not None]
-        if not images:
+        created_at = self._clean_text(raw.get("createdAt") or raw.get("created_at")) or turns[0]["createdAt"]
+        updated_at = self._clean_text(raw.get("updatedAt") or raw.get("updated_at")) or turns[-1]["createdAt"]
+        title = self._clean_text(raw.get("title")) or _build_default_title(turns[-1]["prompt"])
+        if not title:
             return None
 
-        reference_images = self._legacy_reference_images(raw)
-
-        created_at = self._clean_text(raw.get("createdAt") or raw.get("created_at")) or _now_iso()
         return {
             "id": conversation_id,
             "title": title,
-            "prompt": prompt,
-            "model": model,
-            "mode": mode,
-            "referenceImages": reference_images,
-            "count": self._clean_count(raw.get("count"), minimum=1, maximum=10),
-            "images": images,
             "createdAt": created_at,
-            "status": status,
-            "error": self._clean_text(raw.get("error")) or None,
+            "updatedAt": updated_at,
+            "turns": turns,
         }
 
     def _normalize_item(self, raw: object) -> dict | None:
@@ -158,7 +251,6 @@ class ImageHistoryService:
         return {
             **owner,
             **payload,
-            "updatedAt": self._clean_text(raw.get("updatedAt") or raw.get("updated_at")) or payload["createdAt"],
         }
 
     def _load_items(self) -> list[dict]:

@@ -282,6 +282,10 @@ export async function editImage(
   Object.entries(options).forEach(([key, value]) => {
     if (typeof value === "string" && value.trim()) {
       formData.append(key, value);
+      return;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      formData.append(key, String(value));
     }
   });
 

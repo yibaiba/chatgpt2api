@@ -13,6 +13,7 @@ from curl_cffi.requests import Session
 
 from services.config import config
 from services.system_settings import system_settings_service
+from services.utils import anonymize_token
 
 
 class AccountService:
@@ -105,6 +106,7 @@ class AccountService:
         token_payload = self._decode_access_token_payload(access_token)
 
         auth_payload = token_payload.get("https://api.openai.com/auth")
+        print("检测账户类型响应", auth_payload)
         if isinstance(auth_payload, dict):
             matched = self._normalize_account_type(auth_payload.get("chatgpt_plan_type"))
             if matched:
@@ -188,10 +190,10 @@ class AccountService:
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",
             "user-agent": user_agent
-            or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                          or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "sec-ch-ua": self._clean_token(account.get("sec-ch-ua"))
-            or '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+                         or '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
             "sec-ch-ua-mobile": self._clean_token(account.get("sec-ch-ua-mobile")) or "?0",
             "sec-ch-ua-platform": self._clean_token(account.get("sec-ch-ua-platform")) or '"Windows"',
         }
@@ -235,8 +237,8 @@ class AccountService:
             token
             for item in self._accounts
             if self._is_image_account_available(item)
-            and (token := self._clean_token(item.get("access_token")))
-            and token not in excluded
+               and (token := self._clean_token(item.get("access_token")))
+               and token not in excluded
         ]
 
     def _pick_next_candidate_token(self, excluded_tokens: set[str] | None = None) -> str:
@@ -249,11 +251,12 @@ class AccountService:
             return access_token
 
     def refresh_account_state(self, access_token: str) -> dict | None:
+        token_ref = anonymize_token(access_token)
         try:
             remote_info = self.fetch_remote_info(access_token)
         except Exception as exc:
             message = str(exc)
-            print(f"[account-available] refresh token={access_token[:12]}... fail {message}")
+            print(f"[account-available] refresh token={token_ref} fail {message}")
             if "/backend-api/me failed: HTTP 401" in message:
                 return self.update_account(
                     access_token,
@@ -270,11 +273,12 @@ class AccountService:
         while True:
             access_token = self._pick_next_candidate_token(excluded_tokens=attempted_tokens)
             attempted_tokens.add(access_token)
+            token_ref = anonymize_token(access_token)
             account = self.refresh_account_state(access_token)
             if self._is_image_account_available(account or {}):
                 return access_token
             print(
-                f"[account-available] skip token={access_token[:12]}... "
+                f"[account-available] skip token={token_ref} "
                 f"quota={account.get('quota') if account else 'unknown'} "
                 f"status={account.get('status') if account else 'unknown'}"
             )
@@ -302,7 +306,7 @@ class AccountService:
                 token
                 for item in self._accounts
                 if item.get("status") == "限流"
-                and (token := self._clean_token(item.get("access_token")))
+                   and (token := self._clean_token(item.get("access_token")))
             ]
 
     def add_accounts(self, tokens: list[str]) -> dict:
@@ -341,7 +345,8 @@ class AccountService:
             return {"removed": 0, "items": self.list_accounts()}
         with self._lock:
             before = len(self._accounts)
-            self._accounts = [item for item in self._accounts if self._clean_token(item.get("access_token")) not in target_set]
+            self._accounts = [item for item in self._accounts if
+                              self._clean_token(item.get("access_token")) not in target_set]
             removed = before - len(self._accounts)
             if self._accounts:
                 self._index %= len(self._accounts)
@@ -407,7 +412,8 @@ class AccountService:
             raise ValueError("access_token is required")
 
         headers, impersonate = self._build_remote_headers(access_token)
-        print(f"[account-refresh] start {access_token[:12]}...")
+        token_ref = anonymize_token(access_token)
+        print(f"[account-refresh] start {token_ref}")
         session = system_settings_service.apply_next_proxy(Session(impersonate=impersonate, verify=True))
         session.headers.update(headers)
         try:
@@ -465,8 +471,7 @@ class AccountService:
             }
             print(
                 "[account-refresh] ok",
-                result.get("user_id"),
-                result.get("email"),
+                token_ref,
                 f"quota={result.get('quota')}",
                 f"restore_at={result.get('restore_at')}",
             )
@@ -484,7 +489,8 @@ class AccountService:
         max_workers = min(10, len(cleaned_tokens))
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {executor.submit(self.fetch_remote_info, access_token): access_token for access_token in cleaned_tokens}
+            future_map = {executor.submit(self.fetch_remote_info, access_token): access_token for access_token in
+                          cleaned_tokens}
             for future in as_completed(future_map):
                 access_token = future_map[future]
                 try:
@@ -493,7 +499,7 @@ class AccountService:
                         refreshed += 1
                 except Exception as exc:
                     message = str(exc)
-                    print(f"[account-refresh] fail {access_token[:12]}... {message}")
+                    print(f"[account-refresh] fail {anonymize_token(access_token)} {message}")
                     if "/backend-api/me failed: HTTP 401" in message:
                         self.update_account(
                             access_token,

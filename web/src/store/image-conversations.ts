@@ -1,10 +1,14 @@
 "use client";
 
-import type { ImageModel } from "@/lib/api";
-import { httpRequest } from "@/lib/request";
 import type { UserRole } from "@/lib/auth-types";
+import type { ImageBackground, ImageModel, ImageOutputFormat, ImageQuality } from "@/lib/api";
+import { httpRequest } from "@/lib/request";
 
 export type ImageConversationMode = "generate" | "edit";
+export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
+const IMAGE_QUALITY_VALUES = new Set<ImageQuality>(["auto", "low", "medium", "high"]);
+const IMAGE_BACKGROUND_VALUES = new Set<ImageBackground>(["auto", "transparent", "opaque"]);
+const IMAGE_OUTPUT_FORMAT_VALUES = new Set<ImageOutputFormat>(["png", "jpeg", "webp"]);
 
 export type StoredReferenceImage = {
   name: string;
@@ -20,24 +24,38 @@ export type StoredImage = {
   error?: string;
 };
 
-export type ImageConversationStatus = "generating" | "success" | "error";
+export type ImageTurn = {
+  id: string;
+  prompt: string;
+  model: ImageModel;
+  mode: ImageConversationMode;
+  size: string;
+  quality: ImageQuality;
+  background: ImageBackground;
+  outputFormat: ImageOutputFormat;
+  compression?: number;
+  referenceImages: StoredReferenceImage[];
+  count: number;
+  images: StoredImage[];
+  createdAt: string;
+  status: ImageTurnStatus;
+  error?: string;
+};
 
 export type ImageConversation = {
   id: string;
   title: string;
-  prompt: string;
-  model: ImageModel;
-  mode?: ImageConversationMode;
-  referenceImages?: StoredReferenceImage[];
-  count: number;
-  images: StoredImage[];
   createdAt: string;
-  updatedAt?: string;
-  status: ImageConversationStatus;
-  error?: string;
+  updatedAt: string;
+  turns: ImageTurn[];
   ownerRole: UserRole;
   ownerId: string;
   ownerName: string;
+};
+
+export type ImageConversationStats = {
+  queued: number;
+  running: number;
 };
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
@@ -55,12 +73,116 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
   };
 }
 
-function normalizeConversation(conversation: ImageConversation): ImageConversation {
+function normalizeReferenceImage(image: StoredReferenceImage): StoredReferenceImage {
   return {
-    ...conversation,
-    mode: conversation.mode === "edit" ? "edit" : "generate",
-    images: (conversation.images || []).map(normalizeStoredImage),
-    updatedAt: String(conversation.updatedAt || conversation.createdAt || "").trim() || conversation.createdAt,
+    name: image.name || "reference.png",
+    type: image.type || "image/png",
+    dataUrl: image.dataUrl,
+  };
+}
+
+function dataUrlMimeType(dataUrl: string) {
+  const match = dataUrl.match(/^data:(.*?);base64,/);
+  return match?.[1] || "image/png";
+}
+
+function normalizeImageQuality(value: unknown): ImageQuality {
+  const candidate = typeof value === "string" ? value : "";
+  return IMAGE_QUALITY_VALUES.has(candidate as ImageQuality) ? (candidate as ImageQuality) : "auto";
+}
+
+function normalizeImageBackground(value: unknown): ImageBackground {
+  const candidate = typeof value === "string" ? value : "";
+  return IMAGE_BACKGROUND_VALUES.has(candidate as ImageBackground) ? (candidate as ImageBackground) : "auto";
+}
+
+function normalizeImageOutputFormat(value: unknown): ImageOutputFormat {
+  const candidate = typeof value === "string" ? value : "";
+  return IMAGE_OUTPUT_FORMAT_VALUES.has(candidate as ImageOutputFormat) ? (candidate as ImageOutputFormat) : "png";
+}
+
+function normalizeImageCompression(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function getLegacyReferenceImages(source: Record<string, unknown>): StoredReferenceImage[] {
+  if (Array.isArray(source.referenceImages)) {
+    return source.referenceImages
+      .filter((image): image is StoredReferenceImage => {
+        if (!image || typeof image !== "object") {
+          return false;
+        }
+        const candidate = image as StoredReferenceImage;
+        return typeof candidate.dataUrl === "string" && candidate.dataUrl.length > 0;
+      })
+      .map(normalizeReferenceImage);
+  }
+
+  if (source.sourceImage && typeof source.sourceImage === "object") {
+    const image = source.sourceImage as { dataUrl?: unknown; fileName?: unknown };
+    if (typeof image.dataUrl === "string" && image.dataUrl) {
+      return [
+        {
+          name: typeof image.fileName === "string" && image.fileName ? image.fileName : "reference.png",
+          type: dataUrlMimeType(image.dataUrl),
+          dataUrl: image.dataUrl,
+        },
+      ];
+    }
+  }
+
+  return [];
+}
+
+function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
+  const normalizedImages = Array.isArray(turn.images) ? turn.images.map(normalizeStoredImage) : [];
+  const derivedStatus: ImageTurnStatus =
+    normalizedImages.some((image) => image.status === "loading")
+      ? "generating"
+      : normalizedImages.some((image) => image.status === "error")
+        ? "error"
+        : "success";
+
+  return {
+    id: String(turn.id || `${Date.now()}`),
+    prompt: String(turn.prompt || ""),
+    model: (turn.model as ImageModel) || "auto",
+    mode: turn.mode === "edit" ? "edit" : "generate",
+    size: typeof turn.size === "string" && turn.size.trim() ? turn.size.trim() : "auto",
+    quality: normalizeImageQuality(turn.quality),
+    background: normalizeImageBackground(turn.background),
+    outputFormat: normalizeImageOutputFormat(turn.outputFormat ?? turn.output_format),
+    compression: normalizeImageCompression(turn.compression),
+    referenceImages: getLegacyReferenceImages(turn),
+    count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
+    images: normalizedImages,
+    createdAt: String(turn.createdAt || new Date().toISOString()),
+    status:
+      turn.status === "queued" ||
+      turn.status === "generating" ||
+      turn.status === "success" ||
+      turn.status === "error"
+        ? turn.status
+        : derivedStatus,
+    error: typeof turn.error === "string" ? turn.error : undefined,
+  };
+}
+
+function normalizeConversation(conversation: ImageConversation & Record<string, unknown>): ImageConversation {
+  const turns = Array.isArray(conversation.turns)
+    ? conversation.turns.map((turn) => normalizeTurn(turn as ImageTurn & Record<string, unknown>))
+    : [];
+  const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+
+  return {
+    id: String(conversation.id || `${Date.now()}`),
+    title: String(conversation.title || ""),
+    createdAt: String(conversation.createdAt || lastTurn?.createdAt || new Date().toISOString()),
+    updatedAt: String(conversation.updatedAt || lastTurn?.createdAt || new Date().toISOString()),
+    turns,
     ownerRole: conversation.ownerRole === "admin" ? "admin" : "user",
     ownerId: String(conversation.ownerId || "").trim() || (conversation.ownerRole === "admin" ? "admin" : "unknown"),
     ownerName:
@@ -69,11 +191,19 @@ function normalizeConversation(conversation: ImageConversation): ImageConversati
   };
 }
 
+function sortImageConversations(conversations: ImageConversation[]): ImageConversation[] {
+  return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 export async function listImageConversations(): Promise<ImageConversation[]> {
-  const data = await httpRequest<{ items: ImageConversation[] }>("/api/image-conversations");
-  return data.items
-    .map(normalizeConversation)
-    .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+  const data = await httpRequest<{ items: Array<ImageConversation & Record<string, unknown>> }>("/api/image-conversations");
+  return sortImageConversations(data.items.map(normalizeConversation));
+}
+
+export async function saveImageConversations(conversations: ImageConversation[]): Promise<void> {
+  for (const conversation of sortImageConversations(conversations.map(normalizeConversation))) {
+    await saveImageConversation(conversation);
+  }
 }
 
 export async function saveImageConversation(conversation: ImageConversation): Promise<void> {
@@ -93,4 +223,22 @@ export async function clearImageConversations(): Promise<void> {
   await httpRequest<{ removed: number }>("/api/image-conversations", {
     method: "DELETE",
   });
+}
+
+export function getImageConversationStats(conversation: ImageConversation | null): ImageConversationStats {
+  if (!conversation) {
+    return { queued: 0, running: 0 };
+  }
+
+  return conversation.turns.reduce(
+    (acc, turn) => {
+      if (turn.status === "queued") {
+        acc.queued += 1;
+      } else if (turn.status === "generating") {
+        acc.running += 1;
+      }
+      return acc;
+    },
+    { queued: 0, running: 0 },
+  );
 }
