@@ -28,7 +28,6 @@ class AccountService:
         "business": "Team",
         "enterprise": "Team",
     }
-
     def __init__(self, store_file: Path):
         self.store_file = store_file
         self._lock = Lock()
@@ -48,6 +47,12 @@ class AccountService:
                 seen.add(value)
                 cleaned.append(value)
         return cleaned
+
+    @classmethod
+    def _iter_refresh_batches(cls, access_tokens: list[str], batch_size: int):
+        batch_size = max(1, batch_size)
+        for index in range(0, len(access_tokens), batch_size):
+            yield access_tokens[index:index + batch_size]
 
     def _find_account_index(self, access_token: str) -> int:
         for index, item in enumerate(self._accounts):
@@ -486,32 +491,44 @@ class AccountService:
 
         refreshed = 0
         errors: list[dict[str, str]] = []
-        max_workers = min(10, len(cleaned_tokens))
+        batch_size = config.refresh_account_batch_size
+        batch_count = 0
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {executor.submit(self.fetch_remote_info, access_token): access_token for access_token in
-                          cleaned_tokens}
-            for future in as_completed(future_map):
-                access_token = future_map[future]
-                try:
-                    remote_info = future.result()
-                    if self.update_account(access_token, remote_info) is not None:
-                        refreshed += 1
-                except Exception as exc:
-                    message = str(exc)
-                    print(f"[account-refresh] fail {anonymize_token(access_token)} {message}")
-                    if "/backend-api/me failed: HTTP 401" in message:
-                        self.update_account(
-                            access_token,
-                            {
-                                "status": "异常",
-                                "quota": 0,
-                            },
-                        )
-                        message = "检测到封号"
-                    errors.append({"access_token": access_token, "error": message})
+        for batch_count, batch_tokens in enumerate(self._iter_refresh_batches(cleaned_tokens, batch_size), start=1):
+            max_workers = min(batch_size, len(batch_tokens))
+            print(
+                f"[account-refresh] batch {batch_count} "
+                f"size={len(batch_tokens)} workers={max_workers}"
+            )
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(self.fetch_remote_info, access_token): access_token
+                    for access_token in batch_tokens
+                }
+                for future in as_completed(future_map):
+                    access_token = future_map[future]
+                    try:
+                        remote_info = future.result()
+                        if self.update_account(access_token, remote_info) is not None:
+                            refreshed += 1
+                    except Exception as exc:
+                        message = str(exc)
+                        print(f"[account-refresh] fail {anonymize_token(access_token)} {message}")
+                        if "/backend-api/me failed: HTTP 401" in message:
+                            self.update_account(
+                                access_token,
+                                {
+                                    "status": "异常",
+                                    "quota": 0,
+                                },
+                            )
+                            message = "检测到封号"
+                        errors.append({"access_token": access_token, "error": message})
 
-        print(f"[account-refresh] done refreshed={refreshed} errors={len(errors)} workers={max_workers}")
+        print(
+            f"[account-refresh] done refreshed={refreshed} errors={len(errors)} "
+            f"batch_size={batch_size} batches={batch_count}"
+        )
         return {
             "refreshed": refreshed,
             "errors": errors,

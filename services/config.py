@@ -79,6 +79,23 @@ class ConfigStore:
     def _save(self) -> None:
         self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    @staticmethod
+    def _normalize_clamped_int(
+            value: object,
+            *,
+            fallback: int,
+            min_value: int,
+            max_value: int,
+    ) -> int:
+        if value in (None, ""):
+            return fallback
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        integer = int(numeric)
+        return max(min_value, min(max_value, integer))
+
     @property
     def auth_key(self) -> str:
         return str(os.getenv("CHATGPT2API_AUTH_KEY") or self.data.get("auth-key") or "").strip()
@@ -89,10 +106,21 @@ class ConfigStore:
 
     @property
     def refresh_account_interval_minute(self) -> int:
-        try:
-            return int(self.data.get("refresh_account_interval_minute", 5))
-        except (TypeError, ValueError):
-            return 5
+        return self._normalize_clamped_int(
+            self.data.get("refresh_account_interval_minute"),
+            fallback=5,
+            min_value=1,
+            max_value=10 ** 9,
+        )
+
+    @property
+    def refresh_account_batch_size(self) -> int:
+        return self._normalize_clamped_int(
+            self.data.get("refresh_account_batch_size"),
+            fallback=3,
+            min_value=1,
+            max_value=10,
+        )
 
     @property
     def images_dir(self) -> Path:
@@ -119,7 +147,20 @@ class ConfigStore:
         return str(self.data.get("proxy") or "").strip()
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
-        self.data = dict(data or {})
+        next_data = dict(data or {})
+        next_data["refresh_account_interval_minute"] = self._normalize_clamped_int(
+            next_data.get("refresh_account_interval_minute"),
+            fallback=5,
+            min_value=1,
+            max_value=10 ** 9,
+        )
+        next_data["refresh_account_batch_size"] = self._normalize_clamped_int(
+            next_data.get("refresh_account_batch_size"),
+            fallback=3,
+            min_value=1,
+            max_value=10,
+        )
+        self.data = next_data
         self._save()
         return self.get()
 

@@ -1,6 +1,7 @@
 {
   "auth-key": "chatgpt2api",
   "refresh_account_interval_minute": 60,
+  "refresh_account_batch_size": 3,
   "image_history_persistence_mode": "browser",
   "proxy_pool": []
 }

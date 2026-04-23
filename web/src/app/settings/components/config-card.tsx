@@ -21,6 +21,7 @@ export function ConfigCard() {
   const isSavingConfig = useSettingsStore((state) => state.isSavingConfig);
   const setAuthKey = useSettingsStore((state) => state.setAuthKey);
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
+  const setRefreshAccountBatchSize = useSettingsStore((state) => state.setRefreshAccountBatchSize);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setImageHistoryPersistenceMode = useSettingsStore((state) => state.setImageHistoryPersistenceMode);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
@@ -72,6 +73,22 @@ export function ConfigCard() {
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">控制账号自动刷新频率，保存时会自动归一到最小 1 分钟。</p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">账号刷新并发批大小</label>
+            <Input
+              type="number"
+              min="1"
+              max="10"
+              step="1"
+              inputMode="numeric"
+              value={String(config?.refresh_account_batch_size || "")}
+              onChange={(event) => setRefreshAccountBatchSize(event.target.value)}
+              placeholder="3"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs text-stone-500">控制每一批同时刷新的 token 数量，保存时会自动限制在 1 到 10。</p>
           </div>
 
           <div className="space-y-2 md:col-span-2">

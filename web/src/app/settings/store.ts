@@ -22,6 +22,21 @@ export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 
+function normalizeClampedInteger(
+  value: unknown,
+  { fallback, min, max }: { fallback: number; min: number; max: number },
+) {
+  if (value == null || value === "") {
+    return fallback;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  const integer = Math.trunc(numeric);
+  return Math.max(min, Math.min(max, integer));
+}
+
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const imageHistoryPersistenceMode: ImageHistoryPersistenceMode =
     config.image_history_persistence_mode === "server" ? "server" : "browser";
@@ -29,6 +44,11 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     ...config,
     "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
     refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
+    refresh_account_batch_size: normalizeClampedInteger(config.refresh_account_batch_size, {
+      fallback: 3,
+      min: 1,
+      max: 10,
+    }),
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     image_history_persistence_mode: imageHistoryPersistenceMode,
@@ -84,6 +104,7 @@ type SettingsStore = {
   saveConfig: () => Promise<void>;
   setAuthKey: (value: string) => void;
   setRefreshAccountIntervalMinute: (value: string) => void;
+  setRefreshAccountBatchSize: (value: string) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
   setImageHistoryPersistenceMode: (value: ImageHistoryPersistenceMode) => void;
@@ -166,6 +187,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ...config,
         "auth-key": String(config["auth-key"] || "").trim(),
         refresh_account_interval_minute: Math.max(1, Number(config.refresh_account_interval_minute) || 1),
+        refresh_account_batch_size: normalizeClampedInteger(config.refresh_account_batch_size, {
+          fallback: 3,
+          min: 1,
+          max: 10,
+        }),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
         image_history_persistence_mode:
@@ -205,6 +231,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           refresh_account_interval_minute: value,
+        },
+      };
+    });
+  },
+
+  setRefreshAccountBatchSize: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          refresh_account_batch_size: value,
         },
       };
     });

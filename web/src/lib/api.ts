@@ -104,6 +104,7 @@ export type SettingsConfig = {
   base_url?: string;
   "auth-key"?: string;
   refresh_account_interval_minute?: number | string;
+  refresh_account_batch_size?: number | string;
   image_history_persistence_mode?: ImageHistoryPersistenceMode | string;
   [key: string]: unknown;
 };
