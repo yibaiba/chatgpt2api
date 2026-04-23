@@ -65,6 +65,10 @@ import {
 } from "@/lib/api";
 import { syncStoredAuthSession } from "@/lib/auth-session";
 
+import { ConfigCard } from "./components/config-card";
+import { Sub2APIConnections } from "./components/sub2api-connections";
+import { useSettingsStore } from "./store";
+
 const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
 function normalizeFiles(items: CPARemoteFile[]) {
@@ -105,6 +109,7 @@ export default function SettingsPage() {
   const didLoadRef = useRef(false);
   const pollTimerRef = useRef<number | null>(null);
   const router = useRouter();
+  const loadSettingsConfig = useSettingsStore((state) => state.loadConfig);
 
   const [pools, setPools] = useState<CPAPool[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -205,7 +210,7 @@ export default function SettingsPage() {
           router.replace("/image");
           return;
         }
-        await Promise.all([loadPools(), loadAuthUsers(), loadProxyPool()]);
+        await Promise.all([loadSettingsConfig(), loadPools(), loadAuthUsers(), loadProxyPool()]);
       } catch {
         if (!cancelled) {
           router.replace("/login");
@@ -216,7 +221,7 @@ export default function SettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [loadSettingsConfig, router]);
 
   useEffect(() => {
     const runningPoolIds = pools
@@ -533,6 +538,8 @@ export default function SettingsPage() {
       </section>
 
       <section className="space-y-6">
+        <ConfigCard />
+
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex items-start justify-between gap-4">
@@ -881,6 +888,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        <Sub2APIConnections />
       </section>
 
       <Dialog open={proxyDialogOpen} onOpenChange={setProxyDialogOpen}>

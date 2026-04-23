@@ -5,13 +5,7 @@ from typing import Iterable
 from fastapi import HTTPException
 
 from services.account_service import AccountService
-from services.image_service import (
-    ImageGenerationError,
-    ImageRequestOptions,
-    edit_image_result,
-    generate_image_result,
-    is_token_invalid_error,
-)
+from services.image_service import ImageGenerationError, edit_image_result, generate_image_result, is_token_invalid_error
 from services.utils import (
     build_chat_image_completion,
     extract_chat_image,
@@ -55,15 +49,12 @@ class ChatGPTService:
         prompt: str,
         model: str,
         n: int,
-        options: ImageRequestOptions | None = None,
-        *,
         response_format: str = "b64_json",
         base_url: str | None = None,
     ):
         created = None
         image_items: list[dict[str, object]] = []
         last_error: str | None = None
-        normalized_options = options or ImageRequestOptions()
 
         for index in range(1, n + 1):
             while True:
@@ -80,9 +71,8 @@ class ChatGPTService:
                         request_token,
                         prompt,
                         model,
-                        normalized_options,
-                        response_format=response_format,
-                        base_url=base_url,
+                        response_format,
+                        base_url,
                     )
                     account = self.account_service.mark_image_result(request_token, success=True)
                     if created is None:
@@ -123,15 +113,12 @@ class ChatGPTService:
         images: Iterable[tuple[bytes, str, str]],
         model: str,
         n: int,
-        options: ImageRequestOptions | None = None,
-        *,
         response_format: str = "b64_json",
         base_url: str | None = None,
     ):
         created = None
         image_items: list[dict[str, object]] = []
         last_error: str | None = None
-        normalized_options = options or ImageRequestOptions()
         normalized_images = list(images)
         if not normalized_images:
             raise ImageGenerationError("image is required")
@@ -155,9 +142,8 @@ class ChatGPTService:
                         prompt,
                         normalized_images,
                         model,
-                        normalized_options,
-                        response_format=response_format,
-                        base_url=base_url,
+                        response_format,
+                        base_url,
                     )
                     account = self.account_service.mark_image_result(request_token, success=True)
                     if created is None:

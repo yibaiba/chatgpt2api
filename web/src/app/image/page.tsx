@@ -727,15 +727,12 @@ export default function ImagePage() {
     const now = new Date().toISOString();
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
+    const draftOwnerRole: UserRole = viewerRole === "admin" ? "admin" : "user";
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
       model: DEFAULT_IMAGE_MODEL,
       mode: imageMode,
-      size: "auto",
-      quality: "auto",
-      background: "auto",
-      outputFormat: "png",
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
       images: Array.from({ length: parsedCount }, (_, index) => ({
@@ -757,6 +754,9 @@ export default function ImagePage() {
           title: buildConversationTitle(prompt),
           createdAt: now,
           updatedAt: now,
+          ownerRole: draftOwnerRole,
+          ownerId: draftOwnerRole === "admin" ? "admin" : "unknown",
+          ownerName: draftOwnerRole === "admin" ? "管理员" : "普通用户",
           turns: [draftTurn],
         };
 
