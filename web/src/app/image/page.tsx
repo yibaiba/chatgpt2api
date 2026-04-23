@@ -7,7 +7,7 @@ import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
-import { getCachedOrSyncAuthSession, syncStoredAuthSession } from "@/lib/auth-session";
+import { getCachedOrSyncAuthSession, syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 import type { AuthSession, ImageHistoryPersistenceMode, UserRole } from "@/lib/auth-types";
 import {
   editImage,
@@ -272,32 +272,51 @@ export default function ImagePage() {
     };
   }, [browserHistoryStorageKey, historyPersistenceMode, isHistoryModeReady]);
 
-  const loadQuota = useCallback(async (forceSyncSession = false) => {
-    try {
-      const session = forceSyncSession ? await syncStoredAuthSession() : await getCachedOrSyncAuthSession();
+  const applyViewerSession = useCallback((session: AuthSession | null) => {
+    setViewerSession(session);
+    setHistoryPersistenceMode(session?.image_history_persistence_mode === "server" ? "server" : "browser");
+    setIsHistoryModeReady(true);
+  }, []);
+
+  const loadViewerSession = useCallback(
+    async (forceSyncSession = false) => {
+      const session = forceSyncSession
+        ? await syncStoredAuthSessionWithFallback()
+        : await getCachedOrSyncAuthSession();
+      applyViewerSession(session);
+      return session;
+    },
+    [applyViewerSession],
+  );
+
+  const loadQuota = useCallback(
+    async (forceSyncSession = false) => {
+      let session: AuthSession | null = null;
+      try {
+        session = await loadViewerSession(forceSyncSession);
+      } catch {
+        setAvailableQuota((prev) => (prev === "加载中..." ? "—" : prev));
+        return;
+      }
+
       if (!session) {
-        setViewerSession(null);
-        setHistoryPersistenceMode("browser");
-        setIsHistoryModeReady(true);
         setAvailableQuota("—");
         return;
       }
-      setViewerSession(session);
-      setHistoryPersistenceMode(session.image_history_persistence_mode === "server" ? "server" : "browser");
-      setIsHistoryModeReady(true);
-      if (session.role === "admin") {
-        const data = await fetchAccounts();
-        setAvailableQuota(formatAvailableQuota(data.items));
+      if (session.role !== "admin") {
+        setAvailableQuota(String(Math.max(0, session.image_quota ?? 0)));
         return;
       }
-      setAvailableQuota(String(Math.max(0, session.image_quota ?? 0)));
-    } catch {
-      setViewerSession(null);
-      setHistoryPersistenceMode("browser");
-      setIsHistoryModeReady(true);
-      setAvailableQuota((prev) => (prev === "加载中..." ? "—" : prev));
-    }
-  }, []);
+
+      try {
+        const data = await fetchAccounts();
+        setAvailableQuota(formatAvailableQuota(data.items));
+      } catch {
+        setAvailableQuota((prev) => (prev === "加载中..." ? "—" : prev));
+      }
+    },
+    [loadViewerSession],
+  );
 
   useEffect(() => {
     if (didLoadQuotaRef.current) {

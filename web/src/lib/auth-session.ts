@@ -18,6 +18,18 @@ export async function syncStoredAuthSession() {
   return data.session;
 }
 
+export async function syncStoredAuthSessionWithFallback() {
+  const storedSession = await getStoredAuthSession();
+  try {
+    return await syncStoredAuthSession();
+  } catch (error) {
+    if (storedSession) {
+      return storedSession;
+    }
+    throw error;
+  }
+}
+
 export async function getCachedOrSyncAuthSession() {
   const storedSession = await getStoredAuthSession();
   if (storedSession) {

@@ -17,7 +17,7 @@ The feature covers:
 
 ## Persistence Contract
 
-- `browser` mode stores history only in browser-local storage and must not call image-history APIs
+- `browser` mode stores history only in browser-local storage (via IndexedDB/localforage) and must not call image-history APIs
 - `server` mode stores history in `data/image_history.json`
 - The file contains a JSON array
 - Every item must include:
@@ -128,6 +128,8 @@ Rules:
 
 ## Frontend Rules
 
-- `web/src/store/image-conversations.ts` is a thin API client, not a browser-local cache source of truth
+- `web/src/store/image-conversations.ts` owns shared history normalization and storage adapters:
+  - server mode uses the image-history API
+  - browser mode uses IndexedDB/localforage, not raw `localStorage`
 - Do not auto-convert all `generating` conversations to `error` when loading history, because admins can view other users' active jobs
 - Admin-only owner labels should appear in both the history sidebar and the selected conversation details

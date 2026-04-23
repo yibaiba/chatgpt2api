@@ -1,5 +1,7 @@
 "use client";
 
+import localforage from "localforage";
+
 import type { UserRole } from "@/lib/auth-types";
 import type { ImageModel } from "@/lib/api";
 import { httpRequest } from "@/lib/request";
@@ -51,6 +53,10 @@ export type ImageConversationStats = {
 };
 
 const BROWSER_IMAGE_HISTORY_STORAGE_PREFIX = "chatgpt2api_image_history";
+const browserImageHistoryStorage = localforage.createInstance({
+  name: "chatgpt2api",
+  storeName: "image_history",
+});
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const normalizedMimeType = image.mime_type || "image/png";
@@ -162,40 +168,57 @@ function sortImageConversations(conversations: ImageConversation[]): ImageConver
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-function readBrowserImageConversations(storageKey: string): ImageConversation[] {
-  if (typeof window === "undefined") {
+function normalizeBrowserImageConversations(value: unknown): ImageConversation[] {
+  if (value == null) {
     return [];
   }
-  const raw = window.localStorage.getItem(storageKey);
-  if (!raw) {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("浏览器中的图片历史数据已损坏，请清空本地记录后重试");
-  }
-  if (!Array.isArray(parsed)) {
+  if (!Array.isArray(value)) {
     throw new Error("浏览器中的图片历史数据格式无效，请清空本地记录后重试");
   }
   return sortImageConversations(
-    parsed
+    value
       .filter((item): item is ImageConversation & Record<string, unknown> => !!item && typeof item === "object")
       .map(normalizeConversation),
   );
 }
 
-function writeBrowserImageConversations(storageKey: string, conversations: ImageConversation[]): void {
+async function readBrowserImageConversations(storageKey: string): Promise<ImageConversation[]> {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const storedValue = await browserImageHistoryStorage.getItem<unknown>(storageKey);
+  if (storedValue != null) {
+    return normalizeBrowserImageConversations(storedValue);
+  }
+
+  const legacyRaw = window.localStorage.getItem(storageKey);
+  if (!legacyRaw) {
+    return [];
+  }
+  let parsedLegacyValue: unknown;
+  try {
+    parsedLegacyValue = JSON.parse(legacyRaw);
+  } catch {
+    throw new Error("浏览器中的图片历史数据已损坏，请清空本地记录后重试");
+  }
+  const normalized = normalizeBrowserImageConversations(parsedLegacyValue);
+  await browserImageHistoryStorage.setItem(storageKey, normalized);
+  window.localStorage.removeItem(storageKey);
+  return normalized;
+}
+
+async function writeBrowserImageConversations(storageKey: string, conversations: ImageConversation[]): Promise<void> {
   if (typeof window === "undefined") {
     return;
   }
   const normalized = sortImageConversations(conversations.map(normalizeConversation));
   if (normalized.length === 0) {
+    await browserImageHistoryStorage.removeItem(storageKey);
     window.localStorage.removeItem(storageKey);
     return;
   }
-  window.localStorage.setItem(storageKey, JSON.stringify(normalized));
+  await browserImageHistoryStorage.setItem(storageKey, normalized);
+  window.localStorage.removeItem(storageKey);
 }
 
 export function buildBrowserImageHistoryStorageKey(ownerRole: UserRole, ownerId: string): string {
@@ -230,9 +253,9 @@ export async function saveBrowserImageConversation(
   conversation: ImageConversation,
 ): Promise<void> {
   const normalizedConversation = normalizeConversation(conversation);
-  const next = readBrowserImageConversations(storageKey).filter((item) => item.id !== normalizedConversation.id);
+  const next = (await readBrowserImageConversations(storageKey)).filter((item) => item.id !== normalizedConversation.id);
   next.unshift(normalizedConversation);
-  writeBrowserImageConversations(storageKey, next);
+  await writeBrowserImageConversations(storageKey, next);
 }
 
 export async function deleteImageConversation(id: string): Promise<void> {
@@ -242,8 +265,8 @@ export async function deleteImageConversation(id: string): Promise<void> {
 }
 
 export async function deleteBrowserImageConversation(storageKey: string, id: string): Promise<void> {
-  const next = readBrowserImageConversations(storageKey).filter((conversation) => conversation.id !== id);
-  writeBrowserImageConversations(storageKey, next);
+  const next = (await readBrowserImageConversations(storageKey)).filter((conversation) => conversation.id !== id);
+  await writeBrowserImageConversations(storageKey, next);
 }
 
 export async function clearImageConversations(): Promise<void> {
@@ -256,6 +279,7 @@ export async function clearBrowserImageConversations(storageKey: string): Promis
   if (typeof window === "undefined") {
     return;
   }
+  await browserImageHistoryStorage.removeItem(storageKey);
   window.localStorage.removeItem(storageKey);
 }
 
