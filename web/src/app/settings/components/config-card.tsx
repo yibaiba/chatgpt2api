@@ -33,9 +33,7 @@ export function ConfigCard() {
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h2 className="text-lg font-semibold tracking-tight">系统配置</h2>
-            <p className="text-sm text-stone-500">
-              补回 upstream 的基础设置项，保留当前分支自己的代理池方案，不接回 upstream 全局代理 UI。
-            </p>
+            <p className="text-sm text-stone-500">修改后请务必点击保存按钮，否则配置不会生效。</p>
           </div>
         </div>
 
