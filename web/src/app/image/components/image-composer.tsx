@@ -236,6 +236,9 @@ export function ImageComposer({
                       {activeTaskCount} 个任务处理中或排队中
                     </div>
                   )}
+                  <div className="rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-600">
+                    模型 gpt-image-2
+                  </div>
                   <div className="flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1">
                     <span className="text-sm font-medium text-stone-700">张数</span>
                     <Input
