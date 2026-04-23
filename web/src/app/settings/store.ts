@@ -16,18 +16,22 @@ import {
   type CPARemoteFile,
   type SettingsConfig,
 } from "@/lib/api";
+import type { ImageHistoryPersistenceMode } from "@/lib/auth-types";
 
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
+  const imageHistoryPersistenceMode: ImageHistoryPersistenceMode =
+    config.image_history_persistence_mode === "server" ? "server" : "browser";
   return {
     ...config,
     "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
     refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
+    image_history_persistence_mode: imageHistoryPersistenceMode,
   };
 }
 
@@ -82,6 +86,7 @@ type SettingsStore = {
   setRefreshAccountIntervalMinute: (value: string) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
+  setImageHistoryPersistenceMode: (value: ImageHistoryPersistenceMode) => void;
 
   loadPools: (silent?: boolean) => Promise<void>;
   openAddDialog: () => void;
@@ -163,6 +168,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         refresh_account_interval_minute: Math.max(1, Number(config.refresh_account_interval_minute) || 1),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
+        image_history_persistence_mode:
+          config.image_history_persistence_mode === "server" ? "server" : "browser",
       });
       set({
         config: normalizeConfig(data.config),
@@ -226,6 +233,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           base_url: value,
+        },
+      };
+    });
+  },
+
+  setImageHistoryPersistenceMode: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          image_history_persistence_mode: value,
         },
       };
     });

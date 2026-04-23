@@ -108,6 +108,10 @@ class ConfigStore:
             or ""
         ).strip().rstrip("/")
 
+    @property
+    def image_history_persistence_mode(self) -> str:
+        return "server" if self.data.get("image_history_persistence_mode") == "server" else "browser"
+
     def get(self) -> dict[str, object]:
         return dict(self.data)
 

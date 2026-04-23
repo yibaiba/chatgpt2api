@@ -113,18 +113,22 @@ class AuthService:
     def _public_session(identity: dict) -> dict:
         if identity.get("role") == "admin":
             return {
+                "id": "admin",
                 "role": "admin",
                 "name": "管理员",
                 "image_quota": None,
                 "total_generated": None,
                 "last_used_at": None,
+                "image_history_persistence_mode": config.image_history_persistence_mode,
             }
         return {
+            "id": identity.get("id") or "unknown",
             "role": "user",
             "name": identity.get("name") or "普通用户",
             "image_quota": int(identity.get("image_quota") or 0),
             "total_generated": int(identity.get("total_generated") or 0),
             "last_used_at": identity.get("last_used_at"),
+            "image_history_persistence_mode": config.image_history_persistence_mode,
         }
 
     def authenticate(self, auth_key: str) -> dict | None:

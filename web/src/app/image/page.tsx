@@ -8,7 +8,7 @@ import { ImageResults, type ImageLightboxItem } from "@/app/image/components/ima
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { getCachedOrSyncAuthSession, syncStoredAuthSession } from "@/lib/auth-session";
-import type { UserRole } from "@/lib/auth-types";
+import type { AuthSession, ImageHistoryPersistenceMode, UserRole } from "@/lib/auth-types";
 import {
   editImage,
   fetchAccounts,
@@ -17,10 +17,15 @@ import {
   type ImageModel,
 } from "@/lib/api";
 import {
+  buildBrowserImageHistoryStorageKey,
+  clearBrowserImageConversations,
   clearImageConversations,
+  deleteBrowserImageConversation,
   deleteImageConversation,
   getImageConversationStats,
+  listBrowserImageConversations,
   listImageConversations,
+  saveBrowserImageConversation,
   saveImageConversation,
   type ImageConversation,
   type ImageConversationMode,
@@ -104,7 +109,10 @@ function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-async function recoverConversationHistory(items: ImageConversation[]) {
+async function recoverConversationHistory(
+  items: ImageConversation[],
+  persistConversation: (conversation: ImageConversation) => Promise<void>,
+) {
   const normalized = items.map((conversation) => {
     let changed = false;
 
@@ -158,7 +166,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
   const changedConversations = normalized.filter((conversation, index) => conversation !== items[index]);
   if (changedConversations.length > 0) {
-    await Promise.all(changedConversations.map((conversation) => saveImageConversation(conversation)));
+    await Promise.all(changedConversations.map((conversation) => persistConversation(conversation)));
   }
 
   return normalized;
@@ -182,7 +190,9 @@ export default function ImagePage() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
-  const [viewerRole, setViewerRole] = useState<UserRole | null>(null);
+  const [viewerSession, setViewerSession] = useState<AuthSession | null>(null);
+  const [historyPersistenceMode, setHistoryPersistenceMode] = useState<ImageHistoryPersistenceMode>("browser");
+  const [isHistoryModeReady, setIsHistoryModeReady] = useState(false);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -200,6 +210,15 @@ export default function ImagePage() {
       }, 0),
     [conversations],
   );
+  const viewerRole = viewerSession?.role ?? null;
+  const browserHistoryStorageKey = useMemo(
+    () =>
+      buildBrowserImageHistoryStorageKey(
+        viewerRole === "admin" ? "admin" : "user",
+        viewerSession?.id || (viewerRole === "admin" ? "admin" : "unknown"),
+      ),
+    [viewerRole, viewerSession?.id],
+  );
   const showConversationOwner = viewerRole === "admin";
 
   useEffect(() => {
@@ -207,12 +226,23 @@ export default function ImagePage() {
   }, [conversations]);
 
   useEffect(() => {
+    if (!isHistoryModeReady) {
+      return;
+    }
     let cancelled = false;
 
     const loadHistory = async () => {
+      setIsLoadingHistory(true);
       try {
-        const items = await listImageConversations();
-        const normalizedItems = await recoverConversationHistory(items);
+        const items =
+          historyPersistenceMode === "server"
+            ? await listImageConversations()
+            : await listBrowserImageConversations(browserHistoryStorageKey);
+        const normalizedItems = await recoverConversationHistory(items, (conversation) =>
+          historyPersistenceMode === "server"
+            ? saveImageConversation(conversation)
+            : saveBrowserImageConversation(browserHistoryStorageKey, conversation),
+        );
         if (cancelled) {
           return;
         }
@@ -240,17 +270,21 @@ export default function ImagePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [browserHistoryStorageKey, historyPersistenceMode, isHistoryModeReady]);
 
   const loadQuota = useCallback(async (forceSyncSession = false) => {
     try {
       const session = forceSyncSession ? await syncStoredAuthSession() : await getCachedOrSyncAuthSession();
       if (!session) {
-        setViewerRole(null);
+        setViewerSession(null);
+        setHistoryPersistenceMode("browser");
+        setIsHistoryModeReady(true);
         setAvailableQuota("—");
         return;
       }
-      setViewerRole(session.role);
+      setViewerSession(session);
+      setHistoryPersistenceMode(session.image_history_persistence_mode === "server" ? "server" : "browser");
+      setIsHistoryModeReady(true);
       if (session.role === "admin") {
         const data = await fetchAccounts();
         setAvailableQuota(formatAvailableQuota(data.items));
@@ -258,6 +292,9 @@ export default function ImagePage() {
       }
       setAvailableQuota(String(Math.max(0, session.image_quota ?? 0)));
     } catch {
+      setViewerSession(null);
+      setHistoryPersistenceMode("browser");
+      setIsHistoryModeReady(true);
       setAvailableQuota((prev) => (prev === "加载中..." ? "—" : prev));
     }
   }, []);
@@ -272,7 +309,7 @@ export default function ImagePage() {
       void loadQuota(true);
     };
 
-    void loadQuota();
+    void loadQuota(true);
     window.addEventListener("focus", handleFocus);
     return () => {
       window.removeEventListener("focus", handleFocus);
@@ -308,6 +345,17 @@ export default function ImagePage() {
     }
   }, [conversations, selectedConversationId]);
 
+  const saveConversationToCurrentStore = useCallback(
+    async (conversation: ImageConversation) => {
+      if (historyPersistenceMode === "server") {
+        await saveImageConversation(conversation);
+        return;
+      }
+      await saveBrowserImageConversation(browserHistoryStorageKey, conversation);
+    },
+    [browserHistoryStorageKey, historyPersistenceMode],
+  );
+
   const scheduleConversationPersistence = useCallback((conversationId: string) => {
     pendingPersistenceRef.current.add(conversationId);
 
@@ -323,7 +371,7 @@ export default function ImagePage() {
         if (!conversation) {
           continue;
         }
-        await saveImageConversation(conversation);
+        await saveConversationToCurrentStore(conversation);
       }
     })().finally(() => {
       persistenceQueueRef.current.delete(conversationId);
@@ -332,7 +380,7 @@ export default function ImagePage() {
 
     persistenceQueueRef.current.set(conversationId, task);
     return task;
-  }, []);
+  }, [saveConversationToCurrentStore]);
 
   const persistConversation = async (conversation: ImageConversation) => {
     const nextConversations = sortImageConversations([
@@ -396,11 +444,18 @@ export default function ImagePage() {
     }
 
     try {
-      await deleteImageConversation(id);
+      if (historyPersistenceMode === "server") {
+        await deleteImageConversation(id);
+      } else {
+        await deleteBrowserImageConversation(browserHistoryStorageKey, id);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除会话失败";
       toast.error(message);
-      const items = await listImageConversations();
+      const items =
+        historyPersistenceMode === "server"
+          ? await listImageConversations()
+          : await listBrowserImageConversations(browserHistoryStorageKey);
       conversationsRef.current = items;
       setConversations(items);
     }
@@ -408,7 +463,11 @@ export default function ImagePage() {
 
   const handleClearHistory = async () => {
     try {
-      await clearImageConversations();
+      if (historyPersistenceMode === "server") {
+        await clearImageConversations();
+      } else {
+        await clearBrowserImageConversations(browserHistoryStorageKey);
+      }
       conversationsRef.current = [];
       setConversations([]);
       setSelectedConversationId(null);
@@ -728,6 +787,8 @@ export default function ImagePage() {
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
     const draftOwnerRole: UserRole = viewerRole === "admin" ? "admin" : "user";
+    const draftOwnerId = viewerSession?.id || (draftOwnerRole === "admin" ? "admin" : "unknown");
+    const draftOwnerName = viewerSession?.name || (draftOwnerRole === "admin" ? "管理员" : "普通用户");
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
@@ -755,8 +816,8 @@ export default function ImagePage() {
           createdAt: now,
           updatedAt: now,
           ownerRole: draftOwnerRole,
-          ownerId: draftOwnerRole === "admin" ? "admin" : "unknown",
-          ownerName: draftOwnerRole === "admin" ? "管理员" : "普通用户",
+          ownerId: draftOwnerId,
+          ownerName: draftOwnerName,
           turns: [draftTurn],
         };
 

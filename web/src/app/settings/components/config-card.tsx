@@ -1,10 +1,17 @@
 "use client";
 
-import { KeyRound, Link2, LoaderCircle, Save } from "lucide-react";
+import { History, KeyRound, Link2, LoaderCircle, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { useSettingsStore } from "../store";
 
@@ -15,6 +22,7 @@ export function ConfigCard() {
   const setAuthKey = useSettingsStore((state) => state.setAuthKey);
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
+  const setImageHistoryPersistenceMode = useSettingsStore((state) => state.setImageHistoryPersistenceMode);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
 
   if (isLoadingConfig) {
@@ -64,6 +72,30 @@ export function ConfigCard() {
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">控制账号自动刷新频率，保存时会自动归一到最小 1 分钟。</p>
+          </div>
+
+          <div className="space-y-2 md:col-span-2">
+            <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+              <History className="size-3.5" />
+              图片历史存储方式
+            </label>
+            <Select
+              value={config?.image_history_persistence_mode === "server" ? "server" : "browser"}
+              onValueChange={(value) => {
+                setImageHistoryPersistenceMode(value === "server" ? "server" : "browser");
+              }}
+            >
+              <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
+                <SelectValue placeholder="选择图片历史存储方式" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="browser">仅浏览器历史</SelectItem>
+                <SelectItem value="server">从服务器读取并保存历史</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-stone-500">
+              浏览器模式只在当前设备保存图片历史，不会请求服务端历史接口。
+            </p>
           </div>
 
           <div className="space-y-2 md:col-span-2">

@@ -2,17 +2,23 @@
 
 ## Scope
 
-This project persists image conversation history on the backend instead of browser-local storage.
+This project supports two image-history persistence modes:
+
+- `browser`: only read/write history in the current browser
+- `server`: persist history on the backend and scope visibility by authenticated identity
 
 The feature covers:
 
 - the image workspace history list in `web/src/app/image/page.tsx`
 - the persistence service in `services/image_history_service.py`
 - the API surface in `services/api.py`
+- the global settings value in `config.json`
+- the authenticated session payload that exposes the effective mode to the image workspace
 
 ## Persistence Contract
 
-- Image history is stored in `data/image_history.json`
+- `browser` mode stores history only in browser-local storage and must not call image-history APIs
+- `server` mode stores history in `data/image_history.json`
 - The file contains a JSON array
 - Every item must include:
   - `id: string`
@@ -36,6 +42,7 @@ Rules:
 - invalid or incomplete items are dropped while loading
 - unknown conversation/image status values are normalized to the nearest allowed value
 - new records always derive ownership from the authenticated session, never from the frontend payload
+- the effective mode defaults to `browser` unless config explicitly sets `image_history_persistence_mode = "server"`
 
 ## Visibility Contract
 
@@ -43,6 +50,7 @@ Rules:
 - Normal-user sessions can list, delete, and clear only their own conversations
 - Normal users must never be able to overwrite or delete another user's conversation even if they guess the id
 - Admin UI should show owner information when viewing the shared history list
+- Browser-local mode should partition history by authenticated session identity so different users on the same device do not reuse one list
 
 ## API Contract
 

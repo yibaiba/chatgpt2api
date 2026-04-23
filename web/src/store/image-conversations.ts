@@ -50,6 +50,8 @@ export type ImageConversationStats = {
   running: number;
 };
 
+const BROWSER_IMAGE_HISTORY_STORAGE_PREFIX = "chatgpt2api_image_history";
+
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const normalizedMimeType = image.mime_type || "image/png";
   if (image.status === "loading" || image.status === "error" || image.status === "success") {
@@ -160,9 +162,54 @@ function sortImageConversations(conversations: ImageConversation[]): ImageConver
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+function readBrowserImageConversations(storageKey: string): ImageConversation[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const raw = window.localStorage.getItem(storageKey);
+  if (!raw) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("浏览器中的图片历史数据已损坏，请清空本地记录后重试");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("浏览器中的图片历史数据格式无效，请清空本地记录后重试");
+  }
+  return sortImageConversations(
+    parsed
+      .filter((item): item is ImageConversation & Record<string, unknown> => !!item && typeof item === "object")
+      .map(normalizeConversation),
+  );
+}
+
+function writeBrowserImageConversations(storageKey: string, conversations: ImageConversation[]): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const normalized = sortImageConversations(conversations.map(normalizeConversation));
+  if (normalized.length === 0) {
+    window.localStorage.removeItem(storageKey);
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify(normalized));
+}
+
+export function buildBrowserImageHistoryStorageKey(ownerRole: UserRole, ownerId: string): string {
+  const normalizedOwnerId = String(ownerId || "").trim() || (ownerRole === "admin" ? "admin" : "unknown");
+  return `${BROWSER_IMAGE_HISTORY_STORAGE_PREFIX}:${ownerRole}:${normalizedOwnerId}`;
+}
+
 export async function listImageConversations(): Promise<ImageConversation[]> {
   const data = await httpRequest<{ items: Array<ImageConversation & Record<string, unknown>> }>("/api/image-conversations");
   return sortImageConversations(data.items.map(normalizeConversation));
+}
+
+export async function listBrowserImageConversations(storageKey: string): Promise<ImageConversation[]> {
+  return readBrowserImageConversations(storageKey);
 }
 
 export async function saveImageConversations(conversations: ImageConversation[]): Promise<void> {
@@ -178,16 +225,38 @@ export async function saveImageConversation(conversation: ImageConversation): Pr
   });
 }
 
+export async function saveBrowserImageConversation(
+  storageKey: string,
+  conversation: ImageConversation,
+): Promise<void> {
+  const normalizedConversation = normalizeConversation(conversation);
+  const next = readBrowserImageConversations(storageKey).filter((item) => item.id !== normalizedConversation.id);
+  next.unshift(normalizedConversation);
+  writeBrowserImageConversations(storageKey, next);
+}
+
 export async function deleteImageConversation(id: string): Promise<void> {
   await httpRequest<{ ok: boolean }>(`/api/image-conversations/${id}`, {
     method: "DELETE",
   });
 }
 
+export async function deleteBrowserImageConversation(storageKey: string, id: string): Promise<void> {
+  const next = readBrowserImageConversations(storageKey).filter((conversation) => conversation.id !== id);
+  writeBrowserImageConversations(storageKey, next);
+}
+
 export async function clearImageConversations(): Promise<void> {
   await httpRequest<{ removed: number }>("/api/image-conversations", {
     method: "DELETE",
   });
+}
+
+export async function clearBrowserImageConversations(storageKey: string): Promise<void> {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(storageKey);
 }
 
 export function getImageConversationStats(conversation: ImageConversation | null): ImageConversationStats {

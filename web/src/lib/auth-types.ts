@@ -1,11 +1,14 @@
 export type UserRole = "admin" | "user";
+export type ImageHistoryPersistenceMode = "browser" | "server";
 
 export type AuthSession = {
+  id: string;
   role: UserRole;
   name: string;
   image_quota: number | null;
   total_generated: number | null;
   last_used_at: string | null;
+  image_history_persistence_mode: ImageHistoryPersistenceMode;
 };
 
 export type AuthUser = {

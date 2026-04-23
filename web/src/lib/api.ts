@@ -1,7 +1,15 @@
 import { httpRequest } from "@/lib/request";
-import type { AuthSession, AuthUser } from "@/lib/auth-types";
+import type {
+  AuthSession,
+  AuthUser,
+  ImageHistoryPersistenceMode,
+} from "@/lib/auth-types";
 
-export type { AuthSession, AuthUser } from "@/lib/auth-types";
+export type {
+  AuthSession,
+  AuthUser,
+  ImageHistoryPersistenceMode,
+} from "@/lib/auth-types";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
@@ -96,6 +104,7 @@ export type SettingsConfig = {
   base_url?: string;
   "auth-key"?: string;
   refresh_account_interval_minute?: number | string;
+  image_history_persistence_mode?: ImageHistoryPersistenceMode | string;
   [key: string]: unknown;
 };
 
