@@ -15,7 +15,10 @@ if str(ROOT_DIR) not in sys.path:
 
 
 def load_auth_key() -> str:
-    return json.loads((ROOT_DIR / "config.json").read_text(encoding="utf-8"))["auth-key"]
+    env_auth_key = str(__import__("os").environ.get("CHATGPT2API_AUTH_KEY") or "").strip()
+    if env_auth_key:
+        return env_auth_key
+    return json.loads((ROOT_DIR / "config.json").read_text(encoding="utf-8")).get("auth-key", "")
 
 
 def post_json(path: str, payload: dict) -> dict:

@@ -58,6 +58,54 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_hashes_and_hides_admin_auth_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+                raw = json.loads(config_file.read_text(encoding="utf-8"))
+
+                self.assertNotIn("auth-key", raw)
+                self.assertIn("auth-key-hash", raw)
+                self.assertTrue(store.verify_admin_auth_key("plain-secret"))
+                self.assertEqual(store.get()["auth-key"], "")
+                self.assertTrue(store.get()["auth_key_configured"])
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
+    def test_config_store_hashes_and_hides_admin_auth_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+                raw = json.loads(config_file.read_text(encoding="utf-8"))
+
+                self.assertNotIn("auth-key", raw)
+                self.assertIn("auth-key-hash", raw)
+                self.assertTrue(store.verify_admin_auth_key("plain-secret"))
+                self.assertEqual(store.get()["auth-key"], "")
+                self.assertTrue(store.get()["auth_key_configured"])
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
 
 if __name__ == "__main__":
     unittest.main()

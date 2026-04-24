@@ -20,23 +20,16 @@ class ImageBaseUrlApiTests(unittest.TestCase):
 
         self.assertEqual(api_module.resolve_image_base_url(request), "https://public.example.com")
 
-    def test_falls_back_to_request_host(self) -> None:
+    def test_returns_empty_without_configured_base_url(self) -> None:
         self.fake_config.base_url = ""
-        request = SimpleNamespace(
-            url=SimpleNamespace(scheme="http", netloc="127.0.0.1:8000"),
-            headers={"host": "internal.example:9000"},
-        )
+        self.assertEqual(api_module.resolve_image_base_url(), "")
 
-        self.assertEqual(api_module.resolve_image_base_url(request), "http://internal.example:9000")
-
-    def test_falls_back_to_request_netloc_when_host_missing(self) -> None:
+    def test_require_image_base_url_rejects_missing_config(self) -> None:
         self.fake_config.base_url = ""
-        request = SimpleNamespace(
-            url=SimpleNamespace(scheme="https", netloc="public.example.com"),
-            headers={},
-        )
-
-        self.assertEqual(api_module.resolve_image_base_url(request), "https://public.example.com")
+        with self.assertRaises(api_module.HTTPException) as captured:
+            api_module.require_image_base_url()
+        self.assertEqual(captured.exception.status_code, 400)
+        self.assertEqual(captured.exception.detail["error"], "base_url is required when response_format=url")
 
 
 if __name__ == "__main__":
