@@ -7,7 +7,13 @@ import uuid
 from fastapi import HTTPException
 
 
-IMAGE_MODELS = {"gpt-image-1", "gpt-image-2"}
+SUPPORTED_IMAGE_MODELS = (
+    "gpt-image-1",
+    "gpt-image-2",
+    "gpt-image-think",
+)
+IMAGE_MODELS = set(SUPPORTED_IMAGE_MODELS)
+TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 
 
 def anonymize_token(token: object) -> str:
@@ -29,6 +35,25 @@ def is_image_chat_request(body: dict[str, object]) -> bool:
     return False
 
 
+def _join_text_parts(parts: list[str]) -> str:
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _extract_text_block_text(item: dict[str, object]) -> str:
+    item_type = str(item.get("type") or "").strip()
+    if item_type not in TEXT_BLOCK_TYPES:
+        return ""
+    return str(item.get("text") or item.get(item_type) or "").strip()
+
+
+def strip_assistant_history_prefix(text: object, history_text: object) -> str:
+    normalized_text = str(text or "").strip()
+    normalized_history = str(history_text or "").strip()
+    if normalized_history and normalized_text.startswith(normalized_history):
+        return normalized_text[len(normalized_history):].lstrip()
+    return normalized_text
+
+
 def extract_response_prompt(input_value: object) -> str:
     if isinstance(input_value, str):
         return input_value.strip()
@@ -43,21 +68,32 @@ def extract_response_prompt(input_value: object) -> str:
         return ""
 
     prompt_parts: list[str] = []
+    assistant_history_parts: list[str] = []
     for item in input_value:
-        if isinstance(item, dict) and str(item.get("type") or "").strip() == "input_text":
-            text = str(item.get("text") or "").strip()
-            if text:
-                prompt_parts.append(text)
-            continue
         if not isinstance(item, dict):
             continue
+        if "type" in item and "content" not in item and "role" not in item:
+            text = _extract_text_block_text(item)
+            if text:
+                if str(item.get("type") or "").strip() == "output_text":
+                    assistant_history_parts.append(text)
+                else:
+                    prompt_parts.append(
+                        strip_assistant_history_prefix(text, _join_text_parts(assistant_history_parts))
+                    )
+            continue
         role = str(item.get("role") or "").strip().lower()
+        prompt = extract_prompt_from_message_content(item.get("content"))
+        if role == "assistant":
+            if prompt:
+                assistant_history_parts.append(prompt)
+            continue
         if role and role != "user":
             continue
-        prompt = extract_prompt_from_message_content(item.get("content"))
+        prompt = strip_assistant_history_prefix(prompt, _join_text_parts(assistant_history_parts))
         if prompt:
             prompt_parts.append(prompt)
-    return "\n".join(prompt_parts).strip()
+    return _join_text_parts(prompt_parts)
 
 
 def has_response_image_generation_tool(body: dict[str, object]) -> bool:
@@ -83,17 +119,10 @@ def extract_prompt_from_message_content(content: object) -> str:
     for item in content:
         if not isinstance(item, dict):
             continue
-        item_type = str(item.get("type") or "").strip()
-        if item_type == "text":
-            text = str(item.get("text") or "").strip()
-            if text:
-                parts.append(text)
-            continue
-        if item_type == "input_text":
-            text = str(item.get("text") or item.get("input_text") or "").strip()
-            if text:
-                parts.append(text)
-    return "\n".join(parts).strip()
+        text = _extract_text_block_text(item)
+        if text:
+            parts.append(text)
+    return _join_text_parts(parts)
 
 
 def extract_image_from_message_content(content: object) -> tuple[bytes, str] | None:
@@ -149,17 +178,23 @@ def extract_chat_prompt(body: dict[str, object]) -> str:
         return ""
 
     prompt_parts: list[str] = []
+    assistant_history_parts: list[str] = []
     for message in messages:
         if not isinstance(message, dict):
             continue
         role = str(message.get("role") or "").strip().lower()
+        prompt = extract_prompt_from_message_content(message.get("content"))
+        if role == "assistant":
+            if prompt:
+                assistant_history_parts.append(prompt)
+            continue
         if role != "user":
             continue
-        prompt = extract_prompt_from_message_content(message.get("content"))
+        prompt = strip_assistant_history_prefix(prompt, _join_text_parts(assistant_history_parts))
         if prompt:
             prompt_parts.append(prompt)
 
-    return "\n".join(prompt_parts).strip()
+    return _join_text_parts(prompt_parts)
 
 
 def parse_image_count(raw_value: object) -> int:

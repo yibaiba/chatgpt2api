@@ -28,7 +28,7 @@ from services.sub2api_service import (
 )
 from services.image_service import ImageGenerationError
 from services.system_settings import system_settings_service
-from services.utils import parse_image_count
+from services.utils import SUPPORTED_IMAGE_MODELS, parse_image_count
 from services.version import get_app_version
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -518,10 +518,7 @@ def create_app() -> FastAPI:
     async def list_models():
         return {
             "object": "list",
-            "data": [
-                build_model_item("gpt-image-1"),
-                build_model_item("gpt-image-2"),
-            ],
+            "data": [build_model_item(model) for model in SUPPORTED_IMAGE_MODELS],
         }
 
     @router.post("/auth/login")
