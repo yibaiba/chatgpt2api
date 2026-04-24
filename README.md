@@ -27,7 +27,8 @@ cp docker-compose-example.yml docker-compose.yml
 # 按需编辑 config.json 的密钥、`refresh_account_interval_minute` 和 `proxy_pool`
 # 如果要在设置页里保存代理池等配置，不要把 /app/config.json 挂成只读
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
-# 普通用户密钥与剩余额度可在「设置 -> 普通用户权限」中管理，数据会落到 data/auth_users.json
+# 首次启动后，config.json 中的管理员密钥会自动迁移为 `auth-key-hash`
+# 普通用户密钥与剩余额度可在「设置 -> 普通用户权限」中管理，数据会以哈希形式落到 data/auth_users.json
 docker compose up -d
 ```
 
@@ -70,6 +71,7 @@ docker compose up -d
 - `auth-key` 仍然是管理员密钥，拥有全部页面和接口权限
 - 普通用户密钥只能访问图片相关接口和画图页面，不能访问号池管理与设置
 - 普通用户图片额度按成功出图张数扣减，请求失败时会自动退回未实际消耗的额度
+- Web 登录成功后会改用 HttpOnly session cookie，前端不再持久化保存 bearer 密钥
 - 管理员可在设置页或 `config.json` 中配置 SOCKS5 代理池，支持 `socks5://`、`socks5h://`
 - 服务端历史模式使用 `data/image_history.json`；浏览器模式仅在当前设备本地保存，均支持回看、删除和清空
 
@@ -176,7 +178,8 @@ curl http://localhost:8000/v1/images/generations \
 
 - `size`、`quality`、`background` 都支持 `auto`
 - 超过 `2560x1440`（`3,686,400` 像素）的输出属于实验性范围
-- `response_format=url` 时，服务会把处理后的图片保存到本地 `data/images/` 并返回 `/images/...` 的可访问地址
+- `response_format=url` 时，需要先在设置页或 `config.json` 中显式配置 `base_url`；服务会把处理后的图片保存到本地 `data/images/` 并返回 `${base_url}/images/...` 地址
+- `POST /v1/images/edits` 现在限制最多 4 张参考图、单张 10MB、总上传 20MB，且仅接受常见图片 MIME 类型
 
 <br>
 </details>
