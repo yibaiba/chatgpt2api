@@ -16,6 +16,8 @@ import {
   type Account,
   type ImageModel,
 } from "@/lib/api";
+import { applyAspectRatioPrompt, type ImageAspectRatio, type ImageOutputQuality } from "@/lib/image-options";
+import { upscaleGeneratedImage } from "@/lib/image-upscale";
 import {
   buildBrowserImageHistoryStorageKey,
   clearBrowserImageConversations,
@@ -185,6 +187,8 @@ export default function ImagePage() {
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
   const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
+  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("1:1");
+  const [imageOutputQuality, setImageOutputQuality] = useState<ImageOutputQuality>("original");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -615,6 +619,7 @@ export default function ImagePage() {
           dataUrlToFile(image.dataUrl, image.name || `${queuedTurn.id}-${index + 1}.png`, image.type),
         );
         const pendingImages = queuedTurn.images.filter((image) => image.status === "loading");
+        const submittedPrompt = applyAspectRatioPrompt(queuedTurn.prompt, queuedTurn.aspectRatio);
 
         if (queuedTurn.mode === "edit" && referenceFiles.length === 0) {
           throw new Error("未找到可用于继续编辑的参考图");
@@ -646,18 +651,31 @@ export default function ImagePage() {
           try {
             const data =
               queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model)
-                : await generateImage(queuedTurn.prompt, queuedTurn.model);
+                ? await editImage(referenceFiles, submittedPrompt, queuedTurn.model)
+                : await generateImage(submittedPrompt, queuedTurn.model);
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
             }
 
+            let b64Json = first.b64_json;
+            let mimeType = first.mime_type || "image/png";
+            if (queuedTurn.outputQuality && queuedTurn.outputQuality !== "original") {
+              try {
+                const upscaled = await upscaleGeneratedImage(first.b64_json, first.mime_type, queuedTurn.outputQuality);
+                b64Json = upscaled.b64_json;
+                mimeType = upscaled.mime_type;
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "本地高清放大失败";
+                toast.warning(`${message}，已保留原图输出`);
+              }
+            }
+
             const nextImage: StoredImage = {
               id: pendingImage.id,
               status: "success",
-              b64_json: first.b64_json,
-              mime_type: first.mime_type || "image/png",
+              b64_json: b64Json,
+              mime_type: mimeType,
             };
 
             await updateConversation(
@@ -814,6 +832,8 @@ export default function ImagePage() {
       prompt,
       model: imageModel,
       mode: imageMode,
+      aspectRatio: imageAspectRatio,
+      outputQuality: imageOutputQuality,
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
       images: Array.from({ length: parsedCount }, (_, index) => ({
@@ -890,7 +910,9 @@ export default function ImagePage() {
             mode={imageMode}
             model={imageModel}
             prompt={imagePrompt}
+            aspectRatio={imageAspectRatio}
             imageCount={imageCount}
+            outputQuality={imageOutputQuality}
             availableQuota={availableQuota}
             activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
@@ -899,7 +921,9 @@ export default function ImagePage() {
             onModeChange={setImageMode}
             onModelChange={setImageModel}
             onPromptChange={setImagePrompt}
+            onAspectRatioChange={setImageAspectRatio}
             onImageCountChange={setImageCount}
+            onOutputQualityChange={setImageOutputQuality}
             onSubmit={handleSubmit}
             onPickReferenceImage={() => fileInputRef.current?.click()}
             onReferenceImageChange={handleReferenceImageChange}

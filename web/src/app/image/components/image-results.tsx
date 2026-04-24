@@ -3,6 +3,7 @@
 import { Clock3, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { getImageOutputQualityLabel } from "@/lib/image-options";
 import type { ImageConversation, ImageTurnStatus, StoredImage } from "@/store/image-conversations";
 
 export type ImageLightboxItem = {
@@ -136,6 +137,10 @@ export function ImageResults({
 
                 <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-stone-500">
                   <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
+                  {turn.aspectRatio ? <span className="rounded-full bg-stone-100 px-3 py-1">{turn.aspectRatio}</span> : null}
+                  {turn.outputQuality ? (
+                    <span className="rounded-full bg-stone-100 px-3 py-1">{getImageOutputQualityLabel(turn.outputQuality)}</span>
+                  ) : null}
                   <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                   {turn.status === "queued" ? (
                     <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待当前对话中的前序任务完成</span>

@@ -4,17 +4,21 @@ import { useMemo, useState, type ClipboardEvent, type DragEvent, type RefObject 
 
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { ImageModel } from "@/lib/api";
+import type { ImageAspectRatio, ImageOutputQuality } from "@/lib/image-options";
 import type { ImageConversationMode } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
+
+import { ImagePanelControls } from "./image-panel-controls";
 
 type ImageComposerProps = {
   mode: ImageConversationMode;
   model: ImageModel;
   prompt: string;
+  aspectRatio: ImageAspectRatio;
   imageCount: string;
+  outputQuality: ImageOutputQuality;
   availableQuota: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -23,7 +27,9 @@ type ImageComposerProps = {
   onModeChange: (value: ImageConversationMode) => void;
   onModelChange: (value: ImageModel) => void;
   onPromptChange: (value: string) => void;
+  onAspectRatioChange: (value: ImageAspectRatio) => void;
   onImageCountChange: (value: string) => void;
+  onOutputQualityChange: (value: ImageOutputQuality) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -35,7 +41,9 @@ export function ImageComposer({
   mode,
   model,
   prompt,
+  aspectRatio,
   imageCount,
+  outputQuality,
   availableQuota,
   activeTaskCount,
   referenceImages,
@@ -44,7 +52,9 @@ export function ImageComposer({
   onModeChange,
   onModelChange,
   onPromptChange,
+  onAspectRatioChange,
   onImageCountChange,
+  onOutputQualityChange,
   onSubmit,
   onPickReferenceImage,
   onReferenceImageChange,
@@ -195,6 +205,18 @@ export function ImageComposer({
               onOpenChange={setLightboxOpen}
               onIndexChange={setLightboxIndex}
             />
+            <ImagePanelControls
+              mode={mode}
+              model={model}
+              aspectRatio={aspectRatio}
+              imageCount={imageCount}
+              outputQuality={outputQuality}
+              onModeChange={onModeChange}
+              onModelChange={onModelChange}
+              onAspectRatioChange={onAspectRatioChange}
+              onImageCountChange={onImageCountChange}
+              onOutputQualityChange={onOutputQualityChange}
+            />
             <Textarea
               ref={textareaRef}
               value={prompt}
@@ -217,7 +239,7 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[148px] resize-none rounded-[32px] border-0 bg-transparent px-6 pt-6 pb-20 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0"
+              className="min-h-[152px] resize-none rounded-[32px] border-0 bg-transparent px-6 pt-5 pb-20 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0"
             />
 
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-4 pt-6 sm:px-6">
@@ -241,34 +263,6 @@ export function ImageComposer({
                       {activeTaskCount} 个任务处理中或排队中
                     </div>
                   )}
-                  <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-white p-1">
-                    <ModeButton active={model === "gpt-image-2"} onClick={() => onModelChange("gpt-image-2")}>
-                      标准
-                    </ModeButton>
-                    <ModeButton active={model === "gpt-image-think"} onClick={() => onModelChange("gpt-image-think")}>
-                      思考
-                    </ModeButton>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1">
-                    <span className="text-sm font-medium text-stone-700">张数</span>
-                    <Input
-                      type="number"
-                      min="1"
-                      max="10"
-                      step="1"
-                      value={imageCount}
-                      onChange={(event) => onImageCountChange(event.target.value)}
-                      className="h-8 w-[64px] border-0 bg-transparent px-0 text-center text-sm font-medium text-stone-700 shadow-none focus-visible:ring-0"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ModeButton active={mode === "generate"} onClick={() => onModeChange("generate")}>
-                      文生图
-                    </ModeButton>
-                    <ModeButton active={mode === "edit"} onClick={() => onModeChange("edit")}>
-                      图生图
-                    </ModeButton>
-                  </div>
                 </div>
 
                 <button
@@ -286,28 +280,5 @@ export function ImageComposer({
         </div>
       </div>
     </div>
-  );
-}
-
-function ModeButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-4 py-2 text-sm font-medium transition",
-        active ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200",
-      )}
-    >
-      {children}
-    </button>
   );
 }

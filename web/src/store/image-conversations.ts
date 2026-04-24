@@ -4,6 +4,12 @@ import localforage from "localforage";
 
 import type { UserRole } from "@/lib/auth-types";
 import type { ImageModel } from "@/lib/api";
+import {
+  isImageAspectRatio,
+  isImageOutputQuality,
+  type ImageAspectRatio,
+  type ImageOutputQuality,
+} from "@/lib/image-options";
 import { httpRequest } from "@/lib/request";
 
 export type ImageConversationMode = "generate" | "edit";
@@ -28,6 +34,8 @@ export type ImageTurn = {
   prompt: string;
   model: ImageModel;
   mode: ImageConversationMode;
+  aspectRatio?: ImageAspectRatio;
+  outputQuality?: ImageOutputQuality;
   referenceImages: StoredReferenceImage[];
   count: number;
   images: StoredImage[];
@@ -129,6 +137,8 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     prompt: String(turn.prompt || ""),
     model: (turn.model as ImageModel) || "gpt-image-2",
     mode: turn.mode === "edit" ? "edit" : "generate",
+    aspectRatio: isImageAspectRatio(turn.aspectRatio) ? turn.aspectRatio : undefined,
+    outputQuality: isImageOutputQuality(turn.outputQuality) ? turn.outputQuality : undefined,
     referenceImages: getLegacyReferenceImages(turn),
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     images: normalizedImages,
