@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Copy,
   Eye,
   EyeOff,
   Import,
@@ -414,13 +413,13 @@ export default function SettingsPage() {
   const openEditUserDialog = (user: AuthUser) => {
     setEditingUser(user);
     setUserFormName(user.name);
-    setUserFormAuthKey(user.auth_key);
+    setUserFormAuthKey("");
     setUserFormQuota(String(user.image_quota));
     setUserDialogOpen(true);
   };
 
   const handleSaveUser = async () => {
-    if (!userFormAuthKey.trim()) {
+    if (!editingUser && !userFormAuthKey.trim()) {
       toast.error("请输入普通用户密钥");
       return;
     }
@@ -428,11 +427,18 @@ export default function SettingsPage() {
     setIsSavingUser(true);
     try {
       if (editingUser) {
-        const data = await updateAuthUser(editingUser.id, {
+        const updates: {
+          name?: string;
+          auth_key?: string;
+          image_quota?: number;
+        } = {
           name: userFormName.trim(),
-          auth_key: userFormAuthKey.trim(),
           image_quota: Math.max(0, Number(userFormQuota || 0)),
-        });
+        };
+        if (userFormAuthKey.trim()) {
+          updates.auth_key = userFormAuthKey.trim();
+        }
+        const data = await updateAuthUser(editingUser.id, updates);
         setAuthUsers(data.items);
         toast.success("普通用户已更新");
       } else {
@@ -462,15 +468,6 @@ export default function SettingsPage() {
       toast.error(error instanceof Error ? error.message : "删除普通用户失败");
     } finally {
       setDeletingUserId(null);
-    }
-  };
-
-  const handleCopyUserKey = async (authKey: string) => {
-    try {
-      await navigator.clipboard.writeText(authKey);
-      toast.success("已复制普通用户密钥");
-    } catch {
-      toast.error("复制密钥失败");
     }
   };
 
@@ -698,17 +695,11 @@ export default function SettingsPage() {
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-stone-800">{user.name || "普通用户"}</div>
-                          <div className="truncate font-mono text-xs text-stone-400">{user.auth_key}</div>
+                          <div className="truncate text-xs text-stone-400">
+                            {user.auth_key_set ? "密钥已设置（仅创建/重置时可见）" : "尚未设置密钥"}
+                          </div>
                         </div>
                         <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
-                            onClick={() => void handleCopyUserKey(user.auth_key)}
-                            title="复制密钥"
-                          >
-                            <Copy className="size-4" />
-                          </button>
                           <button
                             type="button"
                             className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
@@ -1047,7 +1038,7 @@ export default function SettingsPage() {
               <Input
                 value={userFormAuthKey}
                 onChange={(event) => setUserFormAuthKey(event.target.value)}
-                placeholder="请输入普通用户登录密钥"
+                placeholder={editingUser ? "留空表示保持原密钥；输入新值表示重置密钥" : "请输入普通用户登录密钥"}
                 className="h-11 rounded-xl border-stone-200 bg-white font-mono"
               />
             </div>

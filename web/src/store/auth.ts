@@ -37,20 +37,13 @@ function normalizeStoredSession(value: unknown): AuthSession | null {
 }
 
 export async function getStoredAuthKey() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  const value = await authStorage.getItem<string>(AUTH_KEY_STORAGE_KEY);
-  return String(value || "").trim();
+  return "";
 }
 
 export async function setStoredAuthKey(authKey: string) {
-  const normalizedAuthKey = String(authKey || "").trim();
-  if (!normalizedAuthKey) {
+  if (!String(authKey || "").trim()) {
     await clearStoredAuthKey();
-    return;
   }
-  await authStorage.setItem(AUTH_KEY_STORAGE_KEY, normalizedAuthKey);
 }
 
 export async function getStoredAuthSession() {
@@ -77,8 +70,5 @@ export async function clearStoredAuthKey() {
   if (typeof window === "undefined") {
     return;
   }
-  await Promise.all([
-    authStorage.removeItem(AUTH_KEY_STORAGE_KEY),
-    authStorage.removeItem(AUTH_SESSION_STORAGE_KEY),
-  ]);
+  await authStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
 }

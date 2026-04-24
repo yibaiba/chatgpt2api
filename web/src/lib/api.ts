@@ -103,6 +103,7 @@ export type SettingsConfig = {
   proxy: string;
   base_url?: string;
   "auth-key"?: string;
+  auth_key_configured?: boolean;
   refresh_account_interval_minute?: number | string;
   refresh_account_batch_size?: number | string;
   image_history_persistence_mode?: ImageHistoryPersistenceMode | string;
@@ -136,6 +137,12 @@ export async function login(authKey: string) {
 
 export async function fetchSession() {
   return httpRequest<AuthSessionResponse>("/auth/session");
+}
+
+export async function logout() {
+  return httpRequest<{ ok: boolean }>("/auth/logout", {
+    method: "POST",
+  });
 }
 
 export async function fetchSettingsConfig() {

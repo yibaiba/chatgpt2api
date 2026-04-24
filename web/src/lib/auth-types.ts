@@ -16,6 +16,7 @@ export type AuthUser = {
   name: string;
   role: "user";
   auth_key: string;
+  auth_key_set: boolean;
   image_quota: number;
   total_generated: number;
   last_used_at: string | null;

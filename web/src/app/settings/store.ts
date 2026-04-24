@@ -43,6 +43,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
   return {
     ...config,
     "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
+    auth_key_configured: Boolean(config.auth_key_configured),
     refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
     refresh_account_batch_size: normalizeClampedInteger(config.refresh_account_batch_size, {
       fallback: 3,

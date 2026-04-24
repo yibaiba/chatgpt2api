@@ -55,10 +55,12 @@ export function ConfigCard() {
             <Input
               value={String(config?.["auth-key"] || "")}
               onChange={(event) => setAuthKey(event.target.value)}
-              placeholder="auth-key"
+              placeholder={config?.auth_key_configured ? "留空表示保持不变" : "auth-key"}
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
-            <p className="text-xs text-stone-500">用于管理员登录验证，也会影响前端登录页的校验入口。</p>
+            <p className="text-xs text-stone-500">
+              用于管理员登录验证。服务端不会再回显当前密钥，留空表示保持现有配置。
+            </p>
           </div>
 
           <div className="space-y-2">

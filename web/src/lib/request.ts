@@ -1,7 +1,7 @@
 import axios, {AxiosError, type AxiosRequestConfig} from "axios";
 
 import webConfig from "@/constants/common-env";
-import {clearStoredAuthKey, getStoredAuthKey} from "@/store/auth";
+import {clearStoredAuthKey} from "@/store/auth";
 
 type RequestConfig = AxiosRequestConfig & {
     redirectOnUnauthorized?: boolean;
@@ -13,14 +13,11 @@ const request = axios.create({
 
 request.interceptors.request.use(async (config) => {
     const nextConfig = {...config};
-    const authKey = await getStoredAuthKey();
     const headers = {...(nextConfig.headers || {})} as Record<string, string>;
-    if (authKey && !headers.Authorization) {
-        headers.Authorization = `Bearer ${authKey}`;
-    }
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-expect-error
     nextConfig.headers = headers;
+    nextConfig.withCredentials = true;
     return nextConfig;
 });
 

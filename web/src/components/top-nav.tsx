@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import webConfig from "@/constants/common-env";
 import { getCachedOrSyncAuthSession } from "@/lib/auth-session";
+import { logout } from "@/lib/api";
 import type { AuthSession } from "@/lib/auth-types";
 import { clearStoredAuthKey } from "@/store/auth";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ export function TopNav() {
   }, [pathname]);
 
   const handleLogout = async () => {
+    await logout();
     await clearStoredAuthKey();
     router.replace("/login");
   };

@@ -2,7 +2,7 @@
 
 import { fetchSession } from "@/lib/api";
 import type { AuthSession, UserRole } from "@/lib/auth-types";
-import { getStoredAuthKey, getStoredAuthSession, setStoredAuthSession } from "@/store/auth";
+import { getStoredAuthSession, setStoredAuthSession } from "@/store/auth";
 
 export function getDefaultRoute(role?: UserRole | null) {
   return role === "admin" ? "/accounts" : "/image";
@@ -35,9 +35,9 @@ export async function getCachedOrSyncAuthSession() {
   if (storedSession) {
     return storedSession;
   }
-  const authKey = await getStoredAuthKey();
-  if (!authKey) {
+  try {
+    return await syncStoredAuthSession();
+  } catch {
     return null;
   }
-  return syncStoredAuthSession();
 }

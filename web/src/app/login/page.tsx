@@ -10,7 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { getDefaultRoute } from "@/lib/auth-session";
 import { login } from "@/lib/api";
-import { setStoredAuthKey, setStoredAuthSession } from "@/store/auth";
+import { setStoredAuthSession } from "@/store/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,7 +27,6 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       const result = await login(normalizedAuthKey);
-      await setStoredAuthKey(normalizedAuthKey);
       await setStoredAuthSession(result.session);
       router.replace(getDefaultRoute(result.session.role));
     } catch (error) {
