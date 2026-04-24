@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import random
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,10 +21,19 @@ from services.system_settings import system_settings_service
 
 BASE_URL = "https://chatgpt.com"
 USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
+    "Chrome/147.0.0.0 Safari/537.36"
 )
+OAI_CLIENT_BUILD_NUMBER = "6128297"
+OAI_CLIENT_VERSION = "prod-81e0c5cdf6140e8c5db714d613337f4aeab94029"
+
+# 动态提取的 build info，随首页 HTML 刷新，默认使用上方硬编码值兜底
+_cached_build_number: str = OAI_CLIENT_BUILD_NUMBER
+_cached_client_version: str = OAI_CLIENT_VERSION
+_build_info_cache_time: float = 0.0
+_BUILD_INFO_TTL = 900  # 15 分钟
+
 DEFAULT_MODEL = "auto"
 MAX_POW_ATTEMPTS = 500000
 
@@ -99,13 +109,19 @@ def _new_session(access_token: str) -> tuple[Session, dict]:
     session.headers.update(
         {
             "user-agent": fp.get("user-agent") or USER_AGENT,
-            "accept-language": "en-US,en;q=0.9",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7",
             "origin": BASE_URL,
             "referer": BASE_URL + "/",
             "accept": "*/*",
-            "sec-ch-ua": fp.get("sec-ch-ua") or '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            "dnt": "1",
+            "sec-ch-ua": fp.get("sec-ch-ua") or '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
             "sec-ch-ua-mobile": fp.get("sec-ch-ua-mobile") or "?0",
-            "sec-ch-ua-platform": fp.get("sec-ch-ua-platform") or '"Windows"',
+            "sec-ch-ua-platform": fp.get("sec-ch-ua-platform") or '"macOS"',
+            "sec-ch-ua-arch": fp.get("sec-ch-ua-arch") or '"x86"',
+            "sec-ch-ua-bitness": fp.get("sec-ch-ua-bitness") or '"64"',
+            "sec-ch-ua-full-version": fp.get("sec-ch-ua-full-version") or '"147.0.0.0"',
+            "sec-ch-ua-model": fp.get("sec-ch-ua-model") or '""',
+            "sec-ch-ua-platform-version": fp.get("sec-ch-ua-platform-version") or '"12.7.0"',
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",
@@ -170,12 +186,46 @@ def _generate_proof_token(seed: str, difficulty: str, user_agent: str, proof_con
     return answer
 
 
+def _update_build_info_from_html(html: str) -> None:
+    """从首页 HTML 动态提取 oai-client-build-number 和 oai-client-version，带 TTL 缓存"""
+    global _cached_build_number, _cached_client_version, _build_info_cache_time
+    if time.time() - _build_info_cache_time < _BUILD_INFO_TTL:
+        return
+    build_number = None
+    client_version = None
+    for pattern in (
+        r'"buildNumber"\s*:\s*"(\d+)"',
+        r'"build_number"\s*:\s*"(\d+)"',
+        r'"oai-client-build-number"\s*:\s*"(\d+)"',
+        r'buildNumber[\s":\x27,]+?(\d{6,})',
+    ):
+        m = re.search(pattern, html)
+        if m:
+            build_number = m.group(1)
+            break
+    for pattern in (
+        r'"clientVersion"\s*:\s*"(prod-[0-9a-f]{30,})"',
+        r'"client_version"\s*:\s*"(prod-[0-9a-f]{30,})"',
+        r'"oai-client-version"\s*:\s*"(prod-[0-9a-f]{30,})"',
+    ):
+        m = re.search(pattern, html)
+        if m:
+            client_version = m.group(1)
+            break
+    if build_number:
+        _cached_build_number = build_number
+    if client_version:
+        _cached_client_version = client_version
+    _build_info_cache_time = time.time()
+
+
 def _bootstrap(session: Session, fp: dict) -> str:
     response = _retry(lambda: session.get(BASE_URL + "/", timeout=30))
     try:
         proof_of_work.get_data_build_from_html(response.text)
     except Exception:
         pass
+    _update_build_info_from_html(response.text)
     device_id = response.cookies.get("oai-did")
     if device_id:
         return device_id
@@ -184,6 +234,33 @@ def _bootstrap(session: Session, fp: dict) -> str:
         if name == "oai-did":
             return cookie.value
     return str(fp.get("oai-device-id") or uuid.uuid4())
+
+
+def _conversation_init(session: Session, access_token: str, device_id: str) -> str:
+    try:
+        response = _retry(
+            lambda: session.post(
+                BASE_URL + "/backend-api/conversation/init",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "oai-device-id": device_id,
+                    "content-type": "application/json",
+                    "oai-client-build-number": _cached_build_number,
+                    "oai-client-version": _cached_client_version,
+                },
+                json={},
+                timeout=20,
+            ),
+            retries=2,
+        )
+        if response.ok:
+            payload = response.json() or {}
+            cid = str(payload.get("conversation_id") or payload.get("id") or "")
+            if cid:
+                return cid
+    except Exception:
+        pass
+    return str(uuid.uuid4())
 
 
 def _chat_requirements(session: Session, access_token: str, device_id: str) -> tuple[str, Optional[dict]]:
@@ -205,6 +282,72 @@ def _chat_requirements(session: Session, access_token: str, device_id: str) -> t
         raise ImageGenerationError(response.text[:400] or f"chat-requirements failed: {response.status_code}")
     payload = response.json()
     return payload["token"], payload.get("proofofwork") or {}
+
+
+def _conversation_prepare(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    conversation_id: str,
+    parent_message_id: str,
+    model: str,
+    conduit_token: Optional[str] = None,
+    client_prepare_state: str = "none",
+) -> Optional[str]:
+    """Call f/conversation/prepare to obtain a conduit_token for routing.
+
+    Returns the conduit_token string, or None on failure.
+    """
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "*/*",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "x-openai-target-path": "/backend-api/f/conversation/prepare",
+        "x-openai-target-route": "/backend-api/f/conversation/prepare",
+    }
+    if conduit_token:
+        headers["x-conduit-token"] = conduit_token
+    body = {
+        "action": "next",
+        "fork_from_shared_post": False,
+        "conversation_id": conversation_id,
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "client_prepare_state": client_prepare_state,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "system_hints": ["reason"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_contextual_info": {"app_name": "chatgpt.com"},
+    }
+    try:
+        response = _retry(
+            lambda: session.post(
+                BASE_URL + "/backend-api/f/conversation/prepare",
+                headers=headers,
+                json=body,
+                timeout=20,
+            ),
+            retries=2,
+        )
+        if response.ok:
+            payload = response.json() or {}
+            return payload.get("conduit_token") or None
+    except Exception:
+        pass
+    return None
 
 
 def is_token_invalid_error(message: str) -> bool:
@@ -294,7 +437,10 @@ def _send_edit_conversation(
     prompt: str,
     model: str,
     images: list[EditInputImage],
+    conversation_id: str = "",
 ):
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
     headers = {
         "Authorization": f"Bearer {access_token}",
         "accept": "text/event-stream",
@@ -302,10 +448,12 @@ def _send_edit_conversation(
         "content-type": "application/json",
         "oai-device-id": device_id,
         "oai-language": "zh-CN",
-        "oai-client-build-number": "5955942",
-        "oai-client-version": "prod-be885abbfcfe7b1f511e88b3003d9ee44757fbad",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
         "origin": BASE_URL,
         "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
         "openai-sentinel-chat-requirements-token": chat_token,
     }
     if proof_token:
@@ -333,52 +481,56 @@ def _send_edit_conversation(
         }
         for image in images
     ]
+    body: dict = {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": {
+                    "content_type": "multimodal_text",
+                    "parts": [*image_parts, prompt],
+                },
+                "metadata": {
+                    "attachments": attachments,
+                    "selected_github_repos": [],
+                    "selected_all_github_repos": False,
+                    "system_hints": ["picture_v2"],
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                },
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "system_hints": ["picture_v2"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "success",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+    if conversation_id:
+        body["conversation_id"] = conversation_id
     response = _retry(
         lambda: session.post(
             BASE_URL + "/backend-api/conversation",
             headers=headers,
-            json={
-                "action": "next",
-                "messages": [
-                    {
-                        "id": str(uuid.uuid4()),
-                        "author": {"role": "user"},
-                        "content": {
-                            "content_type": "multimodal_text",
-                            "parts": [*image_parts, prompt],
-                        },
-                        "metadata": {
-                            "attachments": attachments,
-                        },
-                    }
-                ],
-                "parent_message_id": parent_message_id,
-                "model": model,
-                "history_and_training_disabled": False,
-                "timezone_offset_min": -480,
-                "timezone": "America/Los_Angeles",
-                "conversation_mode": {"kind": "primary_assistant"},
-                "force_paragen": False,
-                "force_paragen_model_slug": "",
-                "force_rate_limit": False,
-                "force_use_sse": True,
-                "paragen_cot_summary_display_override": "allow",
-                "reset_rate_limits": False,
-                "suggestions": [],
-                "supported_encodings": [],
-                "system_hints": ["picture_v2"],
-                "variant_purpose": "comparison_implicit",
-                "websocket_request_id": str(uuid.uuid4()),
-                "client_contextual_info": {
-                    "is_dark_mode": False,
-                    "time_since_loaded": random.randint(50, 500),
-                    "page_height": random.randint(500, 1000),
-                    "page_width": random.randint(1000, 2000),
-                    "pixel_ratio": 1.2,
-                    "screen_height": random.randint(800, 1200),
-                    "screen_width": random.randint(1200, 2200),
-                },
-            },
+            json=body,
             stream=True,
             timeout=180,
         ),
@@ -398,7 +550,10 @@ def _send_conversation(
     parent_message_id: str,
     prompt: str,
     model: str,
+    conversation_id: str = "",
 ):
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
     headers = {
         "Authorization": f"Bearer {access_token}",
         "accept": "text/event-stream",
@@ -406,59 +561,62 @@ def _send_conversation(
         "content-type": "application/json",
         "oai-device-id": device_id,
         "oai-language": "zh-CN",
-        "oai-client-build-number": "5955942",
-        "oai-client-version": "prod-be885abbfcfe7b1f511e88b3003d9ee44757fbad",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
         "origin": BASE_URL,
         "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
         "openai-sentinel-chat-requirements-token": chat_token,
     }
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
+    body: dict = {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": {"content_type": "text", "parts": [prompt]},
+                "metadata": {
+                    "selected_github_repos": [],
+                    "selected_all_github_repos": False,
+                    "system_hints": ["picture_v2"],
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                },
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "system_hints": ["picture_v2"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "success",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+    if conversation_id:
+        body["conversation_id"] = conversation_id
     response = _retry(
         lambda: session.post(
             BASE_URL + "/backend-api/conversation",
             headers=headers,
-            json={
-                "action": "next",
-                "messages": [
-                    {
-                        "id": str(uuid.uuid4()),
-                        "author": {"role": "user"},
-                        "content": {"content_type": "text", "parts": [prompt]},
-                        "metadata": {
-                            "attachments": [],
-                        },
-                    }
-                ],
-                "parent_message_id": parent_message_id,
-                "model": model,
-                "history_and_training_disabled": False,
-                "timezone_offset_min": -480,
-                "timezone": "America/Los_Angeles",
-                "conversation_mode": {"kind": "primary_assistant"},
-                "conversation_origin": None,
-                "force_paragen": False,
-                "force_paragen_model_slug": "",
-                "force_rate_limit": False,
-                "force_use_sse": True,
-                "paragen_cot_summary_display_override": "allow",
-                "paragen_stream_type_override": None,
-                "reset_rate_limits": False,
-                "suggestions": [],
-                "supported_encodings": [],
-                "system_hints": ["picture_v2"],
-                "variant_purpose": "comparison_implicit",
-                "websocket_request_id": str(uuid.uuid4()),
-                "client_contextual_info": {
-                    "is_dark_mode": False,
-                    "time_since_loaded": random.randint(50, 500),
-                    "page_height": random.randint(500, 1000),
-                    "page_width": random.randint(1000, 2000),
-                    "pixel_ratio": 1.2,
-                    "screen_height": random.randint(800, 1200),
-                    "screen_width": random.randint(1200, 2200),
-                },
-            },
+            json=body,
             stream=True,
             timeout=180,
         ),
@@ -469,10 +627,99 @@ def _send_conversation(
     return response
 
 
+def _send_thinking_conversation(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token: Optional[str],
+    parent_message_id: str,
+    prompt: str,
+    model: str,
+    conduit_token: str,
+    conversation_id: str = "",
+):
+    """Send a conversation request via f/conversation for thinking (reason) mode."""
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "openai-sentinel-chat-requirements-token": chat_token,
+        "x-conduit-token": conduit_token,
+    }
+    if proof_token:
+        headers["openai-sentinel-proof-token"] = proof_token
+    body: dict = {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": {"content_type": "text", "parts": [prompt]},
+                "metadata": {
+                    "selected_github_repos": [],
+                    "selected_all_github_repos": False,
+                    "system_hints": ["reason"],
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                },
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "system_hints": ["reason"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "sent",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+    # f/conversation 首次请求不传 conversation_id，让服务端自己创建
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/f/conversation",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=180,
+        ),
+        retries=2,
+    )
+    if not response.ok:
+        raise ImageGenerationError(response.text[:400] or f"f/conversation failed: {response.status_code}")
+    return response
+
+
 def _parse_sse(response) -> dict:
     file_ids: list[str] = []
     conversation_id = ""
     latest_text = ""
+    resume_conduit_token = ""
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -509,7 +756,12 @@ def _parse_sse(response) -> dict:
         if not isinstance(obj, dict):
             continue
         conversation_id = str(obj.get("conversation_id") or conversation_id)
-        if obj.get("type") in {"resume_conversation_token", "message_marker", "message_stream_complete"}:
+        if obj.get("type") == "resume_conversation_token":
+            conversation_id = str(obj.get("conversation_id") or conversation_id)
+            token_val = obj.get("token")
+            if token_val and isinstance(token_val, str):
+                resume_conduit_token = token_val
+        elif obj.get("type") in {"message_marker", "message_stream_complete"}:
             conversation_id = str(obj.get("conversation_id") or conversation_id)
         data = obj.get("v")
         if isinstance(data, dict):
@@ -522,7 +774,12 @@ def _parse_sse(response) -> dict:
                 part_text = str(parts[0] or "").strip()
                 if part_text:
                     latest_text = part_text
-    return {"conversation_id": conversation_id, "file_ids": file_ids, "text": latest_text}
+    return {
+        "conversation_id": conversation_id,
+        "file_ids": file_ids,
+        "text": latest_text,
+        "resume_conduit_token": resume_conduit_token,
+    }
 
 
 def _extract_image_ids(mapping: dict) -> list[str]:
@@ -638,16 +895,62 @@ def _download_and_save_image(session: Session, download_url: str, base_url: str 
     return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
 
 
-def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
+def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[str, bool]:
+    """返回 (upstream_model, use_thinking_mode)"""
     requested_model = str(requested_model or "").strip() or "gpt-image-1"
     account = account_service.get_account(access_token) or {}
     is_free_account = str(account.get("type") or "Free").strip() == "Free"
 
+    if requested_model == "gpt-image-think":
+        # 带思考的图片生成：使用 gpt-5-3（付费账户）或 auto（免费）
+        upstream = "auto" if is_free_account else "gpt-5-3"
+        return upstream, True
     if requested_model == "gpt-image-1":
-        return "auto"
+        return "auto", False
     if requested_model == "gpt-image-2":
-        return "auto" if is_free_account else "gpt-5-3"
-    return str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        return ("auto" if is_free_account else "gpt-5-3"), False
+    return (str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL), False
+
+
+def _run_thinking_mode(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token,
+    parent_message_id: str,
+    prompt: str,
+    upstream_model: str,
+    conversation_id: str,
+) -> dict:
+    """执行 thinking 模式图片生成（f/conversation + conduit）；失败时抛出异常，由调用方回退。"""
+    # 第一步：获取初始 conduit_token
+    conduit_token = _conversation_prepare(
+        session,
+        access_token,
+        device_id,
+        conversation_id=conversation_id,
+        parent_message_id=parent_message_id,
+        model=upstream_model,
+        conduit_token=None,
+        client_prepare_state="none",
+    )
+    if not conduit_token:
+        raise ImageGenerationError("thinking mode: f/conversation/prepare returned no conduit_token")
+
+    response = _send_thinking_conversation(
+        session,
+        access_token,
+        device_id,
+        chat_token,
+        proof_token,
+        parent_message_id,
+        prompt,
+        upstream_model,
+        conduit_token=conduit_token,
+        # f/conversation 首次不传 conversation_id，服务端自己创建
+    )
+    return _parse_sse(response)
 
 
 def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL, response_format: str = "b64_json", base_url: str = None) -> dict:
@@ -660,12 +963,13 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
 
     session, fp = _new_session(access_token)
     try:
-        upstream_model = _resolve_upstream_model(access_token, model)
+        upstream_model, use_thinking = _resolve_upstream_model(access_token, model)
         print(
             f"[image-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model}"
+            f"requested_model={model} upstream_model={upstream_model} thinking={use_thinking}"
         )
         device_id = _bootstrap(session, fp)
+        conversation_id = _conversation_init(session, access_token, device_id)
         chat_token, pow_info = _chat_requirements(session, access_token, device_id)
         proof_token = None
         if pow_info.get("required"):
@@ -676,17 +980,40 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
                 proof_config=_pow_config(USER_AGENT),
             )
         parent_message_id = str(uuid.uuid4())
-        response = _send_conversation(
-            session,
-            access_token,
-            device_id,
-            chat_token,
-            proof_token,
-            parent_message_id,
-            prompt,
-            upstream_model,
-        )
-        parsed = _parse_sse(response)
+
+        parsed = None
+        if use_thinking:
+            try:
+                parsed = _run_thinking_mode(
+                    session,
+                    access_token,
+                    device_id,
+                    chat_token,
+                    proof_token,
+                    parent_message_id,
+                    prompt,
+                    upstream_model,
+                    conversation_id,
+                )
+                print(f"[image-upstream] thinking mode OK, conduit resume token={'yes' if parsed.get('resume_conduit_token') else 'no'}")
+            except Exception as exc:
+                print(f"[image-upstream] thinking mode failed ({exc}), fallback to regular mode")
+                parsed = None
+
+        if parsed is None:
+            response = _send_conversation(
+                session,
+                access_token,
+                device_id,
+                chat_token,
+                proof_token,
+                parent_message_id,
+                prompt,
+                upstream_model,
+                conversation_id=conversation_id,
+            )
+            parsed = _parse_sse(response)
+
         actual_conversation_id = parsed.get("conversation_id") or ""
         file_ids = parsed.get("file_ids") or []
         response_text = str(parsed.get("text") or "").strip()
@@ -773,7 +1100,7 @@ def edit_image_result(
 
     session, fp = _new_session(access_token)
     try:
-        upstream_model = _resolve_upstream_model(access_token, model)
+        upstream_model, _ = _resolve_upstream_model(access_token, model)
         print(
             f"[image-edit-upstream] start token={access_token[:12]}... "
             f"requested_model={model} upstream_model={upstream_model} images={len(images)}"
@@ -808,6 +1135,7 @@ def edit_image_result(
                 user_agent=USER_AGENT,
                 proof_config=_pow_config(USER_AGENT),
             )
+        conversation_id = _conversation_init(session, access_token, device_id)
         parent_message_id = str(uuid.uuid4())
         response = _send_edit_conversation(
             session,
@@ -819,6 +1147,7 @@ def edit_image_result(
             prompt,
             upstream_model,
             uploaded_images,
+            conversation_id=conversation_id,
         )
         parsed = _parse_sse(response)
         actual_conversation_id = parsed.get("conversation_id") or ""
