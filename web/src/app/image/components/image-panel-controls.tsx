@@ -55,7 +55,7 @@ export function ImagePanelControls({
         <div className="flex flex-wrap items-start gap-3">
           <CompactField label="图片模型" className="min-w-[260px] flex-1">
             <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
-              {IMAGE_MODEL_OPTIONS.map((option) => (
+              {IMAGE_MODEL_OPTIONS.filter((option) => option.value !== "gpt-image-1").map((option) => (
                 <CompactToggle
                   key={option.value}
                   active={model === option.value}
@@ -183,9 +183,6 @@ function CompactToggle({
 function getModelShortLabel(model: ImageModel) {
   if (model === "gpt-image-think") {
     return "思考";
-  }
-  if (model === "gpt-image-1") {
-    return "兼容";
   }
   return "标准";
 }
