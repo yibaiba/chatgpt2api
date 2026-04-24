@@ -184,6 +184,7 @@ export default function ImagePage() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
+  const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -811,7 +812,7 @@ export default function ImagePage() {
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: DEFAULT_IMAGE_MODEL,
+      model: imageModel,
       mode: imageMode,
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
@@ -887,6 +888,7 @@ export default function ImagePage() {
 
           <ImageComposer
             mode={imageMode}
+            model={imageModel}
             prompt={imagePrompt}
             imageCount={imageCount}
             availableQuota={availableQuota}
@@ -895,6 +897,7 @@ export default function ImagePage() {
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
             onModeChange={setImageMode}
+            onModelChange={setImageModel}
             onPromptChange={setImagePrompt}
             onImageCountChange={setImageCount}
             onSubmit={handleSubmit}

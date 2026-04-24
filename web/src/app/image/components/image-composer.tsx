@@ -6,11 +6,13 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import type { ImageModel } from "@/lib/api";
 import type { ImageConversationMode } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 
 type ImageComposerProps = {
   mode: ImageConversationMode;
+  model: ImageModel;
   prompt: string;
   imageCount: string;
   availableQuota: string;
@@ -19,6 +21,7 @@ type ImageComposerProps = {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onModeChange: (value: ImageConversationMode) => void;
+  onModelChange: (value: ImageModel) => void;
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
@@ -30,6 +33,7 @@ type ImageComposerProps = {
 
 export function ImageComposer({
   mode,
+  model,
   prompt,
   imageCount,
   availableQuota,
@@ -38,6 +42,7 @@ export function ImageComposer({
   textareaRef,
   fileInputRef,
   onModeChange,
+  onModelChange,
   onPromptChange,
   onImageCountChange,
   onSubmit,
@@ -236,8 +241,13 @@ export function ImageComposer({
                       {activeTaskCount} 个任务处理中或排队中
                     </div>
                   )}
-                  <div className="rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-600">
-                    模型 gpt-image-2
+                  <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-white p-1">
+                    <ModeButton active={model === "gpt-image-2"} onClick={() => onModelChange("gpt-image-2")}>
+                      标准
+                    </ModeButton>
+                    <ModeButton active={model === "gpt-image-think"} onClick={() => onModelChange("gpt-image-think")}>
+                      思考
+                    </ModeButton>
                   </div>
                   <div className="flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1">
                     <span className="text-sm font-medium text-stone-700">张数</span>

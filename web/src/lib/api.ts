@@ -13,7 +13,7 @@ export type {
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
-export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2";
+export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2" | "gpt-image-think";
 export type GeneratedImageResponseItem = {
   b64_json?: string;
   url?: string;
