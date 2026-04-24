@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from services.auth_security import hash_auth_secret, verify_auth_secret
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 CONFIG_FILE = BASE_DIR / "config.json"
@@ -40,7 +42,7 @@ def _load_json_object(path: Path, *, name: str) -> dict[str, object]:
 def _load_settings() -> LoadedSettings:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     raw_config = _read_json_object(CONFIG_FILE, name="config.json")
-    auth_key = str(os.getenv("CHATGPT2API_AUTH_KEY") or raw_config.get("auth-key") or "").strip()
+    auth_key = str(os.getenv("CHATGPT2API_AUTH_KEY") or raw_config.get("auth-key") or raw_config.get("auth-key-hash") or "").strip()
     if not auth_key:
         raise ValueError(
             "❌ auth-key 未设置！\n"
@@ -63,7 +65,8 @@ class ConfigStore:
         self.path = path
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
-        if not self.auth_key:
+        self._migrate_admin_auth_key_storage()
+        if not self.auth_key_configured:
             raise ValueError(
                 "❌ auth-key 未设置！\n"
                 "请按以下任意一种方式解决：\n"
@@ -78,6 +81,14 @@ class ConfigStore:
 
     def _save(self) -> None:
         self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _migrate_admin_auth_key_storage(self) -> None:
+        raw_auth_key = str(self.data.get("auth-key") or "").strip()
+        if not raw_auth_key:
+            return
+        self.data["auth-key-hash"] = hash_auth_secret(raw_auth_key)
+        self.data.pop("auth-key", None)
+        self._save()
 
     @staticmethod
     def _normalize_clamped_int(
@@ -98,7 +109,32 @@ class ConfigStore:
 
     @property
     def auth_key(self) -> str:
-        return str(os.getenv("CHATGPT2API_AUTH_KEY") or self.data.get("auth-key") or "").strip()
+        return str(os.getenv("CHATGPT2API_AUTH_KEY") or "").strip()
+
+    @property
+    def auth_key_configured(self) -> bool:
+        return bool(self.auth_key or str(self.data.get("auth-key-hash") or self.data.get("auth-key") or "").strip())
+
+    @property
+    def auth_key_hash(self) -> str:
+        env_auth_key = self.auth_key
+        if env_auth_key:
+            return hash_auth_secret(env_auth_key)
+        return str(self.data.get("auth-key-hash") or "").strip()
+
+    @property
+    def session_signing_secret(self) -> str:
+        return str(os.getenv("CHATGPT2API_SESSION_SECRET") or self.auth_key_hash or "").strip()
+
+    def verify_admin_auth_key(self, auth_key: str) -> bool:
+        candidate = str(auth_key or "").strip()
+        if not candidate:
+            return False
+        env_auth_key = self.auth_key
+        if env_auth_key:
+            return candidate == env_auth_key
+        stored_hash = str(self.data.get("auth-key-hash") or self.data.get("auth-key") or "").strip()
+        return verify_auth_secret(candidate, stored_hash)
 
     @property
     def accounts_file(self) -> Path:
@@ -141,13 +177,31 @@ class ConfigStore:
         return "server" if self.data.get("image_history_persistence_mode") == "server" else "browser"
 
     def get(self) -> dict[str, object]:
-        return dict(self.data)
+        public_data = dict(self.data)
+        public_data.pop("auth-key", None)
+        public_data.pop("auth-key-hash", None)
+        public_data["auth-key"] = ""
+        public_data["auth_key_configured"] = self.auth_key_configured
+        return public_data
 
     def get_proxy_settings(self) -> str:
         return str(self.data.get("proxy") or "").strip()
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
-        next_data = dict(data or {})
+        incoming = dict(data or {})
+        next_data = dict(self.data)
+        next_data.update(incoming)
+        next_data.pop("auth_key_configured", None)
+        next_data.pop("auth-key", None)
+        next_data.pop("auth-key-hash", None)
+
+        if "auth-key" in incoming:
+            next_auth_key = str(incoming.get("auth-key") or "").strip()
+            if next_auth_key:
+                next_data["auth-key-hash"] = hash_auth_secret(next_auth_key)
+        elif str(self.data.get("auth-key-hash") or "").strip():
+            next_data["auth-key-hash"] = str(self.data.get("auth-key-hash") or "").strip()
+
         next_data["refresh_account_interval_minute"] = self._normalize_clamped_int(
             next_data.get("refresh_account_interval_minute"),
             fallback=5,
