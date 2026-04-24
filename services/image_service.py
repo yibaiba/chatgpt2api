@@ -908,7 +908,7 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[st
     if requested_model == "gpt-image-1":
         return "auto", False
     if requested_model == "gpt-image-2":
-        return ("auto" if is_free_account else "gpt-5-3"), False
+        return ("auto" if is_free_account else "gpt-5-3"), True
     return (str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL), False
 
 
