@@ -49,6 +49,7 @@
   1. `CHATGPT2API_AUTH_KEY`
   2. `config.json["auth-key"]`
 - Normal users are persisted in `data/auth_users.json`.
+- Writes to `data/auth_users.json` must be atomic: write to a temp file in the same directory, flush+fsync, then replace the target.
 - `data/auth_users.json` must be a JSON array of objects. Each valid item uses:
   - `id: string`
   - `name: string`

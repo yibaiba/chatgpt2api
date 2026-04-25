@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +17,26 @@ AUTH_USERS_FILE = DATA_DIR / "auth_users.json"
 
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _write_text_atomically(file_path: Path, content: str) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{file_path.name}.",
+        suffix=".tmp",
+        dir=file_path.parent,
+        text=True,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.replace(file_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 class AuthService:
@@ -101,8 +123,8 @@ class AuthService:
             self._save_users()
 
     def _save_users(self) -> None:
-        self._store_file.parent.mkdir(parents=True, exist_ok=True)
-        self._store_file.write_text(json.dumps(self._users, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload = json.dumps(self._users, ensure_ascii=False, indent=2) + "\n"
+        _write_text_atomically(self._store_file, payload)
 
     def _find_user_index_by_id(self, user_id: str) -> int:
         for index, user in enumerate(self._users):

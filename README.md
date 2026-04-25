@@ -24,12 +24,20 @@
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
 cp docker-compose-example.yml docker-compose.yml
+# 可选：cp .env.example .env
 # 按需编辑 config.json 的密钥、`refresh_account_interval_minute` 和 `proxy_pool`
 # 如果要在设置页里保存代理池等配置，不要把 /app/config.json 挂成只读
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
 # 首次启动后，config.json 中的管理员密钥会自动迁移为 `auth-key-hash`
 # 普通用户密钥与剩余额度可在「设置 -> 普通用户权限」中管理，数据会以哈希形式落到 data/auth_users.json
 docker compose up -d
+```
+
+如果你想本地 build 当前工作区代码，而不是直接拉取预构建镜像：
+
+```bash
+cp docker-compose.local.yml docker-compose.yml
+docker compose up -d --build
 ```
 
 ## 功能
