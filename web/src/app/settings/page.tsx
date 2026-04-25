@@ -801,7 +801,11 @@ export default function SettingsPage() {
                             <Badge variant="success" className="rounded-md px-2.5 py-1">
                               自动同步
                             </Badge>
-                          ) : null}
+                          ) : (
+                            <Badge variant="secondary" className="rounded-md px-2.5 py-1">
+                              手动同步
+                            </Badge>
+                          )}
                           <button
                             type="button"
                             className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
