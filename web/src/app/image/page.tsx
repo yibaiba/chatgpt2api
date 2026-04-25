@@ -603,7 +603,7 @@ export default function ImagePage() {
     });
   }, []);
 
-  const restoreReferenceImages = useCallback((images: StoredReferenceImage[]) => {
+  const prepareReferenceImagesForComposer = useCallback((images: StoredReferenceImage[]) => {
     const nextImages = images.map((image, index) => ({
       name: image.name || `reference-${index + 1}.png`,
       type: image.type || "image/png",
@@ -612,6 +612,14 @@ export default function ImagePage() {
     const nextFiles = nextImages.map((image, index) =>
       dataUrlToFile(image.dataUrl, image.name || `reference-${index + 1}.png`, image.type),
     );
+    return { nextFiles, nextImages };
+  }, []);
+
+  const applyPreparedReferenceImages = useCallback((prepared: {
+    nextFiles: File[];
+    nextImages: StoredReferenceImage[];
+  }) => {
+    const { nextFiles, nextImages } = prepared;
     setReferenceImageFiles(nextFiles);
     setReferenceImages(nextImages);
     if (fileInputRef.current) {
@@ -649,11 +657,12 @@ export default function ImagePage() {
       }
 
       try {
+        const restoredReferenceImages = prepareReferenceImagesForComposer(payload.referenceImages);
         if (payload.conversationId) {
           setSelectedConversationId(payload.conversationId);
         }
         setImagePrompt(nextPrompt);
-        restoreReferenceImages(payload.referenceImages);
+        applyPreparedReferenceImages(restoredReferenceImages);
         handleImageModeChange(referenceCount > 0 ? "edit" : "generate");
         focusComposer(nextPrompt.length);
         toast.success(
@@ -664,7 +673,7 @@ export default function ImagePage() {
         toast.error(message);
       }
     },
-    [focusComposer, handleImageModeChange, restoreReferenceImages],
+    [applyPreparedReferenceImages, focusComposer, handleImageModeChange, prepareReferenceImagesForComposer],
   );
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {

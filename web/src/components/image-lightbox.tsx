@@ -83,22 +83,30 @@ export function ImageLightbox({
     if (hasNext) onIndexChange(currentIndex + 1);
   }, [hasNext, currentIndex, onIndexChange]);
 
-  const resetTransform = useCallback(() => {
+  const releaseActivePointerCapture = useCallback(() => {
+    const frame = frameRef.current;
+    const activePointerId = dragStateRef.current?.pointerId;
+    if (frame && activePointerId !== undefined && frame.hasPointerCapture(activePointerId)) {
+      frame.releasePointerCapture(activePointerId);
+    }
     dragStateRef.current = null;
     setIsDragging(false);
+  }, []);
+
+  const resetTransform = useCallback(() => {
+    releaseActivePointerCapture();
     setScale(MIN_SCALE);
     setOffset({ x: 0, y: 0 });
-  }, []);
+  }, [releaseActivePointerCapture]);
 
   const applyScale = useCallback((nextScale: number) => {
     const clampedScale = clamp(nextScale, MIN_SCALE, MAX_SCALE);
     setScale(clampedScale);
     setOffset((prev) => getClampedOffset(prev, clampedScale, frameRef.current, imageRef.current));
     if (clampedScale === MIN_SCALE) {
-      dragStateRef.current = null;
-      setIsDragging(false);
+      releaseActivePointerCapture();
     }
-  }, []);
+  }, [releaseActivePointerCapture]);
 
   const zoomIn = useCallback(() => {
     applyScale(scale + SCALE_STEP);
@@ -199,14 +207,17 @@ export function ImageLightbox({
 
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) {
+    const isCaptured = event.currentTarget.hasPointerCapture(event.pointerId);
+    if ((!dragState || dragState.pointerId !== event.pointerId) && !isCaptured) {
       return;
     }
 
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    if (isCaptured) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    dragStateRef.current = null;
+    if (dragState?.pointerId === event.pointerId) {
+      dragStateRef.current = null;
+    }
     setIsDragging(false);
   }, []);
 
