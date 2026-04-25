@@ -14,9 +14,69 @@ export type ImagePromptGalleryItem = {
 
 export const IMAGE_PROMPT_GALLERY_SOURCE_URL =
   "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md";
+export const IMAGE_PROMPT_GALLERY_UPSTREAM_JSON_URL =
+  "https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-prompts/main/gpt_image2_prompts.json";
 
 const IMAGE_PREVIEW_BASE_URL =
   "https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-prompts/main/images";
+
+type UpstreamImagePromptMedia = {
+  type?: string;
+  url?: string;
+};
+
+type UpstreamImagePromptEntry = {
+  id?: string;
+  url?: string;
+  author?: string;
+  lang?: string;
+  text?: string;
+  media?: UpstreamImagePromptMedia[];
+  likeCount?: number;
+  viewCount?: number;
+};
+
+let imagePromptGalleryItemsPromise: Promise<ImagePromptGalleryItem[]> | null = null;
+
+const IMAGE_PROMPT_GALLERY_AUTO_SUMMARY_PREFIX = "上游 JSON 自动同步：";
+const IMAGE_PROMPT_GALLERY_EXCLUDED_TERMS = [
+  "sexy",
+  "cleavage",
+  "lingerie",
+  "underwear",
+  "xxxx",
+  "偷拍",
+  "丝袜",
+  "内衣",
+  "口红直播间",
+] as const;
+const IMAGE_PROMPT_GALLERY_EXCLUDED_PATTERNS = [
+  /prompt.*(?:reply|comment|below)/i,
+  /prompt.*comments?/i,
+  /prompt.*alt/i,
+  /^\s*\(?c(?:h|he)a?e?ck?\s+in\s+comments?\)?\s*$/i,
+  /^\s*\(?check\s+comments?\)?\s*$/i,
+  /prompt见评论/i,
+  /见评论/,
+  /看评论/,
+  /评论区/,
+  /ツリー/,
+  /reply below/i,
+  /altに載せて/i,
+  /プロンプト.*ツリー/i,
+  /やり方とプロンプトはツリー/i,
+] as const;
+const IMAGE_PROMPT_GALLERY_RESOLVED_PROMPTS: Record<string, string> = {
+  "https://x.com/ProperPrompter/status/2046534215311970694":
+    "Create a 10 × 10 grid of 100 different fantasy RPG items rendered in classic pixel art style (16-bit or 32-bit sprite aesthetic, reminiscent of SNES/GBA-era JRPGs). Each item should appear in its own square tile with a short clear label underneath. Keep the grid neat on a white background. Make every item visually distinct and every label correctly spelled. Use crisp pixel edges, limited palette per sprite, and subtle dithering for shading. Use these row themes: Row 1: swords and blades Row 2: shields and armor Row 3: bows, crossbows, and ranged weapons Row 4: staves, wands, and magical foci Row 5: potions, elixirs, and flasks Row 6: scrolls, tomes, and spellbooks Row 7: rings, amulets, and enchanted trinkets Row 8: helmets, crowns, and headgear Row 9: keys, relics, and quest items Row 10: gems, runes, and crafting materials Show each tile as a centered item sprite on a clean background square, rendered as a classic inventory icon — the kind you'd see in a fantasy RPG menu. Keep the overall style consistent, cohesive, and reminiscent of beloved retro fantasy RPGs — charming, detailed, and instantly readable at small sizes.",
+  "https://x.com/agi_aibusi/status/2046530758190440928": `GPT-image-2でこの手相を診断して詳細な鑑定書を作って
+生命線・知能線・感情線・運命線・太陽線・財運線・結婚線を、線の形状・濃淡・枝分かれ・起点終点まで分析すること。
+助言を重点的に高品質な占い鑑定書にまとめること。`,
+  "https://x.com/minesan_ai/status/2046215187678790140":
+    "添付の女の子に織田信長の生涯を解説する漫画を作成させて 9:16のFHDで、日本語のセリフで、日本のコミックスのページとコマの流れで作成してください。 絵柄はキャラクターに合わせてください。 全５ページで作成してください",
+  "https://x.com/hiro_ai_auto/status/2046542225358917945":
+    '{ "type": "UIデザインシステムのデモプロジェクト", "theme": "{argument name=\\"visual theme\\" default=\\"光学サイエンスと光の屈折\\"}", "overall_aesthetic": "クリーンな白背景、ライトモード、未来感、高級感、{argument name=\\"primary gradient colors\\" default=\\"虹彩、やわらかなオレンジ、イエロー、シアン、パープル、ピンク\\"} をアクセントにしたデザイン", "header": { "title": "{argument name=\\"system name\\" default=\\"LIGHTCORE PRISM\\"}", "subtitle": "UIデザインシステム - ライトモード", "tags": ["未来感", "高級感", "集中感"], "hero_graphic": "屈折した虹彩の光をまとった3D透明ガラスリング" }, "layout": { "sections": [ { "title": "カラー", "count": 5, "labels": ["ホワイト [#FFFFFF]", "スノー [#FAFAFC]", "スレート [#F2F4F8]", "ボーダー [#E6E8EF]", "ブラック [#0A0A0C]"], "description": "角丸の正方形カラーサンプルを5つ配置" }, { "title": "プリズムグラデーション", "count": 1, "description": "横長のグラデーションバーを1本配置し、その下に16進カラーコードを5つ表示" }, { "title": "タイポグラフィ", "description": "大きな『Aa』の見本、4種類のウェイト（Light, Regular, Medium, Semibold）、およびアルファベットと数字の一覧を表示" }, { "title": "アイコン", "count": 12, "description": "ミニマルなラインスタイルのアイコンを12個、2×6のグリッドで配置" }, { "title": "ボタン", "count": 8, "categories": ["プライマリ", "セカンダリ", "テキスト", "アイコン"], "description": "合計8個のボタンを配置し、各カテゴリごとに通常状態と無効状態を表示。プライマリボタンは虹彩のボーダーを持ち、テキストは {argument name=\\"primary button text\\" default=\\"使い始める\\"}" }, { "title": "ナビゲーション", "count": 2, "variants": ["デスクトップ", "モバイル"], "description": "デスクトップ版ナビゲーションにはロゴ、4つのテキストリンク、検索、ログイン、ボタンを含む。モバイル版ナビゲーションにはロゴ、検索、ハンバーガーメニューを含む" }, { "title": "コンポーネント", "count": 6, "items": ["カード：抽象的な虹彩グラフィックとボタン付きの『Photon Engine』カード", "入力欄：ラベル付き検索バーとメールアドレス入力欄", "プログレスバー：68%の虹彩プログレスバー", "タブ：概要、分析、設定", "スイッチ：2つのトグルスイッチ（オン/オフ）", "データ可視化：凡例3項目付きのドーナツチャート1つ、7日間の折れ線グラフ1つ"] }, { "title": "Webページ", "description": "デスクトップブラウザのモックアップ。見出しは \'{argument name=\\"hero headline\\" default=\\"光と色で未来をつくる\\"}\'、2つのボタン、流れるような3D虹彩ウェーブグラフィック、下部に5つのパートナーロゴを表示" }, { "title": "モバイルアプリ", "description": "スマートフォンのモックアップ。残高24,880ドル、折れ線グラフ、4つのクイックアクションアイコン、3件の最近のアクティビティ一覧、4つのアイコン付き下部ナビゲーションバーを表示" } ] } }',
+};
 
 export const IMAGE_PROMPT_GALLERY_CATEGORIES = [
   { value: "all", label: "全部", badge: "ALL" },
@@ -455,7 +515,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     title: "个人档案漫画信息图",
     summary: "适合把人物设定、创作者介绍或个人履历做成轻松的漫画式信息图。",
     prompt: "Wykorzystaj wszystko, co o mnie wiesz, i stwórz infografikę przedstawiającą mnie. Zrób to w stylu komiksu franko-belgijskiego.",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/comparison_case45/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/case_case73/output.jpg`,
     sourceTitle: "Personal Profile Infographic",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-45-personal-profile-infographic",
@@ -467,7 +527,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     title: "杭州西湖旅游海报",
     summary: "一句话直出文旅宣传海报，适合城市景点、文旅项目和地标活动主视觉。",
     prompt: "帮我生成一个介绍杭州西湖的海报",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case63/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case87/output.jpg`,
     sourceTitle: "Hangzhou West Lake Travel Poster",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-63-hangzhou-west-lake-travel-poster",
@@ -481,7 +541,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     prompt: `图片1：电影角色海报，东方不败红衣饮酒，悬崖落日，武侠意境
 
 图片2：东方不败绣花针如飞，红衣长发立于悬崖，黑木崖夕阳如血`,
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case64/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case89/output.jpg`,
     sourceTitle: "Dongfang Bubai Wuxia Character Poster",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-64-dongfang-bubai-wuxia-character-poster",
@@ -505,7 +565,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     title: "辣椒炒肉流程图",
     summary: "适合菜谱图、流程拆解卡和小红书图文，一句 prompt 就能起真实流程图版式。",
     prompt: "帮我制作辣椒炒肉这道菜的详细制作流程图,真实风格,适用于小红书图文比例",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/comparison_case55/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case55/output.jpg`,
     sourceTitle: "Chili Pork Cooking Flowchart",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-55-chili-pork-cooking-flowchart-by-kurt_rousey466",
@@ -518,7 +578,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     summary: "非常适合儿童书、温柔叙事和低饱和插画封面，负空间和纸感都很稳定。",
     prompt:
       "Soft poetic children's book illustration with watercolor and gouache textures.Clear gentle daylight with slightly brighter highlights.Muted pastel colors with soft blue and warm tones.Visible brush strokes and paper grain.Minimalist composition with large negative space.Calm, thoughtful, slightly open-ended atmosphere.\n\nChild character (around 12 years old).Subtle visual metaphors like light, shadow, perspective, reflection.Hand-painted picture book style, not cartoon, not anime, not 3D.\n\nTwo children in calm conversation,soft connection forming.",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/comparison_case61/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case82/output.jpg`,
     sourceTitle: "Soft Poetic Children's Book Illustration",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-61-soft-poetic-childrens-book-illustration-with-watercolor-and-gouache-textures-by-dotey",
@@ -530,7 +590,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     title: "赛车参数海报",
     summary: "非常适合汽车、机甲、硬件这类带规格参数的海报，一句话就能起技术型主视觉。",
     prompt: "generate an image of a racing car poster with its spec and pricing",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case68/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case105/output.jpg`,
     sourceTitle: "Racing Spec Poster",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-68-racing-spec-poster",
@@ -542,7 +602,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     title: "卓别林产品广告重设计",
     summary: "适合把现有商品图换成更有记忆点的人物广告图，偏简约干净的商业海报路线。",
     prompt: "重新生成一张海报，卓别林拿着商品图里的止痒膏，面露微笑。风格要简约干净。",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case69/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/poster_case106/output.jpg`,
     sourceTitle: "Product Ad Redesign",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-69-product-ad-redesign",
@@ -564,7 +624,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
 【补充1—2句该食物最具视觉张力的横截面细节描述】
 背景：纯粹的黑丝绒。
 【食物名称】悬浮其中，如同某件珍贵而危险的事物。`,
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/comparison_case68/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/case_case112/output.jpg`,
     sourceTitle: "Botanical Food Specimen Anatomy Chart",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-68-botanical-food-specimen-anatomy-chart",
@@ -576,7 +636,7 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     title: "海报转预告片概念",
     summary: "适合把静态海报继续往动态叙事延展，做 trailer 概念帧和宣传片分镜灵感。",
     prompt: "「このポスターを見みて、自分で妄想してトレーラー映像を作ってくれ。」",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/comparison_case71/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/case_case115/output.jpg`,
     sourceTitle: "Poster-to-Trailer Concept",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-71-poster-to-trailer-concept",
@@ -589,10 +649,798 @@ export const IMAGE_PROMPT_GALLERY_ITEMS: ReadonlyArray<ImagePromptGalleryItem> =
     summary: "适合童话冒险、IP 电影化和角色故事主视觉，偏暖调真人电影海报方向。",
     prompt:
       "可愛いラバーダックの男の子「ルヒア(RUHiA)」が日本を目指して大冒険をして日本人女性の「ミライ」と出会うまでの物語。それを実写映画のポスターのようにして。",
-    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/comparison_case72/output.jpg`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/case_case116/output.jpg`,
     sourceTitle: "Rubber Duck Boy Live-Action Movie Poster",
     sourceUrl:
       "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-72-rubber-duck-boy-live-action-movie-poster",
     creator: "@kotobuki_umi",
   },
+  {
+    id: "character-galgame-profile-page",
+    category: "character",
+    title: "Galgame 角色介绍页",
+    summary: "把立绘、Q 版和人物档案揉成游戏官网角色页，适合视觉小说、角色设定展示和官网风页面起稿。",
+    prompt: `最新モデルの画像生成ツールを使用して、
+このちびキャライラストと立ち絵を使って本物のサイトページのようにキャラクター紹介ページ風イラストを作ってください。 （紹介ページとして使ってもおかしくないもの）
+ギャルゲーのキャラクター紹介ページをイメージした高品質なもの。 顔の差分なども乗っている、CGイラストが存在する。ちびキャラが存在する。
+
+「ここに自己紹介」
+
+名前:（ここに名前）
+イメージカラー:（ここに色）
+身長:（ここに身長）cm
+体重:（ここに体重）kg
+キャッチコピー:”「ここにセリフ」”`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/character_case3/output.jpg`,
+    sourceTitle: "Gal Game Character Introduction Page",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-3-gal-game-character-introduction-page-by-09lyco",
+    creator: "@09lyco",
+  },
+  {
+    id: "character-mecha-sea-city-key-visual",
+    category: "character",
+    title: "海城机甲少女主视觉",
+    summary: "适合世界观海报、机甲角色定妆和故事 key visual，角色、装备和环境氛围一次成型。",
+    prompt:
+      "A mecha girl mid-teens, pale skin smudged with soot and salt spray, sharp amber eyes with glowing HUD reticles, waist-length ash-white hair tied in a high ponytail whipping in the sea wind, matte gunmetal exoskeleton armor plating her shoulders, forearms and shins, exposed hydraulic pistons at the joints, chest rig with glowing cyan coolant lines, oversized oil-stained hangar jacket half slipping off one shoulder, a massive rail cannon resting on her right shoulder, dog tags and frayed red ribbon at her collar, standing off-center to the left on the rusted edge of a tilted steel platform jutting out over dark water, weight shifted onto one leg, left hand gripping the cannon strap, head turned slightly toward camera with a quiet defiant stare, steam venting from her back thrusters, her ponytail and jacket streaming sideways in the salt wind, a vast derelict sea-city at dusk, colossal megastructures of unknown purpose rising from the ocean in staggered silhouettes, bone-white monolithic towers fused with barnacled steel, cyclopean ring-shaped constructs canted at broken angles, rusted skeletal gantries threaded with dead cables, dark swells rolling between the pylons, shipwrecks half-swallowed at their feet, thick sea fog clinging to the bases while the upper structures pierce into a bruised sky, scattered faint lights blinking high in the towers like distant eyes, moody low-key lighting, cold teal ambient from the overcast sky, warm amber sodium glow leaking from a distant structure camera-right, hard backlight from a low sun behind the towers carving her silhouette, volumetric god rays cutting through sea mist, wet specular highlights on her armor, 35mm anamorphic lens, slight low angle looking up past her shoulder toward the structures, medium-wide shot, shallow depth of field with foreground rust in soft focus, horizontal lens flares, fine atmospheric haze compressing the distant megastructures into layered silhouettes, cinematic anime key visual, painterly digital illustration with crisp line art, desaturated oceanic palette of teal, bone-white and rust punched by small warm accent lights, film grain, high-contrast editorial poster aesthetic. Format 16:9.",
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/character_case7/output.jpg`,
+    sourceTitle: "Mecha Girl Sea-City Key Visual",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-7-mecha-girl-sea-city-key-visual-by-old_pgmrs_will",
+    creator: "@old_pgmrs_will",
+  },
+  {
+    id: "ui-song-dynasty-social-feed",
+    category: "ui",
+    title: "宋朝朋友圈界面",
+    summary: "古今穿越的社交 feed 模板，适合历史戏仿、知识传播和叙事型 UI 概念图。",
+    prompt:
+      '"宋朝人的朋友圈"/"SONG DYNASTY SOCIAL MEDIA FEED"，古今穿越幽默融合界面设计风格，画面模拟手机社交媒体界面，但内容全部是宋朝场景头像是宋代文人画像，用户名"苏东坡SuShi_Official"，发布内容"刚到黄州，被贬了但心情还行。今天自己做了东坡肉，味道绝了，附菜谱："，配图为工笔画风格的东坡肉特写，点赞列表"黄庭坚、秦观、佛印等126人"，评论区"王安石：呵呵""司马光：还是那个味道"，界面元素如点赞图标用宋代花纹替代，状态栏显示"大宋移动 5G"和"元丰三年"，配色为手机深色模式搭配宋代雅致色调，历史与社交媒体的趣味碰撞杰作',
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/ui_case4/output.jpg`,
+    sourceTitle: "Song Dynasty Social Media Feed",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-4-song-dynasty-social-media-feed-by-panda20230902",
+    creator: "@Panda20230902",
+  },
+  {
+    id: "ui-style-reference-system",
+    category: "ui",
+    title: "参考风格扩展 UI 系统",
+    summary: "把一张参考视觉扩成整套网页与移动端设计语言，适合从 moodboard 快速落成 UI 草图。",
+    prompt:
+      "用这种风格帮我生成一套UI设计系统，包含网页、移动端、卡片、控件、按钮以及其它。把这套视觉风格作为参考生成网页。我尝试了宇宙、飞行、蝴蝶主题。",
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/ui_case9/output.jpg`,
+    sourceTitle: "Style-to-UI Design System",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-9-style-to-ui-design-system-by-stark_nico99",
+    creator: "@stark_nico99",
+  },
+  {
+    id: "ui-hanfu-museum-breakdown",
+    category: "ui",
+    title: "博物馆式汉服拆解图",
+    summary: "适合服饰、器物和文博主题的中文拆解信息图，结构、材质和文化说明都很完整。",
+    prompt: `请根据【主题】自动生成一张“博物馆图鉴式中文拆解信息图”。
+
+要求整张图兼具真实写实主视觉、结构拆解、中文标注、材质说明、纹样寓意、色彩含义和核心特征总结。你需要根据【主题】自动判断最合适的主体对象、服饰体系、器物结构、时代风格、关键部件、材质工艺、颜色方案与版式结构，用户无需再提供其他信息。
+
+整体风格应为：国家博物馆展板、历史服饰图鉴、文博专题信息图，而不是普通海报、古风写真、电商详情页或动漫插画。背景采用米白、绢纸白、浅茶色等纸张质感，整体高级、克制、专业、可收藏。
+
+版式固定为：
+- 顶部：中文主标题 + 副标题 + 导语
+- 左侧：结构拆解区，中文引线标注关键部件，并配局部特写
+- 右上：材质 / 工艺 / 质感区，展示真实纹理小样并附说明
+- 右中：纹样 / 色彩 / 寓意区，展示主色板、纹样样本和文化解释
+- 底部：穿着顺序 / 构成流程图 + 核心特征总结
+
+若主题适合人物展示，则以真实人物全身站姿为中央主体；若更适合器物或单体结构，则改为中心主体拆解图，但整体仍保持完整中文信息图形式。所有文字必须为简体中文，清晰、规整、可读，不要乱码、错字、英文或拼音。重点突出真实结构、材质差异、文化说明与图鉴气质。
+
+避免：海报感、影楼感、电商感、动漫感、cosplay感、乱标注、错结构、糊字、假材质、过度装饰。`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/ui_case25/output.jpg`,
+    sourceTitle: "Museum-Style Hanfu Breakdown Infographic",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-25-museum-style-hanfu-breakdown-infographic-by-mrlarus",
+    creator: "@MrLarus",
+  },
+  {
+    id: "poster-vintage-newspaper-frontpage",
+    category: "poster",
+    title: "复古报纸头版设计",
+    summary: "适合人物专题、剧情海报和品牌故事页，能把一张图直接包装成老报纸头版。",
+    prompt: `Create the most realistic front page design of a vintage newspaper featuring the main character. The layout should be made in the style of a real printed newspaper with a cinematic black-and-white aesthetic.
+The main photo should be prominently placed in the center, framed, like the image in the title of the article. The subject in the photo should remain unchanged and clearly distinguishable in natural light and slightly increased contrast in order to match the spectacular editorial style.
+Create a bold, attention-grabbing headline at the top (create a unique title that matches the spirit of the photo - it can be romantic, mysterious, funny, or dramatic). Add a smaller subtitle under it, which will look like a real newspaper caption.
+Add realistic newspaper elements:
+Columns of small text (in the style of lorem ipsum, but framed like real news)
+At the top is the fictitious name of the publication (for example, The Daily Prompts, AI Times or similar - think creatively, according to the picture)
+Date, issue number and location
+Decorative lines, dividers, and vintage typography
+Small additional articles or captions to the main image
+Optional stamps, doodles, or editorial notes to add personality.
+Style:
+Black and white or slightly faded monochrome paper
+Fine paper texture, grain, and ink defects
+Small shadows and creases that mimic real printed paper
+The aesthetics of a clean but slightly worn vintage newspaper
+Mood: Give the design personality, expressiveness and plot, as if the plot is part of the main article.
+Aspect ratio: 4:5 or 1:1
+High-detail, ultra-realistic hybrid of editorial photography and print design.`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/portrait_case70/output.jpg`,
+    sourceTitle: "Vintage Newspaper Front Page Design",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-19-create-the-most-realistic-front-page-design-of-a-vintage-newspaper-featuring-by-naiknelofar788",
+    creator: "@Naiknelofar788",
+  },
+  {
+    id: "poster-travel-magazine-feature",
+    category: "poster",
+    title: "旅游杂志专题文章",
+    summary: "适合做信息密度高的城市攻略页、旅行专题和 photo-book 风杂志排版。",
+    prompt:
+      "Create image of Magazine feature article [travel] guide page, cute, information dense photo book style magazine feature article page. Add all necessary sections, tips, recommendations, information. add photos for any sections and recommendations if you like. Place the attached person at the precise location of [city, country]. Seamlessly blend the attached person as if they are sightseeing. Approach this task with the understanding that this is a critical, information rich page that will significantly influence visitor numbers, text accuracy is important. Fully use the entire [9:16] page. NEGATIVE PROMPT: coordinate texts @swiat_ai @ProfitAII",
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/portrait_case71/output.jpg`,
+    sourceTitle: "Magazine Travel Guide Feature Article",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-20-create-image-of-magazine-feature-article-travel-by-andis13",
+    creator: "@andis13",
+  },
+  {
+    id: "creative-json-prompt-reconstruction",
+    category: "creative",
+    title: "照片分析与 JSON Prompt 重建",
+    summary: "适合做逆向提示词、统一色彩风格和稳定 UGC 角色参考，偏方法论型灵感。",
+    prompt: `analyze this photo and give me a detailed JSON prompt that recreates it. break down the color grading and every exact color in the photo
+
+(use Opus, not Sonnet. Opus has stronger visual analysis and writes more detailed JSON)
+
+paste that JSON into ChatGPT
+upload your product image and prompt:
+using this JSON as reference, generate a person holding my product
+save that generated photo as your character reference
+
+attach it to every future generation for facial consistency
+
+you now have a consistent UGC model that works across any product
+
+the JSON controls the lighting and color grading. GPT image-2 handles the character. you control the product placement.
+
+the #1 tell on AI photos is flat colors and a grainy look. this method removes both.
+5 minutes to set up. unlimited variations after.`,
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/portrait_case77/output.jpg`,
+    sourceTitle: "Photo Analysis & JSON Prompt Reconstruction",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-21-analyze-this-photo-and-give-me-a-detailed-json-prompt-that-recreates-it-brea-by-pavellaslov",
+    creator: "@pavellaslov",
+  },
+  {
+    id: "creative-green-tea-product-kit",
+    category: "creative",
+    title: "绿茶胶片套装产品摄影",
+    summary: "适合护肤、包装和生活方式产品的品牌静物图，适配轻高端、自然系商业视觉。",
+    prompt:
+      "CALMING GREEN TEA Film Kit displayed frontally, the open box shows soft sage-green film pouches and translucent ampoules with matte silver caps, product placed centrally with clear branding CALMING GREEN TEA -- 7 Days to Soothed Skin, pastel green background with botanical graphic accents, three minimal icons (leaf, wave, balance) floating around the product to emphasize benefits, photographic, hyper detailed, ultra realistic, lifelike, 8k, high detail, soft professional lighting.",
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/portrait_case78/output.jpg`,
+    sourceTitle: "Green Tea Film Kit Product Photography",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-22-calming-green-tea-film-kit-displayed-frontally-the-open-box-shows-soft-sage-by-zarairahh",
+    creator: "@ZaraIrahh",
+  },
+  {
+    id: "ui-laptop-saas-mockup",
+    category: "ui",
+    title: "笔记本上的超写实 UI 模型",
+    summary: "适合 SaaS 官网、设计作品集和产品展示页，一句 prompt 就能起高质感设备 mockup。",
+    prompt:
+      "A hyper-realistic UI/UX mockup displayed on a slim modern laptop placed on a minimal wooden desk with soft natural daylight. The screen shows a clean SaaS dashboard with elegant typography, glassmorphism cards, smooth gradients, subtle drop shadows, and neatly spaced components. Visible charts, analytics panels, sidebar navigation, and micro-interactions. Realistic macOS-style window frame, soft reflections on the screen, shallow depth of field, cozy workspace atmosphere, shot in photorealistic product photography style, ultra-detailed.",
+    previewImageUrl: `${IMAGE_PREVIEW_BASE_URL}/portrait_case80/output.jpg`,
+    sourceTitle: "Hyper-Realistic Laptop UI Mockup",
+    sourceUrl:
+      "https://github.com/EvoLinkAI/awesome-gpt-image-2-prompts/blob/main/README_zh-CN.md#case-24-a-hyper-realistic-uiux-mockup-displayed-on-a-slim-modern-laptop-placed-on-a-by-zarairahh",
+    creator: "@ZaraIrahh",
+  },
+  {
+    id: "ui-elon-douyin-livestream",
+    category: "ui",
+    title: "Elon Musk 抖音直播截图",
+    summary: "适合直播间 UI、礼物特效和中文评论区截图风格，直接参考短视频平台的完整界面结构。",
+    prompt: `A 9:16 vertical version, high-detail realistic style Chinese TikTok live screenshot, Elon Musk is talking to the mobile phone camera in the live broadcast room, excited, smiling, and the live atmosphere is warm and real. He held a white handwritten sign in one hand, which clearly said: "Thank you Shinning". There are obvious Chinese TikTok interface elements in the live broadcast screen, including likes, comments and share icons arranged vertically on the right, scrolling Chinese bullet screens and interactive comments below, and the "live broadcast" logo at the top, which looks like a real mobile phone screenshot. There is an eye-catching gift prompt special effect in the screen: "Shinning sent TikTok No. 1", with gift animation light effect and platform-style prompt box. Musk is in a professional live broadcast environment, with a mobile phone holder, a ring fill light and a desktop microphone in front of him. The background is a modern technology live broadcast room with bright lights and a slight neon atmosphere. The composition is real and natural, like the ongoing live screenshot of the Chinese short video platform. The interface information is rich but not messy, the characters are clear, the expression is vivid, the details are rich, the sense of real photography, the depth of field, high definition, cinematic, photorealistic, realistic livestream screenshot, social media UI, Chinese Douyin live room, detailed lighting, natural skin texture.
+
+Negative prompts:
+
+Low definition, blur, cartoon, illustration, too strong CG sense, two-dimensional, deformed fingers, wrong text, scrambled code, multiple mobile phones, multiple brands, character repetition, face collapse, facial features distortion, excessive skin polishing, overexposure, too dark, messy background, wrong UI, non-Chinese short video interface, too many English bullet screens, gift special effects are not obvious, cropping error, proportional error
+
+Supplementary reinforcement words:
+
+Real mobile phone screen recording screenshot feeling, the live broadcast UI is complete, the gift prompt box conforms to the style of the Chinese short video platform, the Chinese comment area is active, the number of people online in the live broadcast room is clearly displayed, and the time, power and signal bar are visible.`,
+    previewImageUrl: "https://pbs.twimg.com/media/HGaiU_8XoAAAkaS.jpg",
+    sourceTitle: "Elon Musk Chinese TikTok Live Screenshot",
+    sourceUrl: "https://x.com/Shinning1010/status/2046501587762188535",
+    creator: "@Shinning1010",
+  },
+  {
+    id: "ui-cixi-x-homepage",
+    category: "ui",
+    title: "慈禧 X 主页",
+    summary: "适合历史人物社交主页、戏仿式个人页和平台界面概念，短 prompt 但场景辨识度很强。",
+    prompt: "生成一张慈禧的X主页",
+    previewImageUrl: "https://pbs.twimg.com/media/HGVw2JUbQAAG9Bn.jpg",
+    sourceTitle: "Empress Dowager Cixi X Page",
+    sourceUrl: "https://x.com/Cryptohaifeng_/status/2046165776055546341",
+    creator: "@Cryptohaifeng_",
+  },
+  {
+    id: "poster-japanese-supermarket-flyer",
+    category: "poster",
+    title: "日式超市特卖传单",
+    summary: "适合折页广告、促销 flyer 和高密度商品排版，尤其适合零售和本地商超视觉方向。",
+    prompt:
+      "『賑やかで魅力的なスーパーマーケットの折り込みチラシの画像。上部には「特売」の大きな文字と今週の日付。カラフルな商品写真（野菜・果物・牛肉・鮮魚）、赤枠の価格タグ、「超目玉商品」「家計応援」のキャッチ…』",
+    previewImageUrl: "https://pbs.twimg.com/media/HGatbcobIAAuNfa.jpg",
+    sourceTitle: "Japanese Supermarket Sale Flyer",
+    sourceUrl: "https://x.com/weel_corp/status/2046514558064586782",
+    creator: "@weel_corp",
+  },
+  {
+    id: "creative-backpropagation-diagram",
+    category: "creative",
+    title: "反向传播图解",
+    summary: "适合知识图、教程图和课程配图，把抽象概念直接做成结构清晰的教学信息图。",
+    prompt: "バックプロパゲーションについて詳しく図解して",
+    previewImageUrl: "https://pbs.twimg.com/media/HGabrymaUAAoDXS.jpg",
+    sourceTitle: "Backpropagation Explained Diagram",
+    sourceUrl: "https://x.com/itnavi2022/status/2046494262158930154",
+    creator: "@itnavi2022",
+  },
+  {
+    id: "creative-programming-museum-cartoon",
+    category: "creative",
+    title: "编程博物馆现场表演",
+    summary: "适合技术梗图、程序员文化海报和轻讽刺卡通场景，做社区传播图会很有辨识度。",
+    prompt:
+      "在计算机博物馆里，一个程序员在展厅中央，正在演示C语言编程，很多参观者在围观，屏幕上的代码清晰可见。旁边的牌子写着：古法编程，现场表演。2D卡通画风，16:9",
+    previewImageUrl: "https://pbs.twimg.com/media/HGaumsnbYAAxaPl.jpg",
+    sourceTitle: "Retro Programming Museum Cartoon",
+    sourceUrl: "https://x.com/XiaohuiAI666/status/2046515319947354603",
+    creator: "@XiaohuiAI666",
+  },
+  {
+    id: "character-gold-saints-card-grid",
+    category: "character",
+    title: "黄金圣斗士卡牌九宫格",
+    summary: "适合角色卡组、阵营卡面和多人物集合页，能快速起 12 宫格式角色展示版面。",
+    prompt: "生成圣斗士星矢12个黄金圣斗士的12宫格卡牌图片，每张卡牌上写上对应的中文名，每行4个，宽高比16:9。",
+    previewImageUrl: "https://pbs.twimg.com/media/HGaLQTfbkAA3xpN.jpg",
+    sourceTitle: "Saint Seiya Gold Saints Card Grid",
+    sourceUrl: "https://x.com/songguoxiansen/status/2046476566537080849",
+    creator: "@songguoxiansen",
+  },
+  {
+    id: "poster-science-fiction-movie",
+    category: "poster",
+    title: "科幻电影海报",
+    summary: "非常适合快速起电影主视觉方向，留给后续世界观、标题和角色设定继续细化。",
+    prompt: "Create a Science fiction movie poster",
+    previewImageUrl: "https://pbs.twimg.com/media/HGatt-VasAAVQq2.jpg",
+    sourceTitle: "Science Fiction Movie Poster",
+    sourceUrl: "https://x.com/underwoodxie96/status/2046514205529088501",
+    creator: "@underwoodxie96",
+  },
+  {
+    id: "ui-palm-reading-report",
+    category: "ui",
+    title: "手相鉴定报告单",
+    summary: "适合诊断书、报告页和分析卡片类界面，把复杂文本信息整理成一张可读结果页。",
+    prompt: `GPT-image-2でこの手相を診断して詳細な鑑定書を作って
+生命線・知能線・感情線・運命線・太陽線・財運線・結婚線を、線の形状・濃淡・枝分かれ・起点終点まで分析すること。
+助言を重点的に高品質な占い鑑定書にまとめること。`,
+    previewImageUrl: "https://pbs.twimg.com/media/HGa8bFSbsAA6rpa.jpg",
+    sourceTitle: "Palm Reading Diagnosis Report",
+    sourceUrl: "https://x.com/agi_aibusi/status/2046530764871696750",
+    creator: "@agi_aibusi",
+  },
+  {
+    id: "creative-handwritten-prescription",
+    category: "creative",
+    title: "手写中西医药方图",
+    summary: "适合做拟真单据、手写文档和处方笺类图片，文档生成方向会很有参考价值。",
+    prompt: "生成一张手写中/西医药方图",
+    previewImageUrl: "https://pbs.twimg.com/media/HGaqaO2W4AA2W-6.jpg",
+    sourceTitle: "Handwritten Prescription Sheet",
+    sourceUrl: "https://x.com/MrLarus/status/2046514998965371144",
+    creator: "@MrLarus",
+  },
+  {
+    id: "poster-ten-fake-service-ads",
+    category: "poster",
+    title: "十组虚构服务广告",
+    summary: "适合做 campaign brainstorming、服务定位海报和批量广告创意探索，一次就能起多张方向图。",
+    prompt: "在りそうでないサービスの広告を10サービズ(1サービス1枚)作成して下さい",
+    previewImageUrl: "https://pbs.twimg.com/amplify_video_thumb/2046386914522255361/img/wG4VXG8ZhIRqaY84.jpg",
+    sourceTitle: "Ten Fictional Service Ads",
+    sourceUrl: "https://x.com/Yuupapa_free/status/2046388238982771123",
+    creator: "@Yuupapa_free",
+  },
+  {
+    id: "creative-demenigis-encyclopedia",
+    category: "creative",
+    title: "桶眼鱼结构图鉴页",
+    summary: "适合做生物结构图、百科页和科普卡，直接把某个对象组织成图鉴式知识页面。",
+    prompt: "デメニギスの体の構造を解説するカラー図鑑のページ",
+    previewImageUrl: "https://pbs.twimg.com/media/HGahSugbEAA0yOv.jpg",
+    sourceTitle: "Barreleye Fish Anatomy Encyclopedia Page",
+    sourceUrl: "https://x.com/itnavi2022/status/2046500429786402973",
+    creator: "@itnavi2022",
+  },
+  {
+    id: "ui-trump-kim-douyin-pk",
+    category: "ui",
+    title: "特朗普与金正恩抖音 PK 直播",
+    summary: "适合双人直播、PK 页面和强互动评论区截图，偏平台戏仿与事件感界面方向。",
+    prompt: "生成特朗普和金正恩在抖音直播间打PK的截图",
+    previewImageUrl: "https://pbs.twimg.com/media/HGUGld9bAAAUe_s.jpg",
+    sourceTitle: "Trump and Kim Douyin PK Screenshot",
+    sourceUrl: "https://x.com/alanlovelq/status/2046048929490612464",
+    creator: "@alanlovelq",
+  },
+  {
+    id: "creative-chushibiao-blackboard",
+    category: "creative",
+    title: "黑板粉笔版出师表",
+    summary: "适合教室板书、手写海报和拟真粉笔字场景，文字密集型生成会很有参考意义。",
+    prompt: "生成图片: 手写在教室黑板上的出师表全文，真实感的粉笔字迹，晴朗白天用iPhone手机实拍",
+    previewImageUrl: "https://pbs.twimg.com/media/HGUGld9bAAAUe_s.jpg",
+    sourceTitle: "Classroom Blackboard Full-Text Calligraphy",
+    sourceUrl: "https://x.com/alanlovelq/status/2046048929490612464",
+    creator: "@alanlovelq",
+  },
+  {
+    id: "ui-t800-taobao-detail-page",
+    category: "ui",
+    title: "T-800 淘宝商品详情页",
+    summary: "适合商品详情页、三视图参数页和电商介绍长图，信息结构很完整。",
+    prompt: "生成图片: T-800机器人的淘宝商品详情页，展示: 机器人的正面侧面背面三视图， 产品价格， 产品细节， 功能和使用场景等",
+    previewImageUrl: "https://pbs.twimg.com/media/HGUGld9bAAAUe_s.jpg",
+    sourceTitle: "T-800 Taobao Product Detail Page",
+    sourceUrl: "https://x.com/alanlovelq/status/2046048929490612464",
+    creator: "@alanlovelq",
+  },
+  {
+    id: "creative-prewar-lab-minecraft",
+    category: "creative",
+    title: "战前日本研究所 Minecraft 截图",
+    summary: "适合世界观场景图、像素风叙事和游戏截图式概念图，氛围感很强。",
+    prompt: "戦前日本の怪しげな研究所を探検しているマイクラのスクリーンショット画像を作成して",
+    previewImageUrl: "https://pbs.twimg.com/media/HGZLYdWaMAAQScz.jpg",
+    sourceTitle: "Pre-war Japan Lab Minecraft Screenshot",
+    sourceUrl: "https://x.com/RitaStar1128/status/2046406024303976904",
+    creator: "@RitaStar1128",
+  },
+  {
+    id: "creative-counter-strike-terraria-mashup",
+    category: "creative",
+    title: "反恐精英 × Terraria 截图混搭",
+    summary: "适合游戏 crossover、风格混合实验和 meme 式截图创作，作为创意参考很有意思。",
+    prompt: "counter strike in game screenshot, mixed with Terraria",
+    previewImageUrl: "https://pbs.twimg.com/media/HGZPY4FbAAAljq3.jpg",
+    sourceTitle: "Counter-Strike x Terraria Screenshot Mashup",
+    sourceUrl: "https://x.com/yssrski/status/2046410519595348397",
+    creator: "@yssrski",
+  },
 ];
+
+export function normalizeImagePromptGalleryPrompt(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, "");
+}
+
+export async function loadImagePromptGalleryItems(): Promise<ImagePromptGalleryItem[]> {
+  if (imagePromptGalleryItemsPromise) {
+    return imagePromptGalleryItemsPromise;
+  }
+
+  imagePromptGalleryItemsPromise = fetch(IMAGE_PROMPT_GALLERY_UPSTREAM_JSON_URL)
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`failed to load upstream prompt json: ${response.status}`);
+      }
+      const payload = (await response.json()) as unknown;
+      if (!Array.isArray(payload)) {
+        return [...IMAGE_PROMPT_GALLERY_ITEMS];
+      }
+      return buildImagePromptGalleryItems(payload);
+    })
+    .catch(() => [...IMAGE_PROMPT_GALLERY_ITEMS]);
+
+  return imagePromptGalleryItemsPromise;
+}
+
+function buildImagePromptGalleryItems(entries: UpstreamImagePromptEntry[]) {
+  const baseItems = buildCuratedImagePromptGalleryItems(entries);
+  const upstreamItems = buildAutoImagePromptGalleryItems(entries, baseItems);
+  return [...baseItems, ...upstreamItems];
+}
+
+function buildCuratedImagePromptGalleryItems(entries: UpstreamImagePromptEntry[]) {
+  const previewOverrides = buildImagePromptGalleryPreviewOverrides(entries);
+  return IMAGE_PROMPT_GALLERY_ITEMS.map((item) => ({
+    ...item,
+    previewImageUrl: previewOverrides[item.id] || item.previewImageUrl,
+  }));
+}
+
+function buildImagePromptGalleryPreviewOverrides(entries: UpstreamImagePromptEntry[]) {
+  const overrides: Record<string, string> = {};
+
+  for (const item of IMAGE_PROMPT_GALLERY_ITEMS) {
+    const match = findBestUpstreamPreviewMatch(item, entries);
+    if (match) {
+      overrides[item.id] = match;
+    }
+  }
+
+  return overrides;
+}
+
+function buildAutoImagePromptGalleryItems(
+  entries: UpstreamImagePromptEntry[],
+  baseItems: ReadonlyArray<ImagePromptGalleryItem>,
+) {
+  const items: ImagePromptGalleryItem[] = [];
+
+  for (const entry of entries) {
+    const prompt = resolveUpstreamImagePrompt(entry);
+    const sourceUrl = normalizeImagePromptGalleryUrl(String(entry.url || ""));
+    const previewImageUrl = getUpstreamPreviewImageUrl(entry.media);
+    if (!prompt || !sourceUrl || !previewImageUrl || !shouldIncludeUpstreamImagePrompt(prompt, entry)) {
+      continue;
+    }
+    if (hasExistingImagePromptGalleryMatch(entry, baseItems) || hasExistingImagePromptGalleryMatch(entry, items)) {
+      continue;
+    }
+
+    items.push({
+      id: createAutoImagePromptGalleryId(entry, items.length),
+      category: inferImagePromptGalleryCategory(prompt),
+      title: createAutoImagePromptGalleryTitle(prompt),
+      summary: createAutoImagePromptGallerySummary(prompt),
+      prompt,
+      previewImageUrl,
+      sourceTitle: "Upstream JSON",
+      sourceUrl,
+      creator: formatImagePromptGalleryCreator(entry.author || ""),
+    });
+  }
+
+  return items;
+}
+
+function shouldIncludeUpstreamImagePrompt(prompt: string) {
+  const value = prompt.toLowerCase();
+  if (IMAGE_PROMPT_GALLERY_EXCLUDED_TERMS.some((term) => value.includes(term))) {
+    return false;
+  }
+  return !IMAGE_PROMPT_GALLERY_EXCLUDED_PATTERNS.some((pattern) => pattern.test(prompt));
+}
+
+function createAutoImagePromptGalleryId(entry: UpstreamImagePromptEntry, index: number) {
+  const raw =
+    String(entry.id || "").trim() ||
+    normalizeImagePromptGalleryPrompt(String(entry.url || "")).replace(/[^a-zA-Z0-9]+/g, "-") ||
+    `entry-${index}`;
+  return `upstream-${raw.replace(/^-+|-+$/g, "") || `entry-${index}`}`;
+}
+
+function createAutoImagePromptGalleryTitle(prompt: string) {
+  const firstLine =
+    prompt
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean) || "上游灵感";
+  const cleaned = firstLine
+    .replace(/^[\d\s、.:-]+/, "")
+    .replace(/^[`"'“”‘’]+|[`"'“”‘’]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "上游灵感";
+  }
+  const sentence = cleaned.split(/[。.!?！？]/)[0]?.trim();
+  if (sentence && sentence.length <= 28) {
+    return sentence;
+  }
+  if (cleaned.length <= 28) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, 24).trim()}…`;
+}
+
+function createAutoImagePromptGallerySummary(prompt: string) {
+  const firstMeaningfulLine =
+    prompt
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean) || "";
+  const compactLine = firstMeaningfulLine.replace(/\s+/g, " ").trim();
+  if (!compactLine) {
+    return `${IMAGE_PROMPT_GALLERY_AUTO_SUMMARY_PREFIX}来自上游最新案例。`;
+  }
+  const excerpt = compactLine.length > 42 ? `${compactLine.slice(0, 42).trim()}…` : compactLine;
+  return `${IMAGE_PROMPT_GALLERY_AUTO_SUMMARY_PREFIX}${excerpt}`;
+}
+
+function inferImagePromptGalleryCategory(prompt: string): ImagePromptGalleryCategory {
+  const value = prompt.toLowerCase();
+
+  if (
+    [
+      "ui",
+      "dashboard",
+      "landing page",
+      "x page",
+      "homepage",
+      "social media",
+      "screenshot",
+      "live",
+      "livestream",
+      "douyin",
+      "tiktok",
+      "小红书",
+      "淘宝",
+      "taobao",
+      "detail page",
+      "slide",
+      "report",
+      "鉴定书",
+      "截图",
+      "主页",
+      "直播",
+    ].some((keyword) => value.includes(keyword))
+  ) {
+    return "ui";
+  }
+
+  if (
+    [
+      "character",
+      "card",
+      "角色",
+      "卡牌",
+      "三视图",
+      "gal game",
+      "mecha",
+      "saint",
+      "hero",
+      "gold saints",
+    ].some((keyword) => value.includes(keyword))
+  ) {
+    return "character";
+  }
+
+  if (
+    [
+      "poster",
+      "海报",
+      "ad",
+      "advert",
+      "campaign",
+      "flyer",
+      "cover",
+      "movie",
+      "magazine",
+      "newspaper",
+      "stamp",
+      "travel guide",
+      "promo",
+      "特卖",
+      "传单",
+    ].some((keyword) => value.includes(keyword))
+  ) {
+    return "poster";
+  }
+
+  if (
+    [
+      "portrait",
+      "photo",
+      "photography",
+      "selfie",
+      "snapshot",
+      "35mm",
+      "dslr",
+      "肖像",
+      "写真",
+      "人像",
+      "coser",
+      "cosplayer",
+    ].some((keyword) => value.includes(keyword))
+  ) {
+    return "portrait";
+  }
+
+  return "creative";
+}
+
+function formatImagePromptGalleryCreator(value: string) {
+  const normalized = String(value || "").trim().replace(/^@/, "");
+  return normalized ? `@${normalized}` : "@upstream";
+}
+
+function hasExistingImagePromptGalleryMatch(
+  entry: UpstreamImagePromptEntry,
+  items: ReadonlyArray<ImagePromptGalleryItem>,
+) {
+  const prompt = resolveUpstreamImagePrompt(entry);
+  const sourceUrl = normalizeImagePromptGalleryUrl(String(entry.url || ""));
+  const creator = normalizeImagePromptGalleryCreator(String(entry.author || ""));
+  if (!prompt) {
+    return false;
+  }
+
+  for (const item of items) {
+    const itemSourceUrl = normalizeImagePromptGalleryUrl(item.sourceUrl);
+    if (sourceUrl && itemSourceUrl && sourceUrl === itemSourceUrl) {
+      return true;
+    }
+
+    const itemPrompt = normalizeImagePromptGalleryPrompt(item.prompt);
+    if (!itemPrompt) {
+      continue;
+    }
+
+    const authorMatched = creator && creator === normalizeImagePromptGalleryCreator(item.creator);
+    if (scoreImagePromptMatch(prompt, itemPrompt, authorMatched) >= 0.82) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function resolveUpstreamImagePrompt(entry: UpstreamImagePromptEntry) {
+  const sourceUrl = normalizeImagePromptGalleryUrl(String(entry.url || ""));
+  const resolvedPrompt = sourceUrl ? IMAGE_PROMPT_GALLERY_RESOLVED_PROMPTS[sourceUrl] : "";
+  const rawPrompt = normalizeImagePromptGalleryPrompt(String(entry.text || ""));
+  return normalizeImagePromptGalleryPrompt(resolvedPrompt || rawPrompt);
+}
+
+function findBestUpstreamPreviewMatch(item: ImagePromptGalleryItem, entries: UpstreamImagePromptEntry[]) {
+  const prompt = normalizeImagePromptGalleryPrompt(item.prompt);
+  const sourceUrl = normalizeImagePromptGalleryUrl(item.sourceUrl);
+  const creator = normalizeImagePromptGalleryCreator(item.creator);
+  if (!prompt) {
+    return "";
+  }
+
+  let bestScore = 0;
+  let bestMediaUrl = "";
+
+  for (const entry of entries) {
+    const mediaUrl = getUpstreamPreviewImageUrl(entry.media);
+    if (!mediaUrl) {
+      continue;
+    }
+
+    const entryUrl = normalizeImagePromptGalleryUrl(entry.url);
+    if (sourceUrl && entryUrl && sourceUrl === entryUrl) {
+      return mediaUrl;
+    }
+
+    const entryPrompt = normalizeImagePromptGalleryPrompt(String(entry.text || ""));
+    if (!entryPrompt) {
+      continue;
+    }
+
+    const authorMatched = creator && creator === normalizeImagePromptGalleryCreator(entry.author || "");
+    const score = scoreImagePromptMatch(prompt, entryPrompt, authorMatched);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMediaUrl = mediaUrl;
+    }
+  }
+
+  if (bestScore < 0.82) {
+    return "";
+  }
+  return bestMediaUrl;
+}
+
+function getUpstreamPreviewImageUrl(media: UpstreamImagePromptMedia[] | undefined) {
+  if (!Array.isArray(media)) {
+    return "";
+  }
+  for (const item of media) {
+    const url = String(item?.url || "").trim();
+    if (url && String(item?.type || "").trim().toLowerCase() === "photo") {
+      return url;
+    }
+  }
+  for (const item of media) {
+    const url = String(item?.url || "").trim();
+    if (url) {
+      return url;
+    }
+  }
+  return "";
+}
+
+function scoreImagePromptMatch(prompt: string, entryPrompt: string, authorMatched: boolean) {
+  if (prompt === entryPrompt) {
+    return 1 + (authorMatched ? 0.05 : 0);
+  }
+
+  const shorterLength = Math.min(prompt.length, entryPrompt.length);
+  if (shorterLength >= 24 && (prompt.includes(entryPrompt) || entryPrompt.includes(prompt))) {
+    return 0.97 + (authorMatched ? 0.03 : 0);
+  }
+
+  const commonPrefixLength = getCommonPrefixLength(prompt, entryPrompt);
+  if (commonPrefixLength >= 48) {
+    return 0.9 + Math.min(commonPrefixLength / 1000, 0.05) + (authorMatched ? 0.03 : 0);
+  }
+
+  const diceScore = calculateDiceCoefficient(prompt, entryPrompt);
+  return diceScore + (authorMatched ? 0.05 : 0);
+}
+
+function calculateDiceCoefficient(left: string, right: string) {
+  if (!left || !right) {
+    return 0;
+  }
+  if (left === right) {
+    return 1;
+  }
+  if (left.length < 2 || right.length < 2) {
+    return 0;
+  }
+
+  const leftBigrams = buildBigrams(left);
+  const rightBigrams = buildBigrams(right);
+  if (leftBigrams.length === 0 || rightBigrams.length === 0) {
+    return 0;
+  }
+
+  const counts = new Map<string, number>();
+  for (const bigram of leftBigrams) {
+    counts.set(bigram, (counts.get(bigram) || 0) + 1);
+  }
+
+  let overlap = 0;
+  for (const bigram of rightBigrams) {
+    const current = counts.get(bigram) || 0;
+    if (current > 0) {
+      overlap += 1;
+      counts.set(bigram, current - 1);
+    }
+  }
+
+  return (2 * overlap) / (leftBigrams.length + rightBigrams.length);
+}
+
+function buildBigrams(value: string) {
+  const bigrams: string[] = [];
+  for (let index = 0; index < value.length - 1; index += 1) {
+    bigrams.push(value.slice(index, index + 2));
+  }
+  return bigrams;
+}
+
+function getCommonPrefixLength(left: string, right: string) {
+  const maxLength = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < maxLength && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+function normalizeImagePromptGalleryCreator(value: string) {
+  return String(value || "").trim().toLowerCase().replace(/^@/, "");
+}
+
+function normalizeImagePromptGalleryUrl(value: string) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}

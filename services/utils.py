@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 import uuid
 
@@ -14,6 +15,7 @@ SUPPORTED_IMAGE_MODELS = (
 )
 IMAGE_MODELS = set(SUPPORTED_IMAGE_MODELS)
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
+ASPECT_RATIO_PREFIX_RE = re.compile(r"^\s*Make the aspect ratio\s+\S+\s*,\s*", re.IGNORECASE)
 
 
 def anonymize_token(token: object) -> str:
@@ -125,12 +127,30 @@ def extract_prompt_from_message_content(content: object) -> str:
     return _join_text_parts(parts)
 
 
-def extract_image_from_message_content(content: object) -> tuple[bytes, str] | None:
+def apply_image_size_prompt(prompt: object, size: object) -> str:
+    normalized_prompt = str(prompt or "").strip()
+    normalized_size = str(size or "").strip()
+    if not normalized_size:
+        return normalized_prompt
+
+    prefix = f"Make the aspect ratio {normalized_size} , "
+    if not normalized_prompt:
+        return prefix.strip()
+
+    lines = normalized_prompt.splitlines()
+    if lines and ASPECT_RATIO_PREFIX_RE.match(lines[0]):
+        lines[0] = ASPECT_RATIO_PREFIX_RE.sub(prefix, lines[0], count=1)
+        return "\n".join(lines).strip()
+    return f"{prefix}{normalized_prompt}"
+
+
+def extract_image_from_message_content(content: object) -> list[tuple[bytes, str]]:
     import base64 as b64
 
     if not isinstance(content, list):
-        return None
+        return []
 
+    images: list[tuple[bytes, str]] = []
     for item in content:
         if not isinstance(item, dict):
             continue
@@ -141,20 +161,20 @@ def extract_image_from_message_content(content: object) -> tuple[bytes, str] | N
             if url.startswith("data:"):
                 header, _, data = url.partition(",")
                 mime = header.split(";")[0].removeprefix("data:")
-                return b64.b64decode(data), mime or "image/png"
-        if item_type == "input_image":
+                images.append((b64.b64decode(data), mime or "image/png"))
+        elif item_type == "input_image":
             image_url = str(item.get("image_url") or "")
             if image_url.startswith("data:"):
                 header, _, data = image_url.partition(",")
                 mime = header.split(";")[0].removeprefix("data:")
-                return b64.b64decode(data), mime or "image/png"
-    return None
+                images.append((b64.b64decode(data), mime or "image/png"))
+    return images
 
 
-def extract_chat_image(body: dict[str, object]) -> tuple[bytes, str] | None:
+def extract_chat_image(body: dict[str, object]) -> list[tuple[bytes, str]]:
     messages = body.get("messages")
     if not isinstance(messages, list):
-        return None
+        return []
 
     for message in reversed(messages):
         if not isinstance(message, dict):
@@ -162,10 +182,10 @@ def extract_chat_image(body: dict[str, object]) -> tuple[bytes, str] | None:
         role = str(message.get("role") or "").strip().lower()
         if role != "user":
             continue
-        result = extract_image_from_message_content(message.get("content"))
-        if result:
-            return result
-    return None
+        images = extract_image_from_message_content(message.get("content"))
+        if images:
+            return images
+    return []
 
 
 def extract_chat_prompt(body: dict[str, object]) -> str:

@@ -396,10 +396,10 @@ export default function AccountsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">号池管理</h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid w-full gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end lg:w-auto">
           <Button
             variant="outline"
-            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
+            className="h-10 w-full justify-center rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white sm:w-auto"
             onClick={() => void loadAccounts()}
             disabled={isLoading || isRefreshing || isDeleting}
           >
@@ -408,7 +408,7 @@ export default function AccountsPage() {
           </Button>
           <Button
             variant="outline"
-            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
+            className="h-10 w-full justify-center rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white sm:w-auto"
             onClick={() => void handleRefreshAccounts(accounts.map((item) => item.access_token))}
             disabled={isLoading || isRefreshing || isDeleting || accounts.length === 0}
           >
@@ -425,7 +425,7 @@ export default function AccountsPage() {
           />
           <Button
             variant="outline"
-            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
+            className="h-10 w-full justify-center rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white sm:w-auto"
             onClick={() => downloadTokens(accounts)}
             disabled={accounts.length === 0}
           >
@@ -436,7 +436,7 @@ export default function AccountsPage() {
       </section>
 
       <Dialog open={Boolean(editingAccount)} onOpenChange={(open) => (!open ? setEditingAccount(null) : null)}>
-        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+        <DialogContent showCloseButton={false} className="max-w-[92vw] rounded-2xl p-5 sm:max-w-md sm:p-6">
           <DialogHeader className="gap-2">
             <DialogTitle>编辑账户</DialogTitle>
             <DialogDescription className="text-sm leading-6">
@@ -487,17 +487,17 @@ export default function AccountsPage() {
               />
             </div>
           </div>
-          <DialogFooter className="pt-2">
+          <DialogFooter className="flex-col-reverse gap-2 pt-2 sm:flex-row">
             <Button
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              className="h-10 w-full rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200 sm:w-auto"
               onClick={() => setEditingAccount(null)}
               disabled={isUpdating}
             >
               取消
             </Button>
             <Button
-              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
               onClick={() => void handleUpdateAccount()}
               disabled={isUpdating}
             >
@@ -509,19 +509,19 @@ export default function AccountsPage() {
       </Dialog>
 
       <section className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           {metricCards.map((item) => {
             const Icon = item.icon;
             const value = summary[item.key];
             return (
               <Card key={item.key} className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
-                <CardContent className="p-4">
-                  <div className="mb-4 flex items-start justify-between">
+                <CardContent className="p-3 sm:p-4">
+                  <div className="mb-3 flex items-start justify-between sm:mb-4">
                     <span className="text-xs font-medium text-stone-400">{item.label}</span>
                     <Icon className="size-4 text-stone-400" />
                   </div>
-                  <div className={cn("text-[1.75rem] font-semibold tracking-tight", item.color)}>
-                    <span className={typeof value === "number" ? "" : "text-[1.1rem]"}>
+                  <div className={cn("text-[1.4rem] font-semibold tracking-tight sm:text-[1.75rem]", item.color)}>
+                    <span className={typeof value === "number" ? "" : "text-base sm:text-[1.1rem]"}>
                       {typeof value === "number" ? formatCompact(value) : value}
                     </span>
                   </div>
@@ -542,7 +542,7 @@ export default function AccountsPage() {
           </div>
 
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-            <div className="relative min-w-[260px]">
+            <div className="relative min-w-0 lg:min-w-[260px]">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" />
               <Input
                 value={query}
@@ -615,10 +615,10 @@ export default function AccountsPage() {
         >
           <CardContent className="space-y-0 p-0">
             <div className="flex flex-col gap-3 border-b border-stone-100 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap items-center gap-2 text-sm text-stone-500">
+              <div className="flex flex-col items-stretch gap-2 text-sm text-stone-500 sm:flex-row sm:flex-wrap sm:items-center">
                 <Button
                   variant="ghost"
-                  className="h-8 rounded-lg px-3 text-stone-500 hover:bg-stone-100"
+                  className="h-8 justify-start rounded-lg px-3 text-stone-500 hover:bg-stone-100 sm:w-auto"
                   onClick={() => void handleRefreshAccounts(selectedTokens)}
                   disabled={selectedTokens.length === 0 || isRefreshing}
                 >
@@ -627,7 +627,7 @@ export default function AccountsPage() {
                 </Button>
                 <Button
                   variant="ghost"
-                  className="h-8 rounded-lg px-3 text-rose-500 hover:bg-rose-50 hover:text-rose-600"
+                  className="h-8 justify-start rounded-lg px-3 text-rose-500 hover:bg-rose-50 hover:text-rose-600 sm:w-auto"
                   onClick={() => void handleDeleteTokens(abnormalTokens)}
                   disabled={abnormalTokens.length === 0 || isDeleting}
                 >
@@ -636,7 +636,7 @@ export default function AccountsPage() {
                 </Button>
                 <Button
                   variant="ghost"
-                  className="h-8 rounded-lg px-3 text-rose-500 hover:bg-rose-50 hover:text-rose-600"
+                  className="h-8 justify-start rounded-lg px-3 text-rose-500 hover:bg-rose-50 hover:text-rose-600 sm:w-auto"
                   onClick={() => void handleDeleteTokens(selectedTokens)}
                   disabled={selectedTokens.length === 0 || isDeleting}
                 >
@@ -651,7 +651,107 @@ export default function AccountsPage() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="divide-y divide-stone-100 md:hidden">
+              {currentRows.map((account) => {
+                const status = statusMeta[account.status];
+                const StatusIcon = status.icon;
+                const restore = formatRestoreAt(account.restoreAt);
+
+                return (
+                  <div key={account.id} className="space-y-3 px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <Checkbox
+                          checked={selectedIds.includes(account.id)}
+                          onCheckedChange={(checked) => {
+                            setSelectedIds((prev) =>
+                              checked
+                                ? Array.from(new Set([...prev, account.id]))
+                                : prev.filter((item) => item !== account.id),
+                            );
+                          }}
+                          className="mt-1"
+                        />
+                        <div className="min-w-0 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant={status.badge}
+                              className="inline-flex items-center gap-1 rounded-md px-2 py-1"
+                            >
+                              <StatusIcon className="size-3.5" />
+                              {account.status}
+                            </Badge>
+                            <Badge variant="secondary" className="rounded-md bg-stone-100 text-stone-700">
+                              {account.type}
+                            </Badge>
+                            <Badge variant="info" className="rounded-md">
+                              额度 {formatQuota(account)}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 truncate text-sm font-medium tracking-tight text-stone-700">
+                              {maskToken(account.access_token)}
+                            </span>
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-lg p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(account.access_token);
+                                toast.success("token 已复制");
+                              }}
+                            >
+                              <Copy className="size-4" />
+                            </button>
+                          </div>
+                          <div className="text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 text-stone-400">
+                        <button
+                          type="button"
+                          className="rounded-lg p-2 transition hover:bg-stone-100 hover:text-stone-700"
+                          onClick={() => openEditDialog(account)}
+                          disabled={isUpdating}
+                        >
+                          <Pencil className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg p-2 transition hover:bg-stone-100 hover:text-stone-700"
+                          onClick={() => void handleRefreshAccounts([account.access_token])}
+                          disabled={isRefreshing}
+                        >
+                          <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg p-2 transition hover:bg-rose-50 hover:text-rose-500"
+                          onClick={() => void handleDeleteTokens([account.access_token])}
+                          disabled={isDeleting}
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 text-xs text-stone-500">
+                      <div className="space-y-1 rounded-xl bg-stone-50 px-3 py-2">
+                        <div className="text-[11px] uppercase tracking-[0.16em] text-stone-400">恢复时间</div>
+                        {restore.relative ? <div className="font-medium text-stone-700">{restore.relative}</div> : null}
+                        <div>{restore.absolute}</div>
+                      </div>
+                      <div className="space-y-1 rounded-xl bg-stone-50 px-3 py-2">
+                        <div className="text-[11px] uppercase tracking-[0.16em] text-stone-400">统计</div>
+                        <div>成功 {account.success}</div>
+                        <div>失败 {account.fail}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[920px] text-left">
                 <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
                   <tr>
@@ -779,29 +879,29 @@ export default function AccountsPage() {
                   })}
                 </tbody>
               </table>
-
-              {!isLoading && currentRows.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-                  <div className="rounded-xl bg-stone-100 p-3 text-stone-500">
-                    <Search className="size-5" />
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-stone-700">没有匹配的账户</p>
-                    <p className="text-sm text-stone-500">调整筛选条件或搜索关键字后重试。</p>
-                  </div>
-                </div>
-              ) : null}
             </div>
 
+            {!isLoading && currentRows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+                <div className="rounded-xl bg-stone-100 p-3 text-stone-500">
+                  <Search className="size-5" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-stone-700">没有匹配的账户</p>
+                  <p className="text-sm text-stone-500">调整筛选条件或搜索关键字后重试。</p>
+                </div>
+              </div>
+            ) : null}
+
             <div className="border-t border-stone-100 px-4 py-4">
-              <div className="flex items-center justify-center gap-3 overflow-x-auto whitespace-nowrap">
-                <div className="shrink-0 text-sm text-stone-500">
-                显示第 {filteredAccounts.length === 0 ? 0 : startIndex + 1} -{" "}
-                {Math.min(startIndex + Number(pageSize), filteredAccounts.length)} 条，共{" "}
-                {filteredAccounts.length} 条
+              <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center sm:overflow-x-auto sm:whitespace-nowrap">
+                <div className="shrink-0 text-center text-sm text-stone-500 sm:text-left">
+                  显示第 {filteredAccounts.length === 0 ? 0 : startIndex + 1} -{" "}
+                  {Math.min(startIndex + Number(pageSize), filteredAccounts.length)} 条，共{" "}
+                  {filteredAccounts.length} 条
                 </div>
 
-                <span className="shrink-0 text-sm leading-none text-stone-500">
+                <span className="shrink-0 text-center text-sm leading-none text-stone-500 sm:text-left">
                   {safePage} / {pageCount} 页
                 </span>
                 <Select
@@ -811,7 +911,7 @@ export default function AccountsPage() {
                     setPage(1);
                   }}
                 >
-                  <SelectTrigger className="h-10 w-[108px] shrink-0 rounded-lg border-stone-200 bg-white text-sm leading-none">
+                  <SelectTrigger className="h-10 w-full shrink-0 rounded-lg border-stone-200 bg-white text-sm leading-none sm:w-[108px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -821,45 +921,47 @@ export default function AccountsPage() {
                     <SelectItem value="100">100 / 页</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="size-10 shrink-0 rounded-lg border-stone-200 bg-white"
-                  disabled={safePage <= 1}
-                  onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                >
-                  <ChevronLeft className="size-4" />
-                </Button>
-                {paginationItems.map((item, index) =>
-                  item === "..." ? (
-                    <span key={`ellipsis-${index}`} className="px-1 text-sm text-stone-400">
-                      ...
-                    </span>
-                  ) : (
-                    <Button
-                      key={item}
-                      variant={item === safePage ? "default" : "outline"}
-                      className={cn(
-                        "h-10 min-w-10 shrink-0 rounded-lg px-3",
-                        item === safePage
-                          ? "bg-stone-950 text-white hover:bg-stone-800"
-                          : "border-stone-200 bg-white text-stone-700",
-                      )}
-                      onClick={() => setPage(item)}
-                    >
-                      {item}
-                    </Button>
-                  ),
-                )}
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="size-10 shrink-0 rounded-lg border-stone-200 bg-white"
-                  disabled={safePage >= pageCount}
-                  onClick={() => setPage((prev) => Math.min(pageCount, prev + 1))}
-                >
-                  <ChevronRight className="size-4" />
-                </Button>
+                <div className="flex items-center justify-center gap-3">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-10 shrink-0 rounded-lg border-stone-200 bg-white"
+                    disabled={safePage <= 1}
+                    onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                  {paginationItems.map((item, index) =>
+                    item === "..." ? (
+                      <span key={`ellipsis-${index}`} className="hidden px-1 text-sm text-stone-400 sm:inline">
+                        ...
+                      </span>
+                    ) : (
+                      <Button
+                        key={item}
+                        variant={item === safePage ? "default" : "outline"}
+                        className={cn(
+                          "hidden h-10 min-w-10 shrink-0 rounded-lg px-3 sm:inline-flex",
+                          item === safePage
+                            ? "bg-stone-950 text-white hover:bg-stone-800"
+                            : "border-stone-200 bg-white text-stone-700",
+                        )}
+                        onClick={() => setPage(item)}
+                      >
+                        {item}
+                      </Button>
+                    ),
+                  )}
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-10 shrink-0 rounded-lg border-stone-200 bg-white"
+                    disabled={safePage >= pageCount}
+                    onClick={() => setPage((prev) => Math.min(pageCount, prev + 1))}
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           </CardContent>

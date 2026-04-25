@@ -28,7 +28,7 @@ from services.sub2api_service import (
 )
 from services.image_service import ImageGenerationError
 from services.system_settings import system_settings_service
-from services.utils import SUPPORTED_IMAGE_MODELS, parse_image_count
+from services.utils import SUPPORTED_IMAGE_MODELS, apply_image_size_prompt, parse_image_count
 from services.version import get_app_version
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -50,6 +50,7 @@ class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     model: str = "auto"
     n: int = Field(default=1, ge=1, le=4)
+    size: str | None = None
     response_format: str = "b64_json"
     history_disabled: bool = True
 
@@ -823,10 +824,11 @@ def create_app() -> FastAPI:
             auth_service.reserve_images_for_identity(identity, reserved_count)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+        prompt = apply_image_size_prompt(body.prompt, body.size)
         try:
             result = await run_in_threadpool(
                 chatgpt_service.generate_with_pool,
-                body.prompt,
+                prompt,
                 body.model,
                 body.n,
                 response_format=normalized_response_format,
@@ -850,6 +852,7 @@ def create_app() -> FastAPI:
             prompt: str = Form(...),
             model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
+            size: str | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
     ):
         identity = require_session(request, authorization)
@@ -870,10 +873,11 @@ def create_app() -> FastAPI:
             auth_service.reserve_images_for_identity(identity, n)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+        normalized_prompt = apply_image_size_prompt(prompt, size)
         try:
             result = await run_in_threadpool(
                 chatgpt_service.edit_with_pool,
-                prompt,
+                normalized_prompt,
                 images,
                 model,
                 n,

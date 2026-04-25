@@ -49,12 +49,12 @@ export function ProxySettingsCard() {
   return (
     <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
       <CardContent className="space-y-6 p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
               <Link2 className="size-5 text-stone-600" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold tracking-tight">全局代理</h2>
               <p className="text-sm text-stone-500">为系统中的出站请求配置统一代理，保存后会立即生效。</p>
             </div>
@@ -100,10 +100,10 @@ export function ProxySettingsCard() {
               </div>
             ) : null}
 
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button
                 variant="outline"
-                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700"
+                className="h-10 w-full rounded-xl border-stone-200 bg-white px-5 text-stone-700 sm:w-auto"
                 onClick={() => void handleTest()}
                 disabled={isTesting || isLoadingConfig}
               >
@@ -111,7 +111,7 @@ export function ProxySettingsCard() {
                 测试代理
               </Button>
               <Button
-                className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+                className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
                 onClick={() => void saveConfig()}
                 disabled={isSavingConfig}
               >

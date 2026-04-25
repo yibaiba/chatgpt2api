@@ -1,12 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { History, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { getCachedOrSyncAuthSession, syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 import type { AuthSession, ImageHistoryPersistenceMode, UserRole } from "@/lib/auth-types";
 import {
@@ -16,7 +24,12 @@ import {
   type Account,
   type ImageModel,
 } from "@/lib/api";
-import { applyAspectRatioPrompt, type ImageAspectRatio, type ImageOutputQuality } from "@/lib/image-options";
+import {
+  applyAspectRatioPrompt,
+  isImageAspectRatio,
+  type ImageAspectRatio,
+  type ImageOutputQuality,
+} from "@/lib/image-options";
 import { upscaleGeneratedImage } from "@/lib/image-upscale";
 import {
   buildBrowserImageHistoryStorageKey,
@@ -39,6 +52,7 @@ import {
 
 const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
+const IMAGE_ASPECT_RATIO_STORAGE_KEY = "chatgpt2api:image_last_aspect_ratio";
 const activeConversationQueueIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
@@ -193,6 +207,7 @@ export default function ImagePage() {
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
   const [viewerSession, setViewerSession] = useState<AuthSession | null>(null);
@@ -229,6 +244,23 @@ export default function ImagePage() {
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const storedAspectRatio = window.localStorage.getItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
+    if (isImageAspectRatio(storedAspectRatio)) {
+      setImageAspectRatio(storedAspectRatio);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(IMAGE_ASPECT_RATIO_STORAGE_KEY, imageAspectRatio);
+  }, [imageAspectRatio]);
 
   useEffect(() => {
     if (!isHistoryModeReady) {
@@ -889,19 +921,39 @@ export default function ImagePage() {
   return (
     <>
       <section className="mx-auto grid h-[calc(100vh-5rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <ImageSidebar
-          conversations={conversations}
-          showConversationOwner={showConversationOwner}
-          isLoadingHistory={isLoadingHistory}
-          selectedConversationId={selectedConversationId}
-          onCreateDraft={handleCreateDraft}
-          onClearHistory={handleClearHistory}
-          onSelectConversation={setSelectedConversationId}
-          onDeleteConversation={handleDeleteConversation}
-          formatConversationTime={formatConversationTime}
-        />
+        <div className="hidden min-h-0 lg:block">
+          <ImageSidebar
+            conversations={conversations}
+            showConversationOwner={showConversationOwner}
+            isLoadingHistory={isLoadingHistory}
+            selectedConversationId={selectedConversationId}
+            onCreateDraft={handleCreateDraft}
+            onClearHistory={handleClearHistory}
+            onSelectConversation={setSelectedConversationId}
+            onDeleteConversation={handleDeleteConversation}
+            formatConversationTime={formatConversationTime}
+          />
+        </div>
 
-        <div className="flex min-h-0 flex-col gap-4">
+        <div className="flex min-h-0 flex-col gap-3 sm:gap-4">
+          <div className="flex items-center justify-between gap-3 lg:hidden">
+            <Button
+              variant="outline"
+              className="h-10 flex-1 rounded-2xl border-stone-200 bg-white/85 text-stone-700 shadow-sm"
+              onClick={() => setIsHistoryOpen(true)}
+            >
+              <History className="size-4" />
+              历史记录 ({conversations.length})
+            </Button>
+            <Button
+              className="h-10 rounded-2xl bg-stone-950 px-3 text-white shadow-sm hover:bg-stone-800"
+              onClick={handleCreateDraft}
+            >
+              <Plus className="size-4" />
+              新建
+            </Button>
+          </div>
+
           <div
             ref={resultsViewportRef}
             className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4"
@@ -941,6 +993,40 @@ export default function ImagePage() {
           />
         </div>
       </section>
+
+      <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+        <DialogContent className="flex h-[80vh] w-[92vw] max-w-[420px] flex-col overflow-hidden rounded-[32px] border-stone-200 bg-white p-0 shadow-2xl">
+          <DialogHeader className="px-6 pt-6 pb-2">
+            <DialogTitle className="flex items-center gap-2 text-lg font-bold">
+              <History className="size-5" />
+              历史记录
+            </DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8">
+            <ImageSidebar
+              conversations={conversations}
+              className="border-r-0 pr-0"
+              showConversationOwner={showConversationOwner}
+              isLoadingHistory={isLoadingHistory}
+              selectedConversationId={selectedConversationId}
+              onCreateDraft={() => {
+                handleCreateDraft();
+                setIsHistoryOpen(false);
+              }}
+              onClearHistory={async () => {
+                await handleClearHistory();
+                setIsHistoryOpen(false);
+              }}
+              onSelectConversation={(id) => {
+                setSelectedConversationId(id);
+                setIsHistoryOpen(false);
+              }}
+              onDeleteConversation={handleDeleteConversation}
+              formatConversationTime={formatConversationTime}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ImageLightbox
         images={lightboxImages}

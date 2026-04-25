@@ -1027,9 +1027,17 @@ def _canonicalize_file_id(file_id: str) -> str:
     return value[4:] if value.startswith("sed:") else value
 
 
+def _is_invalid_output_file_id(file_id: str) -> bool:
+    return _canonicalize_file_id(file_id).strip().lower() == "file_upload"
+
+
 def _filter_output_file_ids(file_ids: list[str], input_file_ids: set[str]) -> list[str]:
     canonical_input_ids = {_canonicalize_file_id(file_id) for file_id in input_file_ids}
-    return [file_id for file_id in file_ids if _canonicalize_file_id(file_id) not in canonical_input_ids]
+    return [
+        file_id
+        for file_id in file_ids
+        if not _is_invalid_output_file_id(file_id) and _canonicalize_file_id(file_id) not in canonical_input_ids
+    ]
 
 
 def _collect_edit_output(
@@ -1353,7 +1361,7 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
             parsed = _parse_sse(response)
 
         actual_conversation_id = parsed.get("conversation_id") or ""
-        file_ids = parsed.get("file_ids") or []
+        file_ids = [file_id for file_id in (parsed.get("file_ids") or []) if not _is_invalid_output_file_id(file_id)]
         response_text = str(parsed.get("text") or "").strip()
         if actual_conversation_id and not file_ids:
             file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)

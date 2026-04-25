@@ -40,7 +40,7 @@ export function ConfigCard() {
   return (
     <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
       <CardContent className="space-y-6 p-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
             <h2 className="text-lg font-semibold tracking-tight">系统配置</h2>
             <p className="text-sm text-stone-500">修改后请务必点击保存按钮，否则配置不会生效。</p>
@@ -152,7 +152,7 @@ export function ConfigCard() {
 
         <div className="flex justify-end">
           <Button
-            className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+            className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
             onClick={() => void saveConfig()}
             disabled={isSavingConfig}
           >

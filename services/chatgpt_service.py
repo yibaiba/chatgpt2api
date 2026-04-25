@@ -18,26 +18,22 @@ from services.utils import (
 )
 
 
-def _extract_response_image(input_value: object) -> tuple[bytes, str] | None:
+def _extract_response_images(input_value: object) -> list[tuple[bytes, str]]:
     if isinstance(input_value, dict):
         return extract_image_from_message_content(input_value.get("content"))
     if not isinstance(input_value, list):
-        return None
+        return []
+    if not any(isinstance(item, dict) and "role" in item for item in input_value):
+        return extract_image_from_message_content(input_value)
     for item in reversed(input_value):
-        if isinstance(item, dict):
-            if str(item.get("type") or "").strip() == "input_image":
-                import base64 as b64
-                image_url = str(item.get("image_url") or "")
-                if image_url.startswith("data:"):
-                    header, _, data = image_url.partition(",")
-                    mime = header.split(";")[0].removeprefix("data:")
-                    return b64.b64decode(data), mime or "image/png"
-            content = item.get("content")
-            if content:
-                result = extract_image_from_message_content(content)
-                if result:
-                    return result
-    return None
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("role") or "").strip().lower() != "user":
+            continue
+        images = extract_image_from_message_content(item.get("content"))
+        if images:
+            return images
+    return []
 
 
 class ChatGPTService:
@@ -194,11 +190,11 @@ class ChatGPTService:
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "prompt is required"})
 
-        image_info = extract_chat_image(body)
+        image_infos = extract_chat_image(body)
         try:
-            if image_info:
-                image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], model, n)
+            if image_infos:
+                images = [(data, f"image_{idx}.png", mime_type) for idx, (data, mime_type) in enumerate(image_infos, start=1)]
+                image_result = self.edit_with_pool(prompt, images, model, n)
             else:
                 image_result = self.generate_with_pool(prompt, model, n)
         except ImageGenerationError as exc:
@@ -220,12 +216,12 @@ class ChatGPTService:
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "input text is required"})
 
-        image_info = _extract_response_image(body.get("input"))
+        image_infos = _extract_response_images(body.get("input"))
         model = str(body.get("model") or "gpt-5").strip() or "gpt-5"
         try:
-            if image_info:
-                image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], "gpt-image-2", 1)
+            if image_infos:
+                images = [(data, f"image_{idx}.png", mime_type) for idx, (data, mime_type) in enumerate(image_infos, start=1)]
+                image_result = self.edit_with_pool(prompt, images, "gpt-image-2", 1)
             else:
                 image_result = self.generate_with_pool(prompt, "gpt-image-2", 1)
         except ImageGenerationError as exc:

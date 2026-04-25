@@ -276,6 +276,7 @@ export async function deleteProxyEntry(proxyId: string) {
 export async function generateImage(
   prompt: string,
   model: ImageModel = "gpt-image-2",
+  size?: string,
 ) {
   return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
     "/v1/images/generations",
@@ -284,6 +285,7 @@ export async function generateImage(
       body: {
         prompt,
         model,
+        ...(size ? { size } : {}),
         n: 1,
         response_format: "b64_json",
       },
@@ -295,6 +297,7 @@ export async function editImage(
   files: File | File[],
   prompt: string,
   model: ImageModel = "gpt-image-2",
+  size?: string,
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -304,6 +307,9 @@ export async function editImage(
   });
   formData.append("prompt", prompt);
   formData.append("model", model);
+  if (size) {
+    formData.append("size", size);
+  }
   formData.append("n", "1");
 
   return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(

@@ -38,15 +38,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="grid min-h-[calc(100vh-1rem)] w-full place-items-center px-4 py-6">
+    <div className="grid min-h-[calc(100dvh-1rem)] w-full items-start px-3 py-4 sm:place-items-center sm:px-4 sm:py-6">
       <Card className="w-full max-w-[505px] rounded-[30px] border-white/80 bg-white/95 shadow-[0_28px_90px_rgba(28,25,23,0.10)]">
-        <CardContent className="space-y-7 p-6 sm:p-8">
+        <CardContent className="space-y-6 p-5 sm:space-y-7 sm:p-8">
           <div className="space-y-4 text-center">
-            <div className="mx-auto inline-flex size-14 items-center justify-center rounded-[18px] bg-stone-950 text-white shadow-sm">
+            <div className="mx-auto inline-flex size-12 items-center justify-center rounded-[18px] bg-stone-950 text-white shadow-sm sm:size-14">
               <LockKeyhole className="size-5" />
             </div>
             <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight text-stone-950">欢迎回来</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-stone-950 sm:text-3xl">欢迎回来</h1>
               <p className="text-sm leading-6 text-stone-500">输入密钥后会根据权限进入对应页面。</p>
             </div>
           </div>

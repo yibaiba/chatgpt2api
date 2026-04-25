@@ -32,7 +32,7 @@ export function CPAPoolDialog() {
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-      <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+      <DialogContent showCloseButton={false} className="max-w-[92vw] rounded-2xl p-5 sm:max-w-md sm:p-6">
         <DialogHeader className="gap-2">
           <DialogTitle>{editingPool ? "编辑连接" : "添加连接"}</DialogTitle>
           <DialogDescription className="text-sm leading-6">
@@ -84,17 +84,17 @@ export function CPAPoolDialog() {
             </div>
           </div>
         </div>
-        <DialogFooter className="pt-2">
+        <DialogFooter className="flex-col-reverse gap-2 pt-2 sm:flex-row">
           <Button
             variant="secondary"
-            className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+            className="h-10 w-full rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200 sm:w-auto"
             onClick={() => setDialogOpen(false)}
             disabled={isSavingPool}
           >
             取消
           </Button>
           <Button
-            className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+            className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
             onClick={() => void savePool()}
             disabled={isSavingPool}
           >

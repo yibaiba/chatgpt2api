@@ -58,12 +58,12 @@ export function TopNav() {
       : [{ href: "/image", label: "画图" }];
 
   return (
-    <header>
-      <div className="flex h-12 items-start justify-between pt-1">
-        <div className="flex flex-1 items-center gap-3">
+    <header className="border-b border-stone-100/50 bg-white/80 backdrop-blur-md">
+      <div className="flex h-12 items-center justify-between gap-3 px-3 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Link
             href="/image"
-            className="py-2 text-[15px] font-semibold tracking-tight text-stone-950 transition hover:text-stone-700"
+            className="shrink-0 py-1 text-[14px] font-bold tracking-tight text-stone-950 transition hover:text-stone-700 sm:text-[15px]"
           >
             chatgpt2api
           </Link>
@@ -71,14 +71,14 @@ export function TopNav() {
             href="https://github.com/basketikun/chatgpt2api"
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 py-2 text-sm text-stone-400 transition hover:text-stone-700"
+            className="inline-flex shrink-0 items-center gap-1.5 py-1 text-sm text-stone-400 transition hover:text-stone-700"
             aria-label="GitHub repository"
           >
             <Github className="size-4" />
-            <span>GitHub</span>
+            <span className="hidden md:inline">GitHub</span>
           </a>
         </div>
-        <div className="flex justify-center gap-8">
+        <div className="flex min-w-0 flex-1 justify-center gap-3 sm:gap-8">
           {navItems.map((item) => {
             const active = pathname === item.href;
             return (
@@ -86,7 +86,7 @@ export function TopNav() {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "relative py-2 text-[15px] font-medium transition",
+                  "relative shrink-0 py-1 text-[13px] font-medium transition sm:text-[15px]",
                   active ? "font-semibold text-stone-950" : "text-stone-500 hover:text-stone-900",
                 )}
               >
@@ -96,18 +96,18 @@ export function TopNav() {
             );
           })}
         </div>
-        <div className="flex flex-1 items-center justify-end gap-3">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2 sm:gap-3">
           {session ? (
-            <span className="rounded-md bg-stone-100 px-2 py-1 text-[11px] font-medium text-stone-500">
+            <span className="hidden truncate rounded-md bg-stone-100 px-2 py-1 text-[11px] font-medium text-stone-500 sm:inline-block">
               {session.role === "admin" ? "管理员" : session.name}
             </span>
           ) : null}
-          <span className="rounded-md bg-stone-100 px-2 py-1 text-[11px] font-medium text-stone-500">
+          <span className="hidden rounded-md bg-stone-100 px-2 py-1 text-[11px] font-medium text-stone-500 sm:inline-block">
             v{webConfig.appVersion}
           </span>
           <button
             type="button"
-            className="py-2 text-sm text-stone-400 transition hover:text-stone-700"
+            className="shrink-0 py-1 text-sm text-stone-400 transition hover:text-stone-700"
             onClick={() => void handleLogout()}
           >
             退出

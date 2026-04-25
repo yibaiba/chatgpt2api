@@ -104,12 +104,12 @@ export function ProxySettingsCard() {
   return (
     <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
       <CardContent className="space-y-6 p-6">
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
               <Wifi className="size-5 text-stone-600" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold tracking-tight">上游代理配置</h2>
               <p className="text-sm text-stone-500">
                 为 chatgpt.com 的请求配置出网代理，适合国内服务器部署；Sub2API / CPA 请求不受影响。
@@ -173,9 +173,9 @@ export function ProxySettingsCard() {
               </div>
             ) : null}
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
               <Button
-                className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+                className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
                 onClick={() => void handleSave()}
                 disabled={isSaving || !dirty}
               >
@@ -184,7 +184,7 @@ export function ProxySettingsCard() {
               </Button>
               <Button
                 variant="outline"
-                className="h-10 rounded-xl border-stone-200 bg-white px-5 text-stone-700"
+                className="h-10 w-full rounded-xl border-stone-200 bg-white px-5 text-stone-700 sm:w-auto"
                 onClick={() => void handleTest()}
                 disabled={isTesting}
               >

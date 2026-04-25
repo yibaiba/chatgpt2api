@@ -49,6 +49,7 @@ class ConfigLoadingTests(unittest.TestCase):
 
                 self.assertEqual(settings.auth_key, os_auth_key)
                 self.assertEqual(settings.refresh_account_interval_minute, 5)
+                self.assertEqual(settings.remote_account_sync_interval_minute, 60)
             finally:
                 module.BASE_DIR = old_base_dir
                 module.DATA_DIR = old_data_dir
@@ -76,6 +77,33 @@ class ConfigLoadingTests(unittest.TestCase):
                 self.assertTrue(store.verify_admin_auth_key("plain-secret"))
                 self.assertEqual(store.get()["auth-key"], "")
                 self.assertTrue(store.get()["auth_key_configured"])
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
+    def test_config_store_normalizes_remote_sync_interval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(
+                json.dumps({"auth-key": "plain-secret", "remote_account_sync_interval_minute": 0}),
+                encoding="utf-8",
+            )
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+
+                self.assertEqual(1, store.remote_account_sync_interval_minute)
+
+                data = store.update({"remote_account_sync_interval_minute": "15"})
+
+                self.assertEqual(15, data["remote_account_sync_interval_minute"])
+                self.assertEqual(15, store.remote_account_sync_interval_minute)
             finally:
                 if old_env_auth_key is None:
                     module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)

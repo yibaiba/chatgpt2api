@@ -44,6 +44,27 @@ class _FakeChatGPTService:
             "data": [{"b64_json": "ZmFrZQ==", "revised_prompt": prompt}],
         }
 
+    def generate_with_pool(
+        self,
+        prompt: str,
+        model: str,
+        n: int,
+        *,
+        response_format: str = "b64_json",
+        base_url: str | None = None,
+    ):
+        type(self).last_call = {
+            "prompt": prompt,
+            "model": model,
+            "n": n,
+            "response_format": response_format,
+            "base_url": base_url,
+        }
+        return {
+            "created": 123,
+            "data": [{"b64_json": "ZmFrZQ==", "revised_prompt": prompt}],
+        }
+
 
 class _FakeConfig:
     def __init__(self, images_dir: Path) -> None:
@@ -157,6 +178,35 @@ class ImageEditsApiTests(unittest.TestCase):
         self.assertEqual(
             [item[1] for item in _FakeChatGPTService.last_call["images"]],
             ["first.png", "second.png"],
+        )
+
+    def test_edits_apply_optional_size_to_prompt(self) -> None:
+        response = self.client.post(
+            "/v1/images/edits",
+            headers=self.auth_header,
+            data={"prompt": "test prompt", "model": "gpt-image-1", "n": "1", "size": "16:9"},
+            files=[("image", ("first.png", b"first", "image/png"))],
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(_FakeChatGPTService.last_call)
+        self.assertEqual(
+            "Make the aspect ratio 16:9 , test prompt",
+            _FakeChatGPTService.last_call["prompt"],
+        )
+
+    def test_generations_apply_optional_size_to_prompt(self) -> None:
+        response = self.client.post(
+            "/v1/images/generations",
+            headers=self.auth_header,
+            json={"prompt": "test prompt", "model": "gpt-image-1", "n": 1, "size": "3:4"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(_FakeChatGPTService.last_call)
+        self.assertEqual(
+            "Make the aspect ratio 3:4 , test prompt",
+            _FakeChatGPTService.last_call["prompt"],
         )
 
 

@@ -544,17 +544,17 @@ export default function SettingsPage() {
 
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-center gap-3">
                 <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
                   <Unplug className="size-5 text-stone-600" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2 className="text-lg font-semibold tracking-tight">SOCKS5 代理池</h2>
                   <p className="text-sm text-stone-500">仅作用于图片生成/编辑与账号刷新，请求会按轮询策略切换代理。</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {proxyPoolSettings.enabled ? (
                   <>
                     <Badge variant="success" className="rounded-md px-2.5 py-1">
@@ -565,7 +565,7 @@ export default function SettingsPage() {
                 ) : (
                   <Badge className="rounded-md px-2.5 py-1">未启用</Badge>
                 )}
-                <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openAddProxyDialog}>
+                <Button className="h-9 w-full rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800 sm:w-auto" onClick={openAddProxyDialog}>
                   <Plus className="size-4" />
                   添加代理
                 </Button>
@@ -597,12 +597,12 @@ export default function SettingsPage() {
                           : { variant: "danger" as const, label: "校验失败" };
                     return (
                       <div key={proxy.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="min-w-0">
                             <div className="text-sm font-medium text-stone-800">{proxy.name || "SOCKS5 代理"}</div>
                             <div className="truncate font-mono text-xs text-stone-400">{maskProxyUrl(proxy.proxy_url)}</div>
                           </div>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center justify-end gap-1">
                             <button
                               type="button"
                               className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
@@ -660,19 +660,19 @@ export default function SettingsPage() {
 
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
-            <div className="flex items-start justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-center gap-3">
                 <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
                   <Shield className="size-5 text-stone-600" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2 className="text-lg font-semibold tracking-tight">普通用户权限</h2>
                   <p className="text-sm text-stone-500">普通用户只可使用画图页，不能进入号池管理和设置。</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {authUsers.length > 0 ? <Badge className="rounded-md px-2.5 py-1">{authUsers.length} 个普通用户</Badge> : null}
-                <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openAddUserDialog}>
+                <Button className="h-9 w-full rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800 sm:w-auto" onClick={openAddUserDialog}>
                   <Plus className="size-4" />
                   添加普通用户
                 </Button>
@@ -697,14 +697,14 @@ export default function SettingsPage() {
                   const isDeletingUser = deletingUserId === user.id;
                   return (
                     <div key={user.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-stone-800">{user.name || "普通用户"}</div>
                           <div className="truncate text-xs text-stone-400">
                             {user.auth_key_set ? "密钥已设置（仅创建/重置时可见）" : "尚未设置密钥"}
                           </div>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center justify-end gap-1">
                           <button
                             type="button"
                             className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
@@ -753,19 +753,19 @@ export default function SettingsPage() {
 
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
-            <div className="flex items-start justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-center gap-3">
                 <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
                   <ServerCog className="size-5 text-stone-600" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2 className="text-lg font-semibold tracking-tight">CPA 连接管理</h2>
                   <p className="text-sm text-stone-500">先配置连接，再按需手动导入或开启自动同步远程账号到本地号池。</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {pools.length > 0 ? <Badge className="rounded-md px-2.5 py-1">{pools.length} 个连接</Badge> : null}
-                <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openAddDialog}>
+                <Button className="h-9 w-full rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800 sm:w-auto" onClick={openAddDialog}>
                   <Plus className="size-4" />
                   添加连接
                 </Button>
@@ -791,12 +791,12 @@ export default function SettingsPage() {
                   const importJob = pool.import_job ?? null;
                   return (
                     <div key={pool.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-stone-800">{pool.name || pool.base_url}</div>
                           <div className="truncate text-xs text-stone-400">{pool.base_url}</div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center justify-end gap-2">
                           {pool.auto_sync_enabled ? (
                             <Badge variant="success" className="rounded-md px-2.5 py-1">
                               自动同步
@@ -842,7 +842,7 @@ export default function SettingsPage() {
                             const progress = importJob.total > 0 ? Math.round((importJob.completed / importJob.total) * 100) : 0;
                             return (
                               <div className="rounded-lg border border-stone-200 bg-white px-3 py-3">
-                                <div className="flex items-center justify-between gap-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                   <div className="min-w-0">
                                     <div className="text-sm font-medium text-stone-700">
                                       状态 {importJob.status}，已处理 {importJob.completed}/{importJob.total}
@@ -895,7 +895,7 @@ export default function SettingsPage() {
       </section>
 
       <Dialog open={proxyDialogOpen} onOpenChange={setProxyDialogOpen}>
-        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+        <DialogContent showCloseButton={false} className="max-w-[92vw] rounded-2xl p-5 sm:max-w-md sm:p-6">
           <DialogHeader className="gap-2">
             <DialogTitle>{editingProxy ? "编辑代理" : "添加代理"}</DialogTitle>
             <DialogDescription className="text-sm leading-6">
@@ -925,17 +925,17 @@ export default function SettingsPage() {
               />
             </div>
           </div>
-          <DialogFooter className="pt-2">
+          <DialogFooter className="flex-col-reverse gap-2 pt-2 sm:flex-row">
             <Button
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              className="h-10 w-full rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200 sm:w-auto"
               onClick={() => setProxyDialogOpen(false)}
               disabled={isSavingProxy}
             >
               取消
             </Button>
             <Button
-              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
               onClick={() => void handleSaveProxy()}
               disabled={isSavingProxy}
             >
@@ -947,7 +947,7 @@ export default function SettingsPage() {
       </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+        <DialogContent showCloseButton={false} className="max-w-[92vw] rounded-2xl p-5 sm:max-w-md sm:p-6">
           <DialogHeader className="gap-2">
             <DialogTitle>{editingPool ? "编辑连接" : "添加连接"}</DialogTitle>
             <DialogDescription className="text-sm leading-6">
@@ -1014,17 +1014,17 @@ export default function SettingsPage() {
               </label>
             </div>
           </div>
-          <DialogFooter className="pt-2">
+          <DialogFooter className="flex-col-reverse gap-2 pt-2 sm:flex-row">
             <Button
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              className="h-10 w-full rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200 sm:w-auto"
               onClick={() => setDialogOpen(false)}
               disabled={isSaving}
             >
               取消
             </Button>
             <Button
-              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
               onClick={() => void handleSave()}
               disabled={isSaving}
             >
@@ -1036,7 +1036,7 @@ export default function SettingsPage() {
       </Dialog>
 
       <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
-        <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+        <DialogContent showCloseButton={false} className="max-w-[92vw] rounded-2xl p-5 sm:max-w-md sm:p-6">
           <DialogHeader className="gap-2">
             <DialogTitle>{editingUser ? "编辑普通用户" : "添加普通用户"}</DialogTitle>
             <DialogDescription className="text-sm leading-6">
@@ -1080,17 +1080,17 @@ export default function SettingsPage() {
               />
             </div>
           </div>
-          <DialogFooter className="pt-2">
+          <DialogFooter className="flex-col-reverse gap-2 pt-2 sm:flex-row">
             <Button
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              className="h-10 w-full rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200 sm:w-auto"
               onClick={() => setUserDialogOpen(false)}
               disabled={isSavingUser}
             >
               取消
             </Button>
             <Button
-              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
               onClick={() => void handleSaveUser()}
               disabled={isSavingUser}
             >
@@ -1102,7 +1102,7 @@ export default function SettingsPage() {
       </Dialog>
 
       <Dialog open={browserOpen} onOpenChange={setBrowserOpen}>
-        <DialogContent showCloseButton={false} className="max-h-[90vh] max-w-5xl rounded-2xl p-6">
+        <DialogContent showCloseButton={false} className="max-h-[90vh] w-[96vw] max-w-5xl rounded-2xl p-4 sm:p-6">
           <DialogHeader className="gap-2">
             <DialogTitle>选择要导入的账号</DialogTitle>
             <DialogDescription className="text-sm leading-6">
@@ -1111,7 +1111,7 @@ export default function SettingsPage() {
           </DialogHeader>
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="relative min-w-[260px]">
+            <div className="relative min-w-0 flex-1 lg:min-w-[260px]">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" />
               <Input
                 value={fileQuery}
@@ -1123,7 +1123,7 @@ export default function SettingsPage() {
                 className="h-10 rounded-xl border-stone-200 bg-white pl-10"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Select
                 value={pageSize}
                 onValueChange={(value) => {
@@ -1131,7 +1131,7 @@ export default function SettingsPage() {
                   setFilePage(1);
                 }}
               >
-                <SelectTrigger className="h-10 w-[120px] rounded-xl border-stone-200 bg-white">
+                  <SelectTrigger className="h-10 w-full rounded-xl border-stone-200 bg-white sm:w-[120px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1142,24 +1142,24 @@ export default function SettingsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                className="h-10 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
-                onClick={() => handleToggleSelectAllFiltered(!allFilteredSelected)}
-              >
+                <Button
+                  variant="outline"
+                  className="h-10 w-full rounded-xl border-stone-200 bg-white px-4 text-stone-700 sm:w-auto"
+                  onClick={() => handleToggleSelectAllFiltered(!allFilteredSelected)}
+                >
                 {allFilteredSelected ? "取消全选" : "全选筛选结果"}
               </Button>
             </div>
           </div>
 
-          <div className="rounded-xl border border-stone-200">
-            <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3 text-sm text-stone-500">
-              <div className="flex items-center gap-3">
-                <Checkbox checked={allFilteredSelected} onCheckedChange={(checked) => handleToggleSelectAllFiltered(Boolean(checked))} />
-                <span>筛选结果 {filteredFiles.length} 个</span>
+            <div className="rounded-xl border border-stone-200">
+              <div className="flex flex-col gap-2 border-b border-stone-100 px-4 py-3 text-sm text-stone-500 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <Checkbox checked={allFilteredSelected} onCheckedChange={(checked) => handleToggleSelectAllFiltered(Boolean(checked))} />
+                  <span>筛选结果 {filteredFiles.length} 个</span>
+                </div>
+                <span>已选 {selectedNames.length} 个</span>
               </div>
-              <span>已选 {selectedNames.length} 个</span>
-            </div>
             <div className="max-h-[420px] overflow-auto">
               {pagedFiles.length === 0 ? (
                 <div className="flex items-center justify-center py-12 text-sm text-stone-400">没有匹配的远程账号</div>
@@ -1182,12 +1182,12 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between text-sm text-stone-500">
+          <div className="flex flex-col gap-3 text-sm text-stone-500 sm:flex-row sm:items-center sm:justify-between">
             <span>
               第 {filteredFiles.length === 0 ? 0 : (safeFilePage - 1) * currentPageSize + 1} -{" "}
               {Math.min(safeFilePage * currentPageSize, filteredFiles.length)} 条，共 {filteredFiles.length} 条
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between gap-2 sm:justify-start">
               <Button
                 variant="outline"
                 className="h-9 rounded-xl border-stone-200 bg-white px-3"
@@ -1210,17 +1210,17 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <DialogFooter className="pt-2">
+          <DialogFooter className="flex-col-reverse gap-2 pt-2 sm:flex-row">
             <Button
               variant="secondary"
-              className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+              className="h-10 w-full rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200 sm:w-auto"
               onClick={() => setBrowserOpen(false)}
               disabled={isStartingImport}
             >
               取消
             </Button>
             <Button
-              className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+              className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
               onClick={() => void handleStartImport()}
               disabled={isStartingImport || selectedNames.length === 0}
             >

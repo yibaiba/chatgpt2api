@@ -21,19 +21,19 @@ export function CPAPoolsCard() {
   return (
     <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
       <CardContent className="space-y-6 p-6">
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
               <ServerCog className="size-5 text-stone-600" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold tracking-tight">CPA 连接管理</h2>
               <p className="text-sm text-stone-500">先配置连接，再按需查询远程账号并选择导入到本地号池。</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             {pools.length > 0 ? <Badge className="rounded-md px-2.5 py-1">{pools.length} 个连接</Badge> : null}
-            <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={openAddDialog}>
+            <Button className="h-9 w-full rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800 sm:w-auto" onClick={openAddDialog}>
               <Plus className="size-4" />
               添加连接
             </Button>
@@ -63,12 +63,12 @@ export function CPAPoolsCard() {
 
               return (
                 <div key={pool.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-stone-800">{pool.name || pool.base_url}</div>
                       <div className="truncate text-xs text-stone-400">{pool.base_url}</div>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         type="button"
                         className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
@@ -114,7 +114,7 @@ export function CPAPoolsCard() {
                     <div className="space-y-2 rounded-xl bg-stone-50 px-3 py-3">
                       <div className="text-xs font-medium tracking-[0.16em] text-stone-400 uppercase">导入任务</div>
                       <div className="rounded-lg border border-stone-200 bg-white px-3 py-3">
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0">
                             <div className="text-sm font-medium text-stone-700">
                               状态 {importJob.status}，已处理 {importJob.completed}/{importJob.total}

@@ -21,12 +21,12 @@ export function BaseUrlCard() {
   return (
     <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
       <CardContent className="space-y-6 p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
               <Globe className="size-5 text-stone-600" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold tracking-tight">基础地址</h2>
               <p className="text-sm text-stone-500">设置 `CHATGPT2API_BASE_URL` 的本地配置值，保存后立即生效。</p>
             </div>
@@ -55,7 +55,7 @@ export function BaseUrlCard() {
 
             <div className="flex justify-end">
               <Button
-                className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+                className="h-10 w-full rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800 sm:w-auto"
                 onClick={() => void saveConfig()}
                 disabled={isSavingConfig}
               >
