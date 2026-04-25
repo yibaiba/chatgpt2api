@@ -613,6 +613,32 @@ export default function ImagePage() {
     [appendReferenceImages, handleImageModeChange],
   );
 
+  const handleReusePrompt = useCallback(
+    async (payload: { conversationId?: string; prompt: string }) => {
+      const nextPrompt = payload.prompt.trim();
+      if (!nextPrompt) {
+        toast.error("该轮提示词为空，无法填入输入框");
+        return;
+      }
+      if (payload.conversationId) {
+        setSelectedConversationId(payload.conversationId);
+      }
+      setImagePrompt(nextPrompt);
+      requestAnimationFrame(() => {
+        const element = textareaRef.current;
+        if (!element) {
+          return;
+        }
+        element.scrollIntoView({ behavior: "smooth", block: "center" });
+        element.focus();
+        const end = nextPrompt.length;
+        element.setSelectionRange(end, end);
+      });
+      toast.success("已填入当前输入框，可继续修改后发送");
+    },
+    [],
+  );
+
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
     if (images.length === 0) {
       return;
@@ -958,13 +984,14 @@ export default function ImagePage() {
             ref={resultsViewportRef}
             className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4"
           >
-            <ImageResults
-              selectedConversation={selectedConversation}
-              showConversationOwner={showConversationOwner}
-              onOpenLightbox={openLightbox}
-              onReuseAsReference={handleReuseAsReference}
-              formatConversationTime={formatConversationTime}
-            />
+          <ImageResults
+            selectedConversation={selectedConversation}
+            showConversationOwner={showConversationOwner}
+            onOpenLightbox={openLightbox}
+            onReuseAsReference={handleReuseAsReference}
+            onReusePrompt={handleReusePrompt}
+            formatConversationTime={formatConversationTime}
+          />
           </div>
 
           <ImageComposer

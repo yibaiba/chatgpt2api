@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock3, LoaderCircle, Sparkles } from "lucide-react";
+import { Clock3, CornerDownLeft, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { ImageGenerationRoute } from "@/lib/api";
@@ -17,6 +17,7 @@ type ImageResultsProps = {
   showConversationOwner?: boolean;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onReuseAsReference: (payload: { conversationId?: string; id?: string; dataUrl: string }) => void | Promise<void>;
+  onReusePrompt: (payload: { conversationId?: string; prompt: string }) => void | Promise<void>;
   formatConversationTime: (value: string) => string;
 };
 
@@ -25,6 +26,7 @@ export function ImageResults({
   showConversationOwner = false,
   onOpenLightbox,
   onReuseAsReference,
+  onReusePrompt,
   formatConversationTime,
 }: ImageResultsProps) {
   if (!selectedConversation) {
@@ -79,6 +81,22 @@ export function ImageResults({
                   <span>{formatConversationTime(turn.createdAt)}</span>
                 </div>
                 <div className="text-right">{turn.prompt}</div>
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="min-h-11 rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                    onClick={() =>
+                      void onReusePrompt({
+                        conversationId: selectedConversation.id,
+                        prompt: turn.prompt,
+                      })
+                    }
+                  >
+                    <CornerDownLeft className="size-4" />
+                    填入输入框
+                  </Button>
+                </div>
               </div>
             </div>
 
