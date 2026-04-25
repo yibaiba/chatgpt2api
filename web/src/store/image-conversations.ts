@@ -3,7 +3,7 @@
 import localforage from "localforage";
 
 import type { UserRole } from "@/lib/auth-types";
-import type { ImageModel } from "@/lib/api";
+import type { ImageGenerationRoute, ImageModel } from "@/lib/api";
 import {
   isImageAspectRatio,
   isImageOutputQuality,
@@ -27,6 +27,7 @@ export type StoredImage = {
   b64_json?: string;
   mime_type?: string;
   error?: string;
+  generation_route?: ImageGenerationRoute;
 };
 
 export type ImageTurn = {
@@ -66,18 +67,24 @@ const browserImageHistoryStorage = localforage.createInstance({
   storeName: "image_history",
 });
 
+function isImageGenerationRoute(value: unknown): value is ImageGenerationRoute {
+  return value === "regular" || value === "thinking" || value === "fallback";
+}
+
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const normalizedMimeType = image.mime_type || "image/png";
   if (image.status === "loading" || image.status === "error" || image.status === "success") {
     return {
       ...image,
       mime_type: image.b64_json ? normalizedMimeType : image.mime_type,
+      generation_route: isImageGenerationRoute(image.generation_route) ? image.generation_route : undefined,
     };
   }
   return {
     ...image,
     status: image.b64_json ? "success" : "loading",
     mime_type: image.b64_json ? normalizedMimeType : image.mime_type,
+    generation_route: isImageGenerationRoute(image.generation_route) ? image.generation_route : undefined,
   };
 }
 

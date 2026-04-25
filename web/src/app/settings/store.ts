@@ -45,6 +45,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
     auth_key_configured: Boolean(config.auth_key_configured),
     refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
+    remote_account_sync_interval_minute: Number(config.remote_account_sync_interval_minute || 60),
     refresh_account_batch_size: normalizeClampedInteger(config.refresh_account_batch_size, {
       fallback: 3,
       min: 1,
@@ -105,6 +106,7 @@ type SettingsStore = {
   saveConfig: () => Promise<void>;
   setAuthKey: (value: string) => void;
   setRefreshAccountIntervalMinute: (value: string) => void;
+  setRemoteAccountSyncIntervalMinute: (value: string) => void;
   setRefreshAccountBatchSize: (value: string) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
@@ -188,6 +190,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ...config,
         "auth-key": String(config["auth-key"] || "").trim(),
         refresh_account_interval_minute: Math.max(1, Number(config.refresh_account_interval_minute) || 1),
+        remote_account_sync_interval_minute: Math.max(1, Number(config.remote_account_sync_interval_minute) || 1),
         refresh_account_batch_size: normalizeClampedInteger(config.refresh_account_batch_size, {
           fallback: 3,
           min: 1,
@@ -232,6 +235,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           refresh_account_interval_minute: value,
+        },
+      };
+    });
+  },
+
+  setRemoteAccountSyncIntervalMinute: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          remote_account_sync_interval_minute: value,
         },
       };
     });

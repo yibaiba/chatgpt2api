@@ -28,7 +28,7 @@ The feature covers:
   - `mode: "generate" | "edit"`
   - `referenceImages: Array<{ name: string, type: string, dataUrl: string }>`
   - `count: number`
-  - `images: Array<{ id: string, status: "loading" | "success" | "error", b64_json?: string | null, error?: string | null }>`
+  - `images: Array<{ id: string, status: "loading" | "success" | "error", b64_json?: string | null, error?: string | null, generation_route?: "regular" | "thinking" | "fallback" | null }>`
   - `createdAt: string`
   - `updatedAt: string`
   - `status: "generating" | "success" | "error"`

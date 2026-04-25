@@ -17,6 +17,8 @@ from services.config import DATA_DIR
 
 
 CPA_CONFIG_FILE = DATA_DIR / "cpa_config.json"
+ACTIVE_IMPORT_JOB_STATUSES = {"pending", "running"}
+IMPORT_ALREADY_RUNNING_ERROR = "import job is already running"
 
 
 def _new_id() -> str:
@@ -25,6 +27,13 @@ def _new_id() -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on"}
 
 
 def _normalize_import_job(raw: object, *, fail_unfinished: bool) -> dict | None:
@@ -54,8 +63,15 @@ def _normalize_pool(raw: dict) -> dict:
         "name": str(raw.get("name") or "").strip(),
         "base_url": str(raw.get("base_url") or "").strip(),
         "secret_key": str(raw.get("secret_key") or "").strip(),
+        "auto_sync_enabled": _normalize_bool(raw.get("auto_sync_enabled")),
         "import_job": _normalize_import_job(raw.get("import_job"), fail_unfinished=True),
     }
+
+
+def _has_active_import_job(job: dict | None) -> bool:
+    if not isinstance(job, dict):
+        return False
+    return str(job.get("status") or "").strip() in ACTIVE_IMPORT_JOB_STATUSES
 
 
 def _management_headers(secret_key: str) -> dict[str, str]:
@@ -100,8 +116,16 @@ class CPAConfig:
                     return dict(pool)
         return None
 
-    def add_pool(self, name: str, base_url: str, secret_key: str) -> dict:
-        pool = _normalize_pool({"id": _new_id(), "name": name, "base_url": base_url, "secret_key": secret_key})
+    def add_pool(self, name: str, base_url: str, secret_key: str, *, auto_sync_enabled: bool = False) -> dict:
+        pool = _normalize_pool(
+            {
+                "id": _new_id(),
+                "name": name,
+                "base_url": base_url,
+                "secret_key": secret_key,
+                "auto_sync_enabled": auto_sync_enabled,
+            }
+        )
         with self._lock:
             self._pools.append(pool)
             self._save()
@@ -138,6 +162,21 @@ class CPAConfig:
                 self._save()
                 return dict(next_pool)
         return None
+
+    def claim_import_job(self, pool_id: str, import_job: dict) -> tuple[dict | None, bool]:
+        with self._lock:
+            for index, pool in enumerate(self._pools):
+                if pool["id"] != pool_id:
+                    continue
+                current = pool.get("import_job")
+                if _has_active_import_job(current if isinstance(current, dict) else None):
+                    return dict(pool), False
+                next_pool = dict(pool)
+                next_pool["import_job"] = _normalize_import_job(import_job, fail_unfinished=False)
+                self._pools[index] = next_pool
+                self._save()
+                return dict(next_pool), True
+        return None, False
 
     def get_import_job(self, pool_id: str) -> dict | None:
         with self._lock:
@@ -231,9 +270,11 @@ class CPAImportService:
             "failed": 0,
             "errors": [],
         }
-        saved_pool = self._config.set_import_job(pool_id, job)
+        saved_pool, claimed = self._config.claim_import_job(pool_id, job)
         if saved_pool is None:
             raise ValueError("pool not found")
+        if not claimed:
+            raise ValueError(IMPORT_ALREADY_RUNNING_ERROR)
 
         thread = threading.Thread(
             target=self._run_import,
@@ -243,6 +284,26 @@ class CPAImportService:
         )
         thread.start()
         return dict(saved_pool.get("import_job") or job)
+
+    def start_auto_import(self, pool: dict) -> dict | None:
+        pool_id = str(pool.get("id") or "").strip()
+        if not pool_id:
+            return None
+        current = self._config.get_import_job(pool_id) or {}
+        if _has_active_import_job(current if isinstance(current, dict) else None):
+            return None
+
+        remote_files = list_remote_files(pool)
+        names = list(dict.fromkeys(str(item.get("name") or "").strip() for item in remote_files if isinstance(item, dict)))
+        names = [name for name in names if name]
+        if not names:
+            return None
+        try:
+            return self.start_import(pool, names)
+        except ValueError as exc:
+            if str(exc) == IMPORT_ALREADY_RUNNING_ERROR:
+                return None
+            raise
 
     def _update_job(self, pool_id: str, **updates) -> dict | None:
         current = self._config.get_import_job(pool_id)

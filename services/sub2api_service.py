@@ -18,6 +18,8 @@ from services.config import DATA_DIR
 
 
 SUB2API_CONFIG_FILE = DATA_DIR / "sub2api_config.json"
+ACTIVE_IMPORT_JOB_STATUSES = {"pending", "running"}
+IMPORT_ALREADY_RUNNING_ERROR = "import job is already running"
 
 # Cached JWT per server to avoid re-login on every list/import call.
 # Token lifetime on sub2api defaults to 24h; we refresh 5 min before expiry.
@@ -34,6 +36,12 @@ def _now_iso() -> str:
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
+
+
+def _normalize_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return _clean(value).lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_import_job(raw: object, *, fail_unfinished: bool) -> dict | None:
@@ -66,8 +74,15 @@ def _normalize_server(raw: dict) -> dict:
         "password": _clean(raw.get("password")),
         "api_key": _clean(raw.get("api_key")),
         "group_id": _clean(raw.get("group_id")),
+        "auto_sync_enabled": _normalize_bool(raw.get("auto_sync_enabled")),
         "import_job": _normalize_import_job(raw.get("import_job"), fail_unfinished=True),
     }
+
+
+def _has_active_import_job(job: dict | None) -> bool:
+    if not isinstance(job, dict):
+        return False
+    return _clean(job.get("status")) in ACTIVE_IMPORT_JOB_STATUSES
 
 
 class Sub2APIConfig:
@@ -114,6 +129,7 @@ class Sub2APIConfig:
         password: str,
         api_key: str,
         group_id: str = "",
+        auto_sync_enabled: bool = False,
     ) -> dict:
         server = _normalize_server({
             "id": _new_id(),
@@ -123,6 +139,7 @@ class Sub2APIConfig:
             "password": password,
             "api_key": api_key,
             "group_id": group_id,
+            "auto_sync_enabled": auto_sync_enabled,
         })
         with self._lock:
             self._servers.append(server)
@@ -167,6 +184,21 @@ class Sub2APIConfig:
                 self._save()
                 return dict(next_server)
         return None
+
+    def claim_import_job(self, server_id: str, import_job: dict) -> tuple[dict | None, bool]:
+        with self._lock:
+            for index, server in enumerate(self._servers):
+                if server["id"] != server_id:
+                    continue
+                current = server.get("import_job")
+                if _has_active_import_job(current if isinstance(current, dict) else None):
+                    return dict(server), False
+                next_server = dict(server)
+                next_server["import_job"] = _normalize_import_job(import_job, fail_unfinished=False)
+                self._servers[index] = next_server
+                self._save()
+                return dict(next_server), True
+        return None, False
 
     def get_import_job(self, server_id: str) -> dict | None:
         with self._lock:
@@ -441,9 +473,11 @@ class Sub2APIImportService:
             "failed": 0,
             "errors": [],
         }
-        saved = self._config.set_import_job(server_id, job)
+        saved, claimed = self._config.claim_import_job(server_id, job)
         if saved is None:
             raise ValueError("server not found")
+        if not claimed:
+            raise ValueError(IMPORT_ALREADY_RUNNING_ERROR)
 
         thread = threading.Thread(
             target=self._run_import,
@@ -453,6 +487,28 @@ class Sub2APIImportService:
         )
         thread.start()
         return dict(saved.get("import_job") or job)
+
+    def start_auto_import(self, server: dict) -> dict | None:
+        server_id = _clean(server.get("id"))
+        if not server_id:
+            return None
+        current = self._config.get_import_job(server_id) or {}
+        if _has_active_import_job(current if isinstance(current, dict) else None):
+            return None
+
+        remote_accounts = list_remote_accounts(server)
+        account_ids = list(
+            dict.fromkeys(_clean(item.get("id")) for item in remote_accounts if isinstance(item, dict))
+        )
+        account_ids = [account_id for account_id in account_ids if account_id]
+        if not account_ids:
+            return None
+        try:
+            return self.start_import(server, account_ids)
+        except ValueError as exc:
+            if str(exc) == IMPORT_ALREADY_RUNNING_ERROR:
+                return None
+            raise
 
     def _update_job(self, server_id: str, **updates) -> None:
         current = self._config.get_import_job(server_id)

@@ -12,6 +12,7 @@ IMAGE_HISTORY_FILE = DATA_DIR / "image_history.json"
 ALLOWED_CONVERSATION_MODES = {"generate", "edit"}
 ALLOWED_TURN_STATUSES = {"queued", "generating", "success", "error"}
 ALLOWED_IMAGE_STATUSES = {"loading", "success", "error"}
+ALLOWED_GENERATION_ROUTES = {"regular", "thinking", "fallback"}
 DEFAULT_CONVERSATION_TITLE_LENGTH = 12
 
 
@@ -103,6 +104,7 @@ class ImageHistoryService:
         b64_json = self._clean_text(raw.get("b64_json"))
         mime_type = self._clean_text(raw.get("mime_type") or raw.get("mimeType")) or "image/png"
         error = self._clean_text(raw.get("error")) or None
+        generation_route = self._clean_text(raw.get("generation_route") or raw.get("generationRoute")).lower() or None
         raw_status = self._clean_text(raw.get("status")).lower()
         if raw_status not in ALLOWED_IMAGE_STATUSES:
             raw_status = "success" if b64_json else "error" if error else "loading"
@@ -112,6 +114,7 @@ class ImageHistoryService:
             "b64_json": b64_json or None,
             "mime_type": mime_type,
             "error": error,
+            "generation_route": generation_route if generation_route in ALLOWED_GENERATION_ROUTES else None,
         }
 
     def _normalize_turn(self, raw: object) -> dict | None:

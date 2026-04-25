@@ -98,12 +98,14 @@ class CPAPoolCreateRequest(BaseModel):
     name: str = ""
     base_url: str = ""
     secret_key: str = ""
+    auto_sync_enabled: bool = False
 
 
 class CPAPoolUpdateRequest(BaseModel):
     name: str | None = None
     base_url: str | None = None
     secret_key: str | None = None
+    auto_sync_enabled: bool | None = None
 
 
 class CPAImportRequest(BaseModel):
@@ -154,6 +156,7 @@ class StoredImagePayload(BaseModel):
     b64_json: str | None = None
     mime_type: str | None = None
     error: str | None = None
+    generation_route: str | None = None
 
 
 class ImageTurnPayload(BaseModel):
@@ -196,6 +199,7 @@ class Sub2APIServerCreateRequest(BaseModel):
     password: str = ""
     api_key: str = ""
     group_id: str = ""
+    auto_sync_enabled: bool = False
 
 
 class Sub2APIServerUpdateRequest(BaseModel):
@@ -205,6 +209,7 @@ class Sub2APIServerUpdateRequest(BaseModel):
     password: str | None = None
     api_key: str | None = None
     group_id: str | None = None
+    auto_sync_enabled: bool | None = None
 
 
 class Sub2APIImportRequest(BaseModel):
@@ -446,8 +451,6 @@ def resolve_cors_origins() -> list[str]:
 
 
 def start_limited_account_watcher(stop_event: Event) -> Thread:
-    interval_seconds = config.refresh_account_interval_minute * 60
-
     def worker() -> None:
         while not stop_event.is_set():
             try:
@@ -457,9 +460,46 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
                     account_service.refresh_accounts(limited_tokens)
             except Exception as exc:
                 print(f"[account-limited-watcher] fail {exc}")
-            stop_event.wait(interval_seconds)
+            stop_event.wait(config.refresh_account_interval_minute * 60)
 
     thread = Thread(target=worker, name="limited-account-watcher", daemon=True)
+    thread.start()
+    return thread
+
+
+def sync_remote_account_sources_once() -> None:
+    for pool in cpa_config.list_pools():
+        if not bool(pool.get("auto_sync_enabled")):
+            continue
+        pool_id = str(pool.get("id") or "").strip()
+        try:
+            job = cpa_import_service.start_auto_import(pool)
+            if job is not None:
+                print(f"[remote-account-sync] started cpa auto sync pool={pool_id} total={job.get('total')}")
+        except Exception as exc:
+            print(f"[remote-account-sync] cpa pool={pool_id or 'unknown'} fail {exc}")
+
+    for server in sub2api_config.list_servers():
+        if not bool(server.get("auto_sync_enabled")):
+            continue
+        server_id = str(server.get("id") or "").strip()
+        try:
+            job = sub2api_import_service.start_auto_import(server)
+            if job is not None:
+                print(f"[remote-account-sync] started sub2api auto sync server={server_id} total={job.get('total')}")
+        except Exception as exc:
+            print(f"[remote-account-sync] sub2api server={server_id or 'unknown'} fail {exc}")
+
+
+def start_remote_account_sync_watcher(stop_event: Event) -> Thread:
+    def worker() -> None:
+        while not stop_event.wait(config.remote_account_sync_interval_minute * 60):
+            try:
+                sync_remote_account_sources_once()
+            except Exception as exc:
+                print(f"[remote-account-sync] watcher fail {exc}")
+
+    thread = Thread(target=worker, name="remote-account-sync-watcher", daemon=True)
     thread.start()
     return thread
 
@@ -497,12 +537,14 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         stop_event = Event()
-        thread = start_limited_account_watcher(stop_event)
+        limited_thread = start_limited_account_watcher(stop_event)
+        remote_sync_thread = start_remote_account_sync_watcher(stop_event)
         try:
             yield
         finally:
             stop_event.set()
-            thread.join(timeout=1)
+            limited_thread.join(timeout=1)
+            remote_sync_thread.join(timeout=1)
 
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)
     app.add_middleware(
@@ -908,6 +950,7 @@ def create_app() -> FastAPI:
             name=body.name,
             base_url=body.base_url,
             secret_key=body.secret_key,
+            auto_sync_enabled=body.auto_sync_enabled,
         )
         return {"pool": sanitize_cpa_pool(pool), "pools": sanitize_cpa_pools(cpa_config.list_pools())}
 
@@ -1003,6 +1046,7 @@ def create_app() -> FastAPI:
             password=body.password,
             api_key=body.api_key,
             group_id=body.group_id,
+            auto_sync_enabled=body.auto_sync_enabled,
         )
         return {
             "server": sanitize_sub2api_server(server),

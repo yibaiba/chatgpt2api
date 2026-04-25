@@ -3,6 +3,7 @@
 import { Clock3, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type { ImageGenerationRoute } from "@/lib/api";
 import { getImageOutputQualityLabel } from "@/lib/image-options";
 import type { ImageConversation, ImageTurnStatus, StoredImage } from "@/store/image-conversations";
 
@@ -183,7 +184,14 @@ export function ImageResults({
                             />
                           </button>
                           <div className="flex items-center justify-between gap-2 px-3 py-3">
-                            <div className="text-xs text-stone-500">结果 {index + 1}</div>
+                            <div className="flex items-center gap-2 text-xs text-stone-500">
+                              <span>结果 {index + 1}</span>
+                              {image.generation_route ? (
+                                <span className={getGenerationRouteBadgeClassName(image.generation_route)}>
+                                  {getGenerationRouteLabel(image.generation_route)}
+                                </span>
+                              ) : null}
+                            </div>
                             <Button
                               variant="outline"
                               size="sm"
@@ -266,4 +274,24 @@ function getTurnStatusLabel(status: ImageTurnStatus) {
 
 function buildImageDataUrl(image: StoredImage) {
   return `data:${image.mime_type || "image/png"};base64,${image.b64_json || ""}`;
+}
+
+function getGenerationRouteLabel(route: ImageGenerationRoute) {
+  if (route === "thinking") {
+    return "思考";
+  }
+  if (route === "fallback") {
+    return "思考回退";
+  }
+  return "标准";
+}
+
+function getGenerationRouteBadgeClassName(route: ImageGenerationRoute) {
+  if (route === "thinking") {
+    return "rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700";
+  }
+  if (route === "fallback") {
+    return "rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-700";
+  }
+  return "rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-medium text-stone-600";
 }

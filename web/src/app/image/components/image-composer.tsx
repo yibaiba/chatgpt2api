@@ -11,6 +11,7 @@ import type { ImageConversationMode } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 
 import { ImagePanelControls } from "./image-panel-controls";
+import { ImagePromptGallery } from "./image-prompt-gallery";
 
 type ImageComposerProps = {
   mode: ImageConversationMode;
@@ -245,6 +246,23 @@ export function ImageComposer({
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-4 pt-6 sm:px-6">
               <div className="flex items-end justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+                  {mode === "generate" ? (
+                    <ImagePromptGallery
+                      selectedPrompt={prompt}
+                      onSelectPrompt={(nextPrompt) => {
+                        onPromptChange(nextPrompt);
+                        window.requestAnimationFrame(() => {
+                          const element = textareaRef.current;
+                          if (!element) {
+                            return;
+                          }
+                          element.focus();
+                          const end = nextPrompt.length;
+                          element.setSelectionRange(end, end);
+                        });
+                      }}
+                    />
+                  ) : null}
                   {mode === "edit" && (
                     <Button
                       type="button"

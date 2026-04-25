@@ -133,6 +133,7 @@ export default function SettingsPage() {
   const [formName, setFormName] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
   const [formSecretKey, setFormSecretKey] = useState("");
+  const [formAutoSyncEnabled, setFormAutoSyncEnabled] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -262,6 +263,7 @@ export default function SettingsPage() {
     setFormName("");
     setFormBaseUrl("");
     setFormSecretKey("");
+    setFormAutoSyncEnabled(false);
     setShowSecret(false);
     setDialogOpen(true);
   };
@@ -271,6 +273,7 @@ export default function SettingsPage() {
     setFormName(pool.name);
     setFormBaseUrl(pool.base_url);
     setFormSecretKey("");
+    setFormAutoSyncEnabled(Boolean(pool.auto_sync_enabled));
     setShowSecret(false);
     setDialogOpen(true);
   };
@@ -292,6 +295,7 @@ export default function SettingsPage() {
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
           secret_key: formSecretKey.trim() || undefined,
+          auto_sync_enabled: formAutoSyncEnabled,
         });
         setPools(data.pools);
         toast.success("连接已更新");
@@ -300,6 +304,7 @@ export default function SettingsPage() {
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
           secret_key: formSecretKey.trim(),
+          auto_sync_enabled: formAutoSyncEnabled,
         });
         setPools(data.pools);
         toast.success("连接已添加");
@@ -755,7 +760,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight">CPA 连接管理</h2>
-                  <p className="text-sm text-stone-500">先配置连接，再按需查询远程账号并选择导入到本地号池。</p>
+                  <p className="text-sm text-stone-500">先配置连接，再按需手动导入或开启自动同步远程账号到本地号池。</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -791,7 +796,12 @@ export default function SettingsPage() {
                           <div className="text-sm font-medium text-stone-800">{pool.name || pool.base_url}</div>
                           <div className="truncate text-xs text-stone-400">{pool.base_url}</div>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-2">
+                          {pool.auto_sync_enabled ? (
+                            <Badge variant="success" className="rounded-md px-2.5 py-1">
+                              自动同步
+                            </Badge>
+                          ) : null}
                           <button
                             type="button"
                             className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
@@ -874,6 +884,7 @@ export default function SettingsPage() {
                 <li>页面进入后先读取系统里已配置的 CPA 连接。</li>
                 <li>点击某个连接的「同步」后，会先读取远程账号列表并展示给前端选择。</li>
                 <li>确认选择后，后端后台下载对应 access_token 并导入本地号池。</li>
+                <li>开启自动同步后，后端会按系统配置的同步间隔定时拉取该连接下全部远端账号。</li>
                 <li>前端只轮询导入进度，不直接参与 download。</li>
               </ul>
             </div>
@@ -965,9 +976,9 @@ export default function SettingsPage() {
                 className="h-11 rounded-xl border-stone-200 bg-white"
               />
             </div>
-            <div className="space-y-2">
-              <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
-                <Unplug className="size-3.5" />
+              <div className="space-y-2">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+                  <Unplug className="size-3.5" />
                 Management Secret Key
               </label>
               <div className="relative">
@@ -986,6 +997,21 @@ export default function SettingsPage() {
                   {showSecret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </button>
               </div>
+            </div>
+            <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
+              <label className="flex items-start gap-3">
+                <Checkbox
+                  checked={formAutoSyncEnabled}
+                  onCheckedChange={(checked) => setFormAutoSyncEnabled(Boolean(checked))}
+                  className="mt-0.5"
+                />
+                <span className="space-y-1 text-sm">
+                  <span className="block font-medium text-stone-700">启用自动同步</span>
+                  <span className="block leading-6 text-stone-500">
+                    保存后后端会按系统配置中的远端账号自动同步间隔，定时拉取该 CPA 池的全部远端账号并导入本地号池。
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
           <DialogFooter className="pt-2">

@@ -14,11 +14,13 @@ export type {
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2" | "gpt-image-think";
+export type ImageGenerationRoute = "regular" | "thinking" | "fallback";
 export type GeneratedImageResponseItem = {
   b64_json?: string;
   url?: string;
   revised_prompt?: string;
   mime_type?: string;
+  generation_route?: ImageGenerationRoute;
 };
 export type LegacyProxySettings = {
   proxy_url: string;
@@ -106,6 +108,7 @@ export type SettingsConfig = {
   auth_key_configured?: boolean;
   refresh_account_interval_minute?: number | string;
   refresh_account_batch_size?: number | string;
+  remote_account_sync_interval_minute?: number | string;
   image_history_persistence_mode?: ImageHistoryPersistenceMode | string;
   [key: string]: unknown;
 };
@@ -318,6 +321,7 @@ export type CPAPool = {
   id: string;
   name: string;
   base_url: string;
+  auto_sync_enabled: boolean;
   import_job?: CPAImportJob | null;
 };
 
@@ -344,7 +348,12 @@ export async function fetchCPAPools() {
   return httpRequest<{ pools: CPAPool[] }>("/api/cpa/pools");
 }
 
-export async function createCPAPool(pool: { name: string; base_url: string; secret_key: string }) {
+export async function createCPAPool(pool: {
+  name: string;
+  base_url: string;
+  secret_key: string;
+  auto_sync_enabled: boolean;
+}) {
   return httpRequest<{ pool: CPAPool; pools: CPAPool[] }>("/api/cpa/pools", {
     method: "POST",
     body: pool,
@@ -353,7 +362,7 @@ export async function createCPAPool(pool: { name: string; base_url: string; secr
 
 export async function updateCPAPool(
   poolId: string,
-  updates: { name?: string; base_url?: string; secret_key?: string },
+  updates: { name?: string; base_url?: string; secret_key?: string; auto_sync_enabled?: boolean },
 ) {
   return httpRequest<{ pool: CPAPool; pools: CPAPool[] }>(`/api/cpa/pools/${poolId}`, {
     method: "POST",
@@ -391,6 +400,7 @@ export type Sub2APIServer = {
   email: string;
   has_api_key: boolean;
   group_id: string;
+  auto_sync_enabled: boolean;
   import_job?: CPAImportJob | null;
 };
 
@@ -425,6 +435,7 @@ export async function createSub2APIServer(server: {
   password: string;
   api_key: string;
   group_id: string;
+  auto_sync_enabled: boolean;
 }) {
   return httpRequest<{ server: Sub2APIServer; servers: Sub2APIServer[] }>("/api/sub2api/servers", {
     method: "POST",
@@ -441,6 +452,7 @@ export async function updateSub2APIServer(
     password?: string;
     api_key?: string;
     group_id?: string;
+    auto_sync_enabled?: boolean;
   },
 ) {
   return httpRequest<{ server: Sub2APIServer; servers: Sub2APIServer[] }>(`/api/sub2api/servers/${serverId}`, {

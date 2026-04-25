@@ -447,10 +447,17 @@ export default function ImagePage() {
     }
   }, []);
 
+  const handleImageModeChange = useCallback((nextMode: ImageConversationMode) => {
+    setImageMode(nextMode);
+    if (nextMode === "edit") {
+      setImageModel("gpt-image-2");
+    }
+  }, []);
+
   const resetComposer = useCallback(() => {
-    setImageMode("generate");
+    handleImageModeChange("generate");
     clearComposerInputs();
-  }, [clearComposerInputs]);
+  }, [clearComposerInputs, handleImageModeChange]);
 
   const handleCreateDraft = () => {
     setSelectedConversationId(null);
@@ -519,7 +526,7 @@ export default function ImagePage() {
 
       setReferenceImageFiles((prev) => [...prev, ...files]);
       setReferenceImages((prev) => [...prev, ...previews]);
-      setImageMode("edit");
+      handleImageModeChange("edit");
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -527,7 +534,7 @@ export default function ImagePage() {
       const message = error instanceof Error ? error.message : "读取参考图失败";
       toast.error(message);
     }
-  }, []);
+  }, [handleImageModeChange]);
 
   const handleReferenceImageChange = useCallback(
     async (files: File[]) => {
@@ -557,7 +564,7 @@ export default function ImagePage() {
         if (payload.conversationId) {
           setSelectedConversationId(payload.conversationId);
         }
-        setImageMode("edit");
+        handleImageModeChange("edit");
         setImagePrompt("");
         const file = dataUrlToFile(payload.dataUrl, `generated-${payload.id || createId()}.png`);
         await appendReferenceImages([file]);
@@ -571,7 +578,7 @@ export default function ImagePage() {
         toast.error(message);
       }
     },
-    [appendReferenceImages],
+    [appendReferenceImages, handleImageModeChange],
   );
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
@@ -620,6 +627,7 @@ export default function ImagePage() {
         );
         const pendingImages = queuedTurn.images.filter((image) => image.status === "loading");
         const submittedPrompt = applyAspectRatioPrompt(queuedTurn.prompt, queuedTurn.aspectRatio);
+        const submittedModel = queuedTurn.mode === "edit" ? "gpt-image-2" : queuedTurn.model;
 
         if (queuedTurn.mode === "edit" && referenceFiles.length === 0) {
           throw new Error("未找到可用于继续编辑的参考图");
@@ -651,8 +659,8 @@ export default function ImagePage() {
           try {
             const data =
               queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, submittedPrompt, queuedTurn.model)
-                : await generateImage(submittedPrompt, queuedTurn.model);
+                ? await editImage(referenceFiles, submittedPrompt, submittedModel)
+                : await generateImage(submittedPrompt, submittedModel);
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
@@ -676,6 +684,7 @@ export default function ImagePage() {
               status: "success",
               b64_json: b64Json,
               mime_type: mimeType,
+              generation_route: first.generation_route,
             };
 
             await updateConversation(
@@ -830,7 +839,7 @@ export default function ImagePage() {
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: imageModel,
+      model: imageMode === "edit" ? "gpt-image-2" : imageModel,
       mode: imageMode,
       aspectRatio: imageAspectRatio,
       outputQuality: imageOutputQuality,
@@ -918,7 +927,7 @@ export default function ImagePage() {
             referenceImages={referenceImages}
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
-            onModeChange={setImageMode}
+            onModeChange={handleImageModeChange}
             onModelChange={setImageModel}
             onPromptChange={setImagePrompt}
             onAspectRatioChange={setImageAspectRatio}

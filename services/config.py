@@ -17,6 +17,7 @@ CONFIG_FILE = BASE_DIR / "config.json"
 class LoadedSettings:
     auth_key: str
     refresh_account_interval_minute: int
+    remote_account_sync_interval_minute: int
 
 
 def _read_json_object(path: Path, *, name: str) -> dict[str, object]:
@@ -53,10 +54,15 @@ def _load_settings() -> LoadedSettings:
         refresh_interval = int(raw_config.get("refresh_account_interval_minute", 5))
     except (TypeError, ValueError):
         refresh_interval = 5
+    try:
+        remote_sync_interval = int(raw_config.get("remote_account_sync_interval_minute", 60))
+    except (TypeError, ValueError):
+        remote_sync_interval = 60
 
     return LoadedSettings(
         auth_key=auth_key,
         refresh_account_interval_minute=refresh_interval,
+        remote_account_sync_interval_minute=remote_sync_interval,
     )
 
 
@@ -159,6 +165,15 @@ class ConfigStore:
         )
 
     @property
+    def remote_account_sync_interval_minute(self) -> int:
+        return self._normalize_clamped_int(
+            self.data.get("remote_account_sync_interval_minute"),
+            fallback=60,
+            min_value=1,
+            max_value=10 ** 9,
+        )
+
+    @property
     def images_dir(self) -> Path:
         path = DATA_DIR / "images"
         path.mkdir(parents=True, exist_ok=True)
@@ -213,6 +228,12 @@ class ConfigStore:
             fallback=3,
             min_value=1,
             max_value=10,
+        )
+        next_data["remote_account_sync_interval_minute"] = self._normalize_clamped_int(
+            next_data.get("remote_account_sync_interval_minute"),
+            fallback=60,
+            min_value=1,
+            max_value=10 ** 9,
         )
         self.data = next_data
         self._save()

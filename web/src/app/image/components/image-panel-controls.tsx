@@ -46,7 +46,8 @@ export function ImagePanelControls({
   onImageCountChange,
   onOutputQualityChange,
 }: ImagePanelControlsProps) {
-  const currentModelDescription = getImageModelDescription(model);
+  const currentModelDescription =
+    mode === "edit" ? "图生图统一走上游 picture_v2 编辑链，不提供思考模式。" : getImageModelDescription(model);
   const normalizedCount = Math.max(1, Math.min(10, Number(imageCount) || 1));
 
   return (
@@ -54,18 +55,24 @@ export function ImagePanelControls({
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-start gap-3">
           <CompactField label="图片模型" className="min-w-[260px] flex-1">
-            <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
-              {IMAGE_MODEL_OPTIONS.filter((option) => option.value !== "gpt-image-1").map((option) => (
-                <CompactToggle
-                  key={option.value}
-                  active={model === option.value}
-                  onClick={() => onModelChange(option.value)}
-                  className="justify-center px-3"
-                >
-                  {getModelShortLabel(option.value)}
-                </CompactToggle>
-              ))}
-            </div>
+            {mode === "edit" ? (
+              <div className="inline-flex h-10 items-center rounded-full border border-stone-200 bg-stone-50 px-4 text-sm font-medium text-stone-700">
+                标准
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
+                {IMAGE_MODEL_OPTIONS.filter((option) => option.value !== "gpt-image-1").map((option) => (
+                  <CompactToggle
+                    key={option.value}
+                    active={model === option.value}
+                    onClick={() => onModelChange(option.value)}
+                    className="justify-center px-3"
+                  >
+                    {getModelShortLabel(option.value)}
+                  </CompactToggle>
+                ))}
+              </div>
+            )}
           </CompactField>
 
           <CompactField label="模式">

@@ -350,6 +350,68 @@ def _conversation_prepare(
     return None
 
 
+def _prepare_picture_conversation(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    parent_message_id: str,
+    prompt: str,
+    model: str,
+) -> Optional[str]:
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "*/*",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "x-openai-target-path": "/backend-api/f/conversation/prepare",
+        "x-openai-target-route": "/backend-api/f/conversation/prepare",
+    }
+    body = {
+        "action": "next",
+        "fork_from_shared_post": False,
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "client_prepare_state": "success",
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "system_hints": ["picture_v2"],
+        "partial_query": {
+            "id": str(uuid.uuid4()),
+            "author": {"role": "user"},
+            "content": {"content_type": "text", "parts": [prompt]},
+        },
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_contextual_info": {"app_name": "chatgpt.com"},
+    }
+    try:
+        response = _retry(
+            lambda: session.post(
+                BASE_URL + "/backend-api/f/conversation/prepare",
+                headers=headers,
+                json=body,
+                timeout=20,
+            ),
+            retries=2,
+        )
+        if response.ok:
+            payload = response.json() or {}
+            return payload.get("conduit_token") or None
+    except Exception:
+        pass
+    return None
+
+
 def is_token_invalid_error(message: str) -> bool:
     text = str(message or "").lower()
     return (
@@ -358,6 +420,16 @@ def is_token_invalid_error(message: str) -> bool:
         or "authentication token has been invalidated" in text
         or "invalidated oauth token" in text
     )
+
+
+def is_conversation_forbidden_error(message: str) -> bool:
+    text = str(message or "").lower()
+    return "conversation failed: 403" in text or "f/conversation failed: 403" in text
+
+
+def _is_free_account(access_token: str) -> bool:
+    account = account_service.get_account(access_token) or {}
+    return str(account.get("type") or "Free").strip() == "Free"
 
 
 def _upload_image(session: Session, access_token: str, device_id: str, image_data: bytes, file_name: str, mime_type: str) -> str:
@@ -458,29 +530,7 @@ def _send_edit_conversation(
     }
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
-    image_parts = [
-        {
-            "content_type": "image_asset_pointer",
-            "asset_pointer": f"sediment://{image.file_id}",
-            "size_bytes": len(image.data),
-            "width": image.width,
-            "height": image.height,
-        }
-        for image in images
-    ]
-    attachments = [
-        {
-            "id": image.file_id,
-            "size": len(image.data),
-            "name": image.file_name,
-            "mime_type": image.mime_type,
-            "width": image.width,
-            "height": image.height,
-            "source": "local",
-            "is_big_paste": False,
-        }
-        for image in images
-    ]
+    image_parts, attachments = _build_edit_input_payload(images)
     body: dict = {
         "action": "next",
         "messages": [
@@ -538,6 +588,123 @@ def _send_edit_conversation(
     )
     if not response.ok:
         raise ImageGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
+    return response
+
+
+def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[list[dict], list[dict]]:
+    image_parts = [
+        {
+            "content_type": "image_asset_pointer",
+            "asset_pointer": f"file-service://{image.file_id}",
+            "size_bytes": len(image.data),
+            "width": image.width,
+            "height": image.height,
+        }
+        for image in images
+    ]
+    attachments = [
+        {
+            "id": image.file_id,
+            "size": len(image.data),
+            "name": image.file_name,
+            "mimeType": image.mime_type,
+            "mime_type": image.mime_type,
+            "width": image.width,
+            "height": image.height,
+        }
+        for image in images
+    ]
+    return image_parts, attachments
+
+
+def _send_regular_edit_conversation(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token: Optional[str],
+    parent_message_id: str,
+    prompt: str,
+    model: str,
+    images: list[EditInputImage],
+    conduit_token: str,
+):
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "openai-sentinel-chat-requirements-token": chat_token,
+        "x-conduit-token": conduit_token,
+    }
+    if proof_token:
+        headers["openai-sentinel-proof-token"] = proof_token
+    image_parts, attachments = _build_picture_v2_edit_input_payload(images)
+    body: dict = {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": {
+                    "content_type": "multimodal_text",
+                    "parts": [*image_parts, prompt],
+                },
+                "metadata": {
+                    "attachments": attachments,
+                    "selected_github_repos": [],
+                    "selected_all_github_repos": False,
+                    "system_hints": ["picture_v2"],
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                },
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "system_hints": ["picture_v2"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "sent",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/f/conversation",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=180,
+        ),
+        retries=2,
+    )
+    if not response.ok:
+        raise ImageGenerationError(response.text[:400] or f"f/conversation failed: {response.status_code}")
     return response
 
 
@@ -731,6 +898,10 @@ def _parse_sse(response) -> dict:
         payload = line[5:].strip()
         if payload in ("", "[DONE]"):
             break
+        if not conversation_id:
+            matched_conversation_id = re.search(r'"conversation_id"\s*:\s*"([^"]+)"', payload)
+            if matched_conversation_id:
+                conversation_id = matched_conversation_id.group(1)
         for prefix, stored_prefix in (("file-service://", ""), ("sediment://", "sed:")):
             start = 0
             while True:
@@ -782,35 +953,45 @@ def _parse_sse(response) -> dict:
     }
 
 
+def _collect_asset_pointers(value: object, file_ids: list[str]) -> None:
+    if isinstance(value, str):
+        for hit in re.findall(r"file-service://([A-Za-z0-9_-]+)", value):
+            if hit not in file_ids:
+                file_ids.append(hit)
+        for hit in re.findall(r"sediment://([A-Za-z0-9_-]+)", value):
+            sediment_id = "sed:" + hit
+            if sediment_id not in file_ids:
+                file_ids.append(sediment_id)
+        return
+    if isinstance(value, dict):
+        pointer = str(value.get("asset_pointer") or "")
+        if pointer:
+            _collect_asset_pointers(pointer, file_ids)
+        for nested_value in value.values():
+            _collect_asset_pointers(nested_value, file_ids)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_asset_pointers(item, file_ids)
+
+
 def _extract_image_ids(mapping: dict) -> list[str]:
     file_ids: list[str] = []
     for node in mapping.values():
         message = (node or {}).get("message") or {}
-        author = message.get("author") or {}
-        metadata = message.get("metadata") or {}
-        content = message.get("content") or {}
-        if author.get("role") != "tool":
-            continue
-        if metadata.get("async_task_type") != "image_gen":
-            continue
-        if content.get("content_type") != "multimodal_text":
-            continue
-        for part in content.get("parts") or []:
-            if isinstance(part, dict):
-                pointer = str(part.get("asset_pointer") or "")
-                if pointer.startswith("file-service://"):
-                    file_id = pointer.removeprefix("file-service://")
-                    if file_id not in file_ids:
-                        file_ids.append(file_id)
-                elif pointer.startswith("sediment://"):
-                    file_id = "sed:" + pointer.removeprefix("sediment://")
-                    if file_id not in file_ids:
-                        file_ids.append(file_id)
+        _collect_asset_pointers(message, file_ids)
     return file_ids
 
 
-def _poll_image_ids(session: Session, access_token: str, device_id: str, conversation_id: str) -> list[str]:
+def _poll_image_ids(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    conversation_id: str,
+    input_file_ids: set[str] | None = None,
+) -> list[str]:
     started = time.time()
+    normalized_input_file_ids = input_file_ids or set()
     while time.time() - started < 180:
         response = _retry(
             lambda: session.get(
@@ -834,8 +1015,9 @@ def _poll_image_ids(session: Session, access_token: str, device_id: str, convers
             time.sleep(3)
             continue
         file_ids = _extract_image_ids(payload.get("mapping") or {})
-        if file_ids:
-            return file_ids
+        output_file_ids = _filter_output_file_ids(file_ids, normalized_input_file_ids)
+        if output_file_ids:
+            return output_file_ids
         time.sleep(3)
     return []
 
@@ -848,6 +1030,27 @@ def _canonicalize_file_id(file_id: str) -> str:
 def _filter_output_file_ids(file_ids: list[str], input_file_ids: set[str]) -> list[str]:
     canonical_input_ids = {_canonicalize_file_id(file_id) for file_id in input_file_ids}
     return [file_id for file_id in file_ids if _canonicalize_file_id(file_id) not in canonical_input_ids]
+
+
+def _collect_edit_output(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    parsed: dict,
+    input_file_ids: set[str],
+) -> tuple[str, list[str], str]:
+    actual_conversation_id = str(parsed.get("conversation_id") or "")
+    file_ids = _filter_output_file_ids(parsed.get("file_ids") or [], input_file_ids)
+    response_text = str(parsed.get("text") or "").strip()
+    if actual_conversation_id and not file_ids:
+        file_ids = _poll_image_ids(
+            session,
+            access_token,
+            device_id,
+            actual_conversation_id,
+            input_file_ids,
+        )
+    return actual_conversation_id, file_ids, response_text
 
 
 def _fetch_download_url(session: Session, access_token: str, device_id: str, conversation_id: str, file_id: str) -> str:
@@ -898,8 +1101,7 @@ def _download_and_save_image(session: Session, download_url: str, base_url: str 
 def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[str, bool]:
     """返回 (upstream_model, use_thinking_mode)"""
     requested_model = str(requested_model or "").strip() or "gpt-image-1"
-    account = account_service.get_account(access_token) or {}
-    is_free_account = str(account.get("type") or "Free").strip() == "Free"
+    is_free_account = _is_free_account(access_token)
 
     if requested_model == "gpt-image-think":
         # 带思考的图片生成：使用 gpt-5-3（付费账户）或 auto（免费）
@@ -908,8 +1110,59 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[st
     if requested_model == "gpt-image-1":
         return "auto", False
     if requested_model == "gpt-image-2":
-        return ("auto" if is_free_account else "gpt-5-3"), True
+        return "gpt-image-2", False
     return (str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL), False
+
+
+def _resolve_upstream_edit_model(requested_model: str) -> str:
+    requested_model = str(requested_model or "").strip() or "gpt-image-2"
+    if requested_model in {"gpt-image-1", "gpt-image-2", "gpt-image-think", "gpt-image"}:
+        return "gpt-5-3"
+    return requested_model or DEFAULT_MODEL
+
+
+def _build_edit_input_payload(images: list[EditInputImage]) -> tuple[list[dict], list[dict]]:
+    image_parts = [
+        {
+            "content_type": "image_asset_pointer",
+            "asset_pointer": f"sediment://{image.file_id}",
+            "size_bytes": len(image.data),
+            "width": image.width,
+            "height": image.height,
+        }
+        for image in images
+    ]
+    attachments = [
+        {
+            "id": image.file_id,
+            "size": len(image.data),
+            "name": image.file_name,
+            "mime_type": image.mime_type,
+            "width": image.width,
+            "height": image.height,
+            "source": "local",
+            "is_big_paste": False,
+        }
+        for image in images
+    ]
+    return image_parts, attachments
+
+
+def _build_image_result_data(
+    prompt: str,
+    response_format: str,
+    route: str,
+    *,
+    session: Session,
+    download_url: str,
+    base_url: str | None,
+) -> dict:
+    result_data = {"revised_prompt": prompt, "generation_route": route}
+    if response_format == "url":
+        result_data["url"] = _download_and_save_image(session, download_url, base_url)
+    else:
+        result_data["b64_json"] = _download_as_base64(session, download_url)
+    return result_data
 
 
 def _run_thinking_mode(
@@ -953,6 +1206,88 @@ def _run_thinking_mode(
     return _parse_sse(response)
 
 
+def _run_regular_edit_mode(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token,
+    parent_message_id: str,
+    prompt: str,
+    upstream_model: str,
+    images: list[EditInputImage],
+) -> dict:
+    conduit_token = _prepare_picture_conversation(
+        session,
+        access_token,
+        device_id,
+        parent_message_id,
+        prompt,
+        upstream_model,
+    )
+    if not conduit_token:
+        raise ImageGenerationError("regular image mode: f/conversation/prepare returned no conduit_token")
+
+    response = _send_regular_edit_conversation(
+        session,
+        access_token,
+        device_id,
+        chat_token,
+        proof_token,
+        parent_message_id,
+        prompt,
+        upstream_model,
+        images,
+        conduit_token=conduit_token,
+    )
+    return _parse_sse(response)
+
+
+def _run_legacy_regular_edit_mode(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token,
+    parent_message_id: str,
+    prompt: str,
+    upstream_model: str,
+    images: list[EditInputImage],
+    conversation_id: str,
+) -> dict:
+    try:
+        response = _send_edit_conversation(
+            session,
+            access_token,
+            device_id,
+            chat_token,
+            proof_token,
+            parent_message_id,
+            prompt,
+            upstream_model,
+            images,
+            conversation_id=conversation_id,
+        )
+    except ImageGenerationError as exc:
+        if conversation_id and is_conversation_forbidden_error(str(exc)):
+            print("[image-edit-upstream] legacy regular edit rejected existing conversation, retry without conversation_id")
+            response = _send_edit_conversation(
+                session,
+                access_token,
+                device_id,
+                chat_token,
+                proof_token,
+                parent_message_id,
+                prompt,
+                upstream_model,
+                images,
+                conversation_id="",
+            )
+        else:
+            raise
+    return _parse_sse(response)
+
+
 def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL, response_format: str = "b64_json", base_url: str = None) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -964,6 +1299,7 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
     session, fp = _new_session(access_token)
     try:
         upstream_model, use_thinking = _resolve_upstream_model(access_token, model)
+        actual_route = "regular"
         print(
             f"[image-upstream] start token={access_token[:12]}... "
             f"requested_model={model} upstream_model={upstream_model} thinking={use_thinking}"
@@ -995,8 +1331,10 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
                     upstream_model,
                     conversation_id,
                 )
+                actual_route = "thinking"
                 print(f"[image-upstream] thinking mode OK, conduit resume token={'yes' if parsed.get('resume_conduit_token') else 'no'}")
             except Exception as exc:
+                actual_route = "fallback"
                 print(f"[image-upstream] thinking mode failed ({exc}), fallback to regular mode")
                 parsed = None
 
@@ -1028,11 +1366,14 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
         if not download_url:
             raise ImageGenerationError("failed to get download url")
 
-        # 根据 response_format 返回不同格式
-        if response_format == "url":
-            result_data = {"url": _download_and_save_image(session, download_url, base_url), "revised_prompt": prompt}
-        else:
-            result_data = {"b64_json": _download_as_base64(session, download_url), "revised_prompt": prompt}
+        result_data = _build_image_result_data(
+            prompt,
+            response_format,
+            actual_route,
+            session=session,
+            download_url=download_url,
+            base_url=base_url,
+        )
 
         print(f"[image-upstream] success token={access_token[:12]}... images=1 format={response_format}")
         return {
@@ -1100,10 +1441,11 @@ def edit_image_result(
 
     session, fp = _new_session(access_token)
     try:
-        upstream_model, _ = _resolve_upstream_model(access_token, model)
+        upstream_model = _resolve_upstream_edit_model(model)
+        actual_route = "regular"
         print(
             f"[image-edit-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model} images={len(images)}"
+            f"requested_model={model} upstream_model={upstream_model} thinking=False images={len(images)}"
         )
         device_id = _bootstrap(session, fp)
 
@@ -1137,28 +1479,47 @@ def edit_image_result(
             )
         conversation_id = _conversation_init(session, access_token, device_id)
         parent_message_id = str(uuid.uuid4())
-        response = _send_edit_conversation(
+        parsed = None
+        actual_conversation_id = ""
+        file_ids: list[str] = []
+        response_text = ""
+        input_file_ids = {image.file_id for image in uploaded_images}
+        try:
+            parsed = _run_regular_edit_mode(
+                session,
+                access_token,
+                device_id,
+                chat_token,
+                proof_token,
+                parent_message_id,
+                prompt,
+                upstream_model,
+                uploaded_images,
+            )
+        except ImageGenerationError as exc:
+            if is_conversation_forbidden_error(str(exc)):
+                print("[image-edit-upstream] unified regular image path rejected edit, fallback to legacy regular edit model=auto")
+                parsed = _run_legacy_regular_edit_mode(
+                    session,
+                    access_token,
+                    device_id,
+                    chat_token,
+                    proof_token,
+                    parent_message_id,
+                    prompt,
+                    "auto",
+                    uploaded_images,
+                    conversation_id,
+                )
+            else:
+                raise
+        actual_conversation_id, file_ids, response_text = _collect_edit_output(
             session,
             access_token,
             device_id,
-            chat_token,
-            proof_token,
-            parent_message_id,
-            prompt,
-            upstream_model,
-            uploaded_images,
-            conversation_id=conversation_id,
+            parsed,
+            input_file_ids,
         )
-        parsed = _parse_sse(response)
-        actual_conversation_id = parsed.get("conversation_id") or ""
-        input_file_ids = {image.file_id for image in uploaded_images}
-        file_ids = _filter_output_file_ids(parsed.get("file_ids") or [], input_file_ids)
-        response_text = str(parsed.get("text") or "").strip()
-        if actual_conversation_id and not file_ids:
-            file_ids = _filter_output_file_ids(
-                _poll_image_ids(session, access_token, device_id, actual_conversation_id),
-                input_file_ids,
-            )
         if not file_ids:
             if response_text:
                 raise ImageGenerationError(response_text)
@@ -1168,11 +1529,14 @@ def edit_image_result(
         if not download_url:
             raise ImageGenerationError("failed to get download url")
 
-        # 根据 response_format 返回不同格式
-        if response_format == "url":
-            result_data = {"url": _download_and_save_image(session, download_url, base_url), "revised_prompt": prompt}
-        else:
-            result_data = {"b64_json": _download_as_base64(session, download_url), "revised_prompt": prompt}
+        result_data = _build_image_result_data(
+            prompt,
+            response_format,
+            actual_route,
+            session=session,
+            download_url=download_url,
+            base_url=base_url,
+        )
         print(
             f"[image-edit-upstream] success token={access_token[:12]}... "
             f"inputs={len(uploaded_images)} format={response_format}"

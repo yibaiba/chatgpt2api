@@ -94,6 +94,7 @@ export function Sub2APIConnections() {
   const [formPassword, setFormPassword] = useState("");
   const [formApiKey, setFormApiKey] = useState("");
   const [formGroupId, setFormGroupId] = useState("");
+  const [formAutoSyncEnabled, setFormAutoSyncEnabled] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("password");
   const [showSecret, setShowSecret] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -175,6 +176,7 @@ export function Sub2APIConnections() {
     setFormPassword("");
     setFormApiKey("");
     setFormGroupId("");
+    setFormAutoSyncEnabled(false);
     setAuthMode("password");
     setShowSecret(false);
     setRemoteGroups(null);
@@ -189,6 +191,7 @@ export function Sub2APIConnections() {
     setFormPassword("");
     setFormApiKey("");
     setFormGroupId(server.group_id || "");
+    setFormAutoSyncEnabled(Boolean(server.auto_sync_enabled));
     setAuthMode(server.has_api_key ? "api_key" : "password");
     setShowSecret(false);
     setRemoteGroups(null);
@@ -242,6 +245,7 @@ export function Sub2APIConnections() {
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
           group_id: formGroupId.trim(),
+          auto_sync_enabled: formAutoSyncEnabled,
         };
         if (authMode === "password") {
           updates.email = formEmail.trim();
@@ -267,6 +271,7 @@ export function Sub2APIConnections() {
           password: authMode === "password" ? formPassword.trim() : "",
           api_key: authMode === "api_key" ? formApiKey.trim() : "",
           group_id: formGroupId.trim(),
+          auto_sync_enabled: formAutoSyncEnabled,
         });
         setServers(data.servers);
         toast.success("连接已添加");
@@ -392,7 +397,7 @@ export function Sub2APIConnections() {
               <div>
                 <h2 className="text-lg font-semibold tracking-tight">Sub2API 连接管理</h2>
                 <p className="text-sm text-stone-500">
-                  配置 Sub2API 服务器后，可查询其中的 OpenAI OAuth 账号并批量导入本地号池。
+                  配置 Sub2API 服务器后，可手动查询或按计划自动同步其中的 OpenAI OAuth 账号到本地号池。
                 </p>
               </div>
             </div>
@@ -439,7 +444,12 @@ export function Sub2APIConnections() {
                           {server.group_id ? ` · 分组 ${server.group_id}` : " · 全部分组"}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-2">
+                        {server.auto_sync_enabled ? (
+                          <Badge variant="success" className="rounded-md px-2.5 py-1">
+                            自动同步
+                          </Badge>
+                        ) : null}
                         <button
                           type="button"
                           className="rounded-lg p-2 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
@@ -542,6 +552,7 @@ export function Sub2APIConnections() {
               <li>输入 Sub2API 地址和管理员账户（或 Admin API Key），保存为一个连接。</li>
               <li>点击某个连接的「同步」会拉取其中 platform=openai 且 type=oauth 的账号列表。</li>
               <li>勾选需要的账号后后端会并发拉取 access_token，自动导入本地号池并刷新状态。</li>
+              <li>开启自动同步后，后端会按系统配置的同步间隔定时拉取该连接下可导入账号。</li>
               <li>仅会读取 sub2api 凭据中的 access_token；refresh_token 等字段不会写入本地。</li>
             </ul>
           </div>
@@ -705,6 +716,22 @@ export function Sub2APIConnections() {
                   添加完连接后可在编辑对话框里点「拉取分组」选择具体分组。
                 </div>
               )}
+            </div>
+            <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3">
+              <label className="flex items-start gap-3">
+                <Checkbox
+                  checked={formAutoSyncEnabled}
+                  onCheckedChange={(checked) => setFormAutoSyncEnabled(Boolean(checked))}
+                  className="mt-0.5"
+                />
+                <span className="space-y-1 text-sm">
+                  <span className="block font-medium text-stone-700">启用自动同步</span>
+                  <span className="block leading-6 text-stone-500">
+                    保存后后端会按系统配置中的远端账号自动同步间隔，定时拉取该连接下可导入的账号；
+                    若设置了分组，仍只同步该分组里的 OpenAI OAuth 账号。
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
           <DialogFooter className="pt-2">

@@ -21,6 +21,7 @@ export function ConfigCard() {
   const isSavingConfig = useSettingsStore((state) => state.isSavingConfig);
   const setAuthKey = useSettingsStore((state) => state.setAuthKey);
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
+  const setRemoteAccountSyncIntervalMinute = useSettingsStore((state) => state.setRemoteAccountSyncIntervalMinute);
   const setRefreshAccountBatchSize = useSettingsStore((state) => state.setRefreshAccountBatchSize);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setImageHistoryPersistenceMode = useSettingsStore((state) => state.setImageHistoryPersistenceMode);
@@ -91,6 +92,22 @@ export function ConfigCard() {
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">控制每一批同时刷新的 token 数量，保存时会自动限制在 1 到 10。</p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">远端账号自动同步间隔（分钟）</label>
+            <Input
+              type="number"
+              min="1"
+              inputMode="numeric"
+              value={String(config?.remote_account_sync_interval_minute || "")}
+              onChange={(event) => setRemoteAccountSyncIntervalMinute(event.target.value)}
+              placeholder="60"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs text-stone-500">
+              控制 CPA / Sub2API 自动同步频率；已启用自动同步的连接会按这个间隔全量拉取。
+            </p>
           </div>
 
           <div className="space-y-2 md:col-span-2">
