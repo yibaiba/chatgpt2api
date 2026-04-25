@@ -590,6 +590,35 @@ export default function ImagePage() {
     setReferenceImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
   }, []);
 
+  const focusComposer = useCallback((selectionEnd?: number) => {
+    requestAnimationFrame(() => {
+      const element = textareaRef.current;
+      if (!element) {
+        return;
+      }
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.focus();
+      const end = selectionEnd ?? element.value.length;
+      element.setSelectionRange(end, end);
+    });
+  }, []);
+
+  const restoreReferenceImages = useCallback((images: StoredReferenceImage[]) => {
+    const nextImages = images.map((image, index) => ({
+      name: image.name || `reference-${index + 1}.png`,
+      type: image.type || "image/png",
+      dataUrl: image.dataUrl,
+    }));
+    const nextFiles = nextImages.map((image, index) =>
+      dataUrlToFile(image.dataUrl, image.name || `reference-${index + 1}.png`, image.type),
+    );
+    setReferenceImageFiles(nextFiles);
+    setReferenceImages(nextImages);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
   const handleReuseAsReference = useCallback(
     async (payload: { conversationId?: string; id?: string; dataUrl: string }) => {
       try {
@@ -600,43 +629,42 @@ export default function ImagePage() {
         setImagePrompt("");
         const file = dataUrlToFile(payload.dataUrl, `generated-${payload.id || createId()}.png`);
         await appendReferenceImages([file]);
-        requestAnimationFrame(() => {
-          textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-          textareaRef.current?.focus();
-        });
+        focusComposer();
         toast.success("已加入当前参考图，继续输入描述即可编辑");
       } catch (error) {
         const message = error instanceof Error ? error.message : "加入参考图失败";
         toast.error(message);
       }
     },
-    [appendReferenceImages, handleImageModeChange],
+    [appendReferenceImages, focusComposer, handleImageModeChange],
   );
 
   const handleReusePrompt = useCallback(
-    async (payload: { conversationId?: string; prompt: string }) => {
+    async (payload: { conversationId?: string; prompt: string; referenceImages: StoredReferenceImage[] }) => {
       const nextPrompt = payload.prompt.trim();
-      if (!nextPrompt) {
-        toast.error("该轮提示词为空，无法填入输入框");
+      const referenceCount = payload.referenceImages.length;
+      if (!nextPrompt && referenceCount === 0) {
+        toast.error("该轮没有可恢复的提示词或参考图");
         return;
       }
-      if (payload.conversationId) {
-        setSelectedConversationId(payload.conversationId);
-      }
-      setImagePrompt(nextPrompt);
-      requestAnimationFrame(() => {
-        const element = textareaRef.current;
-        if (!element) {
-          return;
+
+      try {
+        if (payload.conversationId) {
+          setSelectedConversationId(payload.conversationId);
         }
-        element.scrollIntoView({ behavior: "smooth", block: "center" });
-        element.focus();
-        const end = nextPrompt.length;
-        element.setSelectionRange(end, end);
-      });
-      toast.success("已填入当前输入框，可继续修改后发送");
+        setImagePrompt(nextPrompt);
+        restoreReferenceImages(payload.referenceImages);
+        handleImageModeChange(referenceCount > 0 ? "edit" : "generate");
+        focusComposer(nextPrompt.length);
+        toast.success(
+          referenceCount > 0 ? `已恢复提示词和 ${referenceCount} 张参考图` : "已恢复提示词到当前输入框",
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "恢复本轮输入失败";
+        toast.error(message);
+      }
     },
-    [],
+    [focusComposer, handleImageModeChange, restoreReferenceImages],
   );
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {

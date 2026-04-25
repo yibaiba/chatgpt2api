@@ -5,7 +5,7 @@ import { Clock3, CornerDownLeft, LoaderCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ImageGenerationRoute } from "@/lib/api";
 import { getImageOutputQualityLabel } from "@/lib/image-options";
-import type { ImageConversation, ImageTurnStatus, StoredImage } from "@/store/image-conversations";
+import type { ImageConversation, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
 
 export type ImageLightboxItem = {
   id: string;
@@ -17,7 +17,11 @@ type ImageResultsProps = {
   showConversationOwner?: boolean;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onReuseAsReference: (payload: { conversationId?: string; id?: string; dataUrl: string }) => void | Promise<void>;
-  onReusePrompt: (payload: { conversationId?: string; prompt: string }) => void | Promise<void>;
+  onReusePrompt: (payload: {
+    conversationId?: string;
+    prompt: string;
+    referenceImages: StoredReferenceImage[];
+  }) => void | Promise<void>;
   formatConversationTime: (value: string) => string;
 };
 
@@ -85,16 +89,18 @@ export function ImageResults({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="min-h-11 rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                    className="min-h-11 rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50 touch-manipulation"
                     onClick={() =>
                       void onReusePrompt({
                         conversationId: selectedConversation.id,
                         prompt: turn.prompt,
+                        referenceImages: turn.referenceImages,
                       })
                     }
+                    aria-label={turn.referenceImages.length > 0 ? "恢复本轮提示词和参考图到输入区" : "恢复本轮提示词到输入区"}
                   >
                     <CornerDownLeft className="size-4" />
-                    填入输入框
+                    恢复到输入区
                   </Button>
                 </div>
               </div>
