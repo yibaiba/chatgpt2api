@@ -110,6 +110,31 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_preserves_existing_auth_hash_when_blank_auth_key_is_submitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+                original_hash = str(store.data.get("auth-key-hash") or "")
+
+                data = store.update({"auth-key": "", "remote_account_sync_interval_minute": 60})
+                raw = json.loads(config_file.read_text(encoding="utf-8"))
+
+                self.assertEqual("", data["auth-key"])
+                self.assertEqual(original_hash, raw.get("auth-key-hash"))
+                self.assertTrue(store.verify_admin_auth_key("plain-secret"))
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
     def test_config_store_hashes_and_hides_admin_auth_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)

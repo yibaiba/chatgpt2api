@@ -58,12 +58,13 @@ def _normalize_import_job(raw: object, *, fail_unfinished: bool) -> dict | None:
 
 
 def _normalize_pool(raw: dict) -> dict:
+    auto_sync_enabled = True if "auto_sync_enabled" not in raw else _normalize_bool(raw.get("auto_sync_enabled"))
     return {
         "id": str(raw.get("id") or _new_id()).strip(),
         "name": str(raw.get("name") or "").strip(),
         "base_url": str(raw.get("base_url") or "").strip(),
         "secret_key": str(raw.get("secret_key") or "").strip(),
-        "auto_sync_enabled": _normalize_bool(raw.get("auto_sync_enabled")),
+        "auto_sync_enabled": auto_sync_enabled,
         "import_job": _normalize_import_job(raw.get("import_job"), fail_unfinished=True),
     }
 

@@ -25,7 +25,7 @@
 git clone git@github.com:basketikun/chatgpt2api.git
 cp docker-compose-example.yml docker-compose.yml
 # 可选：cp .env.example .env
-# 按需编辑 config.json 的密钥、`refresh_account_interval_minute` 和 `proxy_pool`
+# 按需编辑 config.json 的密钥、`refresh_account_interval_minute`、`remote_account_sync_interval_minute` 和 `proxy_pool`
 # 如果要在设置页里保存代理池等配置，不要把 /app/config.json 挂成只读
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
 # 首次启动后，config.json 中的管理员密钥会自动迁移为 `auth-key-hash`
@@ -72,7 +72,44 @@ docker compose up -d --build
 - 支持搜索、筛选、批量刷新、导出、手动编辑和清理账号
 - 账号批量刷新支持在设置页或 `config.json` 中配置每批并发数量，默认按 3 个 token 一批逐步刷新
 - 支持三种导入方式：本地 CPA JSON 文件导入、远程 CPA 服务器导入、`access_token` 导入
+- 支持按固定间隔自动从 CPA / Sub2API 远端拉取账号并导入本地号池
 - 设置页可管理普通用户密钥，并控制每个普通用户还能生成多少张图片
+
+#### CPA / Sub2API 远端自动同步
+
+如果你希望服务**定时从 CPA 或 Sub2API 拉取远端号池**，除了添加连接本身，还需要额外打开自动同步开关。
+
+最简单的方式是在前端设置页完成：
+
+1. 在「设置」里新增一个 CPA 池或 Sub2API 连接
+2. 给该连接勾选「启用自动同步」
+3. 在系统配置里设置「远端账号自动同步间隔（分钟）」
+4. 保持后端进程运行，服务会按该间隔自动拉取并导入远端账号
+
+也可以直接写到 `config.json`，例如：
+
+```json
+{
+  "remote_account_sync_interval_minute": 60,
+  "cpa_pools": [
+    {
+      "id": "pool_demo",
+      "name": "CPA Demo",
+      "base_url": "https://your-cpa.example.com",
+      "secret_key": "replace-me",
+      "auto_sync_enabled": true
+    }
+  ]
+}
+```
+
+补充说明：
+
+- 只会同步 `auto_sync_enabled = true` 的远端连接
+- 如果当前没有配置任何 CPA / Sub2API 连接，就不会发生自动拉取
+- 默认同步间隔是 `60` 分钟
+- 自动同步触发的是**全量远端账号导入**，不是只刷新本地已有账号
+- 如果某个连接当前已有导入任务在跑，定时器会跳过这次，避免重复启动
 
 ### 权限与额度
 

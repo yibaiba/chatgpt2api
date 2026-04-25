@@ -214,6 +214,8 @@ class ConfigStore:
             next_auth_key = str(incoming.get("auth-key") or "").strip()
             if next_auth_key:
                 next_data["auth-key-hash"] = hash_auth_secret(next_auth_key)
+            elif str(self.data.get("auth-key-hash") or "").strip():
+                next_data["auth-key-hash"] = str(self.data.get("auth-key-hash") or "").strip()
         elif str(self.data.get("auth-key-hash") or "").strip():
             next_data["auth-key-hash"] = str(self.data.get("auth-key-hash") or "").strip()
 

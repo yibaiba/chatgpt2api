@@ -424,7 +424,12 @@ def is_token_invalid_error(message: str) -> bool:
 
 def is_conversation_forbidden_error(message: str) -> bool:
     text = str(message or "").lower()
-    return "conversation failed: 403" in text or "f/conversation failed: 403" in text
+    return (
+        "conversation failed: 403" in text
+        or "f/conversation failed: 403" in text
+        or "conversation failed: 404" in text
+        or "f/conversation failed: 404" in text
+    )
 
 
 def _is_free_account(access_token: str) -> bool:
@@ -617,6 +622,110 @@ def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[
     return image_parts, attachments
 
 
+def _build_regular_picture_v2_body(
+    prompt: str,
+    parent_message_id: str,
+    model: str,
+    images: Optional[list[EditInputImage]] = None,
+) -> dict:
+    content: dict = {"content_type": "text", "parts": [prompt]}
+    metadata: dict = {
+        "selected_github_repos": [],
+        "selected_all_github_repos": False,
+        "system_hints": ["picture_v2"],
+        "serialization_metadata": {"custom_symbol_offsets": []},
+    }
+    if images:
+        image_parts, attachments = _build_picture_v2_edit_input_payload(images)
+        content = {
+            "content_type": "multimodal_text",
+            "parts": [*image_parts, prompt],
+        }
+        metadata["attachments"] = attachments
+
+    return {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": content,
+                "metadata": metadata,
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "system_hints": ["picture_v2"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "sent",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+
+
+def _send_regular_generation_conversation(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token: Optional[str],
+    parent_message_id: str,
+    prompt: str,
+    model: str,
+    conduit_token: str,
+):
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "openai-sentinel-chat-requirements-token": chat_token,
+        "x-conduit-token": conduit_token,
+    }
+    if proof_token:
+        headers["openai-sentinel-proof-token"] = proof_token
+    body = _build_regular_picture_v2_body(prompt, parent_message_id, model)
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/f/conversation",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=180,
+        ),
+        retries=2,
+    )
+    if not response.ok:
+        raise ImageGenerationError(response.text[:400] or f"f/conversation failed: {response.status_code}")
+    return response
+
+
 def _send_regular_edit_conversation(
     session: Session,
     access_token: str,
@@ -649,50 +758,7 @@ def _send_regular_edit_conversation(
     }
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
-    image_parts, attachments = _build_picture_v2_edit_input_payload(images)
-    body: dict = {
-        "action": "next",
-        "messages": [
-            {
-                "id": str(uuid.uuid4()),
-                "author": {"role": "user"},
-                "create_time": time.time(),
-                "content": {
-                    "content_type": "multimodal_text",
-                    "parts": [*image_parts, prompt],
-                },
-                "metadata": {
-                    "attachments": attachments,
-                    "selected_github_repos": [],
-                    "selected_all_github_repos": False,
-                    "system_hints": ["picture_v2"],
-                    "serialization_metadata": {"custom_symbol_offsets": []},
-                },
-            }
-        ],
-        "parent_message_id": parent_message_id,
-        "model": model,
-        "timezone_offset_min": -480,
-        "timezone": "Asia/Shanghai",
-        "conversation_mode": {"kind": "primary_assistant"},
-        "enable_message_followups": True,
-        "system_hints": ["picture_v2"],
-        "supports_buffering": True,
-        "supported_encodings": ["v1"],
-        "client_prepare_state": "sent",
-        "paragen_cot_summary_display_override": "allow",
-        "force_parallel_switch": "auto",
-        "client_contextual_info": {
-            "is_dark_mode": False,
-            "time_since_loaded": random.randint(50, 500),
-            "page_height": random.randint(500, 1000),
-            "page_width": random.randint(1000, 2000),
-            "pixel_ratio": 1,
-            "screen_height": random.randint(800, 1200),
-            "screen_width": random.randint(1200, 2200),
-            "app_name": "chatgpt.com",
-        },
-    }
+    body = _build_regular_picture_v2_body(prompt, parent_message_id, model, images)
     response = _retry(
         lambda: session.post(
             BASE_URL + "/backend-api/f/conversation",
@@ -1115,10 +1181,8 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[st
         # 带思考的图片生成：使用 gpt-5-3（付费账户）或 auto（免费）
         upstream = "auto" if is_free_account else "gpt-5-3"
         return upstream, True
-    if requested_model == "gpt-image-1":
-        return "auto", False
-    if requested_model == "gpt-image-2":
-        return "gpt-image-2", False
+    if requested_model in {"gpt-image-1", "gpt-image-2", "gpt-image"}:
+        return "gpt-5-3", False
     return (str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL), False
 
 
@@ -1211,6 +1275,83 @@ def _run_thinking_mode(
         conduit_token=conduit_token,
         # f/conversation 首次不传 conversation_id，服务端自己创建
     )
+    return _parse_sse(response)
+
+
+def _run_regular_generation_mode(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token,
+    parent_message_id: str,
+    prompt: str,
+    upstream_model: str,
+) -> dict:
+    conduit_token = _prepare_picture_conversation(
+        session,
+        access_token,
+        device_id,
+        parent_message_id,
+        prompt,
+        upstream_model,
+    )
+    if not conduit_token:
+        raise ImageGenerationError("regular image mode: f/conversation/prepare returned no conduit_token")
+
+    response = _send_regular_generation_conversation(
+        session,
+        access_token,
+        device_id,
+        chat_token,
+        proof_token,
+        parent_message_id,
+        prompt,
+        upstream_model,
+        conduit_token=conduit_token,
+    )
+    return _parse_sse(response)
+
+
+def _run_legacy_regular_generation_mode(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token,
+    parent_message_id: str,
+    prompt: str,
+    upstream_model: str,
+    conversation_id: str,
+) -> dict:
+    try:
+        response = _send_conversation(
+            session,
+            access_token,
+            device_id,
+            chat_token,
+            proof_token,
+            parent_message_id,
+            prompt,
+            upstream_model,
+            conversation_id=conversation_id,
+        )
+    except ImageGenerationError as exc:
+        if conversation_id and is_conversation_forbidden_error(str(exc)):
+            print("[image-upstream] legacy regular generation rejected existing conversation, retry without conversation_id")
+            response = _send_conversation(
+                session,
+                access_token,
+                device_id,
+                chat_token,
+                proof_token,
+                parent_message_id,
+                prompt,
+                upstream_model,
+                conversation_id="",
+            )
+        else:
+            raise
     return _parse_sse(response)
 
 
@@ -1313,7 +1454,6 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
             f"requested_model={model} upstream_model={upstream_model} thinking={use_thinking}"
         )
         device_id = _bootstrap(session, fp)
-        conversation_id = _conversation_init(session, access_token, device_id)
         chat_token, pow_info = _chat_requirements(session, access_token, device_id)
         proof_token = None
         if pow_info.get("required"):
@@ -1326,7 +1466,9 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
         parent_message_id = str(uuid.uuid4())
 
         parsed = None
+        conversation_id = ""
         if use_thinking:
+            conversation_id = _conversation_init(session, access_token, device_id)
             try:
                 parsed = _run_thinking_mode(
                     session,
@@ -1347,18 +1489,35 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
                 parsed = None
 
         if parsed is None:
-            response = _send_conversation(
-                session,
-                access_token,
-                device_id,
-                chat_token,
-                proof_token,
-                parent_message_id,
-                prompt,
-                upstream_model,
-                conversation_id=conversation_id,
-            )
-            parsed = _parse_sse(response)
+            try:
+                parsed = _run_regular_generation_mode(
+                    session,
+                    access_token,
+                    device_id,
+                    chat_token,
+                    proof_token,
+                    parent_message_id,
+                    prompt,
+                    upstream_model,
+                )
+            except ImageGenerationError as exc:
+                if is_conversation_forbidden_error(str(exc)):
+                    actual_route = "fallback"
+                    print("[image-upstream] regular picture pipeline rejected request, fallback to legacy conversation route")
+                    conversation_id = _conversation_init(session, access_token, device_id)
+                    parsed = _run_legacy_regular_generation_mode(
+                        session,
+                        access_token,
+                        device_id,
+                        chat_token,
+                        proof_token,
+                        parent_message_id,
+                        prompt,
+                        upstream_model,
+                        conversation_id,
+                    )
+                else:
+                    raise
 
         actual_conversation_id = parsed.get("conversation_id") or ""
         file_ids = [file_id for file_id in (parsed.get("file_ids") or []) if not _is_invalid_output_file_id(file_id)]

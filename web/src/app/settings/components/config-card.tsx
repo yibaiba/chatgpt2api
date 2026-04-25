@@ -106,7 +106,7 @@ export function ConfigCard() {
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">
-              控制 CPA / Sub2API 自动同步频率；已启用自动同步的连接会按这个间隔全量拉取。
+              控制 CPA / Sub2API 自动同步频率；只有在连接详情里额外开启了「自动同步」的来源，才会按这个间隔全量拉取。
             </p>
           </div>
 
