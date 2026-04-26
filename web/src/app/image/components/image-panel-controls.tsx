@@ -53,20 +53,20 @@ export function ImagePanelControls({
   return (
     <div className="border-b border-stone-200/80 px-4 py-4 sm:px-6">
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-start gap-3">
-          <CompactField label="图片模型" className="min-w-[260px] flex-1">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start">
+          <CompactField label="图片模型" className="w-full min-w-0 sm:min-w-[260px] sm:flex-1">
             {mode === "edit" ? (
-              <div className="inline-flex h-10 items-center rounded-full border border-stone-200 bg-stone-50 px-4 text-sm font-medium text-stone-700">
+              <div className="inline-flex h-10 w-full items-center justify-center rounded-full border border-stone-200 bg-stone-50 px-4 text-sm font-medium text-stone-700 sm:w-auto sm:justify-start">
                 标准
               </div>
             ) : (
-              <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
+              <div className="flex w-full items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
                 {IMAGE_MODEL_OPTIONS.filter((option) => option.value !== "gpt-image-1").map((option) => (
                   <CompactToggle
                     key={option.value}
                     active={model === option.value}
                     onClick={() => onModelChange(option.value)}
-                    className="justify-center px-3"
+                    className="min-w-0 flex-1 justify-center px-3 sm:flex-none"
                   >
                     {getModelShortLabel(option.value)}
                   </CompactToggle>
@@ -75,8 +75,8 @@ export function ImagePanelControls({
             )}
           </CompactField>
 
-          <CompactField label="模式">
-            <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
+          <CompactField label="模式" className="w-full sm:w-auto">
+            <div className="flex w-full items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-1">
               <CompactToggle active={mode === "generate"} onClick={() => onModeChange("generate")}>
                 文生图
               </CompactToggle>
@@ -87,10 +87,10 @@ export function ImagePanelControls({
           </CompactField>
         </div>
 
-        <div className="flex flex-wrap items-end gap-3">
-          <CompactField label="比例">
+        <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
+          <CompactField label="比例" className="min-w-0">
             <Select value={aspectRatio} onValueChange={(value) => onAspectRatioChange(value as ImageAspectRatio)}>
-              <SelectTrigger className="h-9 min-w-[108px] rounded-full border-stone-200 bg-white px-3 shadow-none">
+              <SelectTrigger className="h-9 w-full min-w-0 rounded-full border-stone-200 bg-white px-3 shadow-none sm:min-w-[108px]">
                 <SelectValue placeholder={aspectRatio} />
               </SelectTrigger>
               <SelectContent>
@@ -103,9 +103,9 @@ export function ImagePanelControls({
             </Select>
           </CompactField>
 
-          <CompactField label="张数">
+          <CompactField label="张数" className="min-w-0">
             <Select value={String(normalizedCount)} onValueChange={onImageCountChange}>
-              <SelectTrigger className="h-9 min-w-[88px] rounded-full border-stone-200 bg-white px-3 shadow-none">
+              <SelectTrigger className="h-9 w-full min-w-0 rounded-full border-stone-200 bg-white px-3 shadow-none sm:min-w-[88px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -118,14 +118,14 @@ export function ImagePanelControls({
             </Select>
           </CompactField>
 
-          <CompactField label="输出尺寸" className="min-w-[180px]">
-            <div className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 p-0.5">
+          <CompactField label="输出尺寸" className="col-span-2 min-w-0 sm:min-w-[180px]">
+            <div className="grid w-full grid-cols-3 items-center gap-1 rounded-[20px] border border-stone-200 bg-stone-50 p-0.5 sm:inline-flex sm:w-auto sm:rounded-full">
               {IMAGE_OUTPUT_QUALITY_OPTIONS.map((option) => (
                 <CompactToggle
                   key={option.value}
                   active={outputQuality === option.value}
                   onClick={() => onOutputQualityChange(option.value)}
-                  className="min-w-[74px] justify-center px-2.5"
+                  className="min-w-0 justify-center px-2.5 sm:min-w-[74px]"
                 >
                   {option.label}
                 </CompactToggle>
@@ -177,7 +177,7 @@ function CompactToggle({
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex h-8 items-center rounded-full px-3 text-sm font-medium transition",
+        "inline-flex h-9 items-center justify-center rounded-full px-3 text-sm font-medium transition",
         active ? "bg-blue-600 text-white shadow-sm" : "text-stone-600 hover:bg-white hover:text-stone-800",
         className,
       )}

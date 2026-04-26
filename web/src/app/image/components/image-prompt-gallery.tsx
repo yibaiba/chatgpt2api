@@ -69,11 +69,11 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex-initial">
         <Button
           type="button"
           variant="outline"
-          className="h-10 rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none hover:bg-stone-50"
+          className="h-10 w-full rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none hover:bg-stone-50 sm:w-auto"
           onClick={() => setOpen(true)}
         >
           <Sparkles className="size-4 text-orange-500" />
@@ -82,7 +82,7 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
             {galleryItems.length}
           </span>
         </Button>
-        <div className="min-w-0 text-xs text-stone-500">
+        <div className="hidden min-w-0 text-xs text-stone-500 sm:block">
           {selectedItem ? (
             <span className="block truncate">已选灵感：{selectedItem.title}</span>
           ) : (

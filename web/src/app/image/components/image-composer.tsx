@@ -240,12 +240,12 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[152px] resize-none rounded-[32px] border-0 bg-transparent px-6 pt-5 pb-20 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0"
+              className="min-h-[168px] resize-none rounded-[32px] border-0 bg-transparent px-5 pt-5 pb-5 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:px-6 sm:pb-20"
             />
 
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-4 pt-6 sm:px-6">
-              <div className="flex items-end justify-between gap-3">
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <div className="border-t border-stone-200/80 bg-white px-4 py-3 sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-gradient-to-t sm:from-white sm:via-white/95 sm:to-transparent sm:px-6 sm:pb-4 sm:pt-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:gap-3">
                   {mode === "generate" ? (
                     <ImagePromptGallery
                       selectedPrompt={prompt}
@@ -267,7 +267,7 @@ export function ImageComposer({
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-10 rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none"
+                      className="h-10 w-full rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none sm:w-auto"
                       onClick={onPickReferenceImage}
                     >
                       <ImagePlus className="size-4" />
@@ -283,15 +283,17 @@ export function ImageComposer({
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => void onSubmit()}
-                  disabled={!prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
-                  className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
-                  aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
-                >
-                  <ArrowUp className="size-4" />
-                </button>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void onSubmit()}
+                    disabled={!prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
+                    className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
+                    aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
+                  >
+                    <ArrowUp className="size-4" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>

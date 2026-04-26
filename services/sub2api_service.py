@@ -563,7 +563,11 @@ class Sub2APIImportService:
 
         add_result = account_service.add_accounts(tokens)
         refresh_result = account_service.refresh_accounts(tokens)
+        removed_result = account_service.delete_accounts_by_status(tokens)
         current = self._config.get_import_job(server_id) or {}
+        removed = int(removed_result.get("removed") or 0)
+        if removed:
+            print(f"[sub2api-import] removed abnormal accounts server={server_id} removed={removed}")
         self._update_job(
             server_id,
             status="completed",

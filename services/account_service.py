@@ -17,6 +17,7 @@ from services.utils import anonymize_token
 
 
 class AccountService:
+    REMOTE_SYNC_REMOVABLE_STATUSES = {"异常", "禁用"}
     ACCOUNT_TYPE_MAP = {
         "free": "Free",
         "plus": "Plus",
@@ -364,6 +365,41 @@ class AccountService:
 
     def remove_token(self, access_token: str) -> bool:
         return bool(self.delete_accounts([access_token])["removed"])
+
+    def delete_accounts_by_status(self, access_tokens: list[str], statuses: set[str] | None = None) -> dict:
+        target_tokens = set(self._clean_tokens(access_tokens))
+        if not target_tokens:
+            return {"removed": 0, "removed_tokens": [], "items": self.list_accounts()}
+
+        target_statuses = {
+            self._clean_token(status)
+            for status in (statuses or self.REMOTE_SYNC_REMOVABLE_STATUSES)
+            if self._clean_token(status)
+        }
+        if not target_statuses:
+            return {"removed": 0, "removed_tokens": [], "items": self.list_accounts()}
+
+        with self._lock:
+            removed_tokens: list[str] = []
+            next_accounts: list[dict] = []
+            for item in self._accounts:
+                access_token = self._clean_token(item.get("access_token"))
+                status = self._clean_token(item.get("status"))
+                if access_token in target_tokens and status in target_statuses:
+                    removed_tokens.append(access_token)
+                    continue
+                next_accounts.append(item)
+
+            removed = len(self._accounts) - len(next_accounts)
+            if removed:
+                self._accounts = next_accounts
+                if self._accounts:
+                    self._index %= len(self._accounts)
+                else:
+                    self._index = 0
+                self._save_accounts()
+            items = self._public_items(self._accounts)
+        return {"removed": removed, "removed_tokens": removed_tokens, "items": items}
 
     def update_account(self, access_token: str, updates: dict) -> dict | None:
         access_token = self._clean_token(access_token)
