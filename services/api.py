@@ -531,6 +531,21 @@ def resolve_web_asset(requested_path: str) -> Path | None:
     return None
 
 
+def serve_web_asset(full_path: str) -> FileResponse:
+    asset = resolve_web_asset(full_path)
+    if asset is not None:
+        return FileResponse(asset)
+
+    # Static assets (_next/*) must not fallback to HTML — return 404
+    if full_path.strip("/").startswith("_next/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    fallback = resolve_web_asset("")
+    if fallback is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(fallback)
+
+
 def create_app() -> FastAPI:
     chatgpt_service = ChatGPTService(account_service)
     app_version = get_app_version()
@@ -1170,17 +1185,10 @@ def create_app() -> FastAPI:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_web(full_path: str):
-        asset = resolve_web_asset(full_path)
-        if asset is not None:
-            return FileResponse(asset)
+        return serve_web_asset(full_path)
 
-        # Static assets (_next/*) must not fallback to HTML — return 404
-        if full_path.strip("/").startswith("_next/"):
-            raise HTTPException(status_code=404, detail="Not Found")
-
-        fallback = resolve_web_asset("")
-        if fallback is None:
-            raise HTTPException(status_code=404, detail="Not Found")
-        return FileResponse(fallback)
+    @app.head("/{full_path:path}", include_in_schema=False)
+    async def serve_web_head(full_path: str):
+        return serve_web_asset(full_path)
 
     return app

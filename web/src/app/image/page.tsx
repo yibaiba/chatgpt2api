@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { History, Plus } from "lucide-react";
+import { ArrowDownToLine, ArrowUpToLine, History, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
@@ -55,6 +55,10 @@ import {
 const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const IMAGE_ASPECT_RATIO_STORAGE_KEY = "chatgpt2api:image_last_aspect_ratio";
+const MOBILE_RESULTS_BREAKPOINT = 1024;
+const RESULTS_SCROLL_RETRY_DELAYS_MS = [80, 240, 600, 1200, 2400] as const;
+const RESULTS_SCROLL_SETTLE_DELAY_MS = 2400;
+const DRAFT_CONVERSATION_TITLE = "新对话";
 const activeConversationQueueIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
@@ -197,6 +201,7 @@ export default function ImagePage() {
   const persistenceQueueRef = useRef<Map<string, Promise<void>>>(new Map());
   const pendingPersistenceRef = useRef<Set<string>>(new Set());
   const resultsViewportRef = useRef<HTMLDivElement>(null);
+  const resultsContentRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -204,13 +209,7 @@ export default function ImagePage() {
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
   const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
-  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>(() => {
-    if (typeof window === "undefined") {
-      return "1:1";
-    }
-    const storedAspectRatio = window.localStorage.getItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
-    return isImageAspectRatio(storedAspectRatio) ? storedAspectRatio : "1:1";
-  });
+  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("1:1");
   const [imageOutputQuality, setImageOutputQuality] = useState<ImageOutputQuality>("original");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -220,12 +219,14 @@ export default function ImagePage() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
   const [viewerSession, setViewerSession] = useState<AuthSession | null>(null);
-  const [onboardingMode] = useState<string | null>(() => consumeImageOnboardingIntent());
+  const [onboardingMode, setOnboardingMode] = useState<string | null>(null);
   const [historyPersistenceMode, setHistoryPersistenceMode] = useState<ImageHistoryPersistenceMode>("browser");
   const [isHistoryModeReady, setIsHistoryModeReady] = useState(false);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [isNearPageBottom, setIsNearPageBottom] = useState(true);
+  const [didLoadStoredAspectRatio, setDidLoadStoredAspectRatio] = useState(false);
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const effectiveSelectedConversationId = useMemo(() => {
@@ -273,8 +274,25 @@ export default function ImagePage() {
     if (typeof window === "undefined") {
       return;
     }
+    const frame = window.requestAnimationFrame(() => {
+      const storedAspectRatio = window.localStorage.getItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
+      if (isImageAspectRatio(storedAspectRatio)) {
+        setImageAspectRatio(storedAspectRatio);
+      }
+      setOnboardingMode(consumeImageOnboardingIntent());
+      setDidLoadStoredAspectRatio(true);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !didLoadStoredAspectRatio) {
+      return;
+    }
     window.localStorage.setItem(IMAGE_ASPECT_RATIO_STORAGE_KEY, imageAspectRatio);
-  }, [imageAspectRatio]);
+  }, [didLoadStoredAspectRatio, imageAspectRatio]);
 
   useEffect(() => {
     if (!isHistoryModeReady) {
@@ -387,23 +405,71 @@ export default function ImagePage() {
   }, [loadQuota]);
 
   useEffect(() => {
-    if (!selectedConversation) {
+    if (!selectedConversation || isHistoryOpen || typeof window === "undefined") {
       return;
     }
 
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
-      resultsViewportRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
+    const isMobile = window.innerWidth < MOBILE_RESULTS_BREAKPOINT;
+    const scrollToEnd = (behavior: ScrollBehavior) => {
+      if (isMobile) {
+        const scrollingElement = document.scrollingElement ?? document.documentElement;
+        window.scrollTo({
+          top: scrollingElement.scrollHeight,
+          behavior,
+        });
+        return;
+      }
+
+      resultsViewportRef.current?.scrollTo({
+        top: resultsViewportRef.current.scrollHeight,
+        behavior,
       });
-      return;
+    };
+
+    let frame = 0;
+    const retryTimers = RESULTS_SCROLL_RETRY_DELAYS_MS.map((delay) =>
+      window.setTimeout(() => {
+        scrollToEnd("auto");
+      }, delay),
+    );
+    let observer: ResizeObserver | null = null;
+    let settleTimer: number | null = null;
+    frame = window.requestAnimationFrame(() => {
+      scrollToEnd("smooth");
+    });
+
+    const scheduleObserverStop = () => {
+      if (settleTimer !== null) {
+        window.clearTimeout(settleTimer);
+      }
+      settleTimer = window.setTimeout(() => {
+        observer?.disconnect();
+      }, RESULTS_SCROLL_SETTLE_DELAY_MS);
+    };
+
+    if (typeof ResizeObserver !== "undefined" && resultsContentRef.current) {
+      observer = new ResizeObserver(() => {
+        window.cancelAnimationFrame(frame);
+        frame = window.requestAnimationFrame(() => {
+          scrollToEnd("auto");
+        });
+        scheduleObserverStop();
+      });
+      observer.observe(resultsContentRef.current);
+      scheduleObserverStop();
     }
 
-    resultsViewportRef.current?.scrollTo({
-      top: resultsViewportRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [selectedConversation?.updatedAt, selectedConversation?.turns.length, selectedConversation]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      for (const timer of retryTimers) {
+        window.clearTimeout(timer);
+      }
+      if (settleTimer !== null) {
+        window.clearTimeout(settleTimer);
+      }
+      observer?.disconnect();
+    };
+  }, [isHistoryOpen, selectedConversation?.updatedAt, selectedConversation?.turns.length, selectedConversation]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -416,6 +482,27 @@ export default function ImagePage() {
       window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
     }
   }, [effectiveSelectedConversationId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const updatePageBottomState = () => {
+      const scrollingElement = document.scrollingElement ?? document.documentElement;
+      const distanceToBottom = scrollingElement.scrollHeight - window.scrollY - window.innerHeight;
+      const nextIsNearBottom = distanceToBottom < 96;
+      setIsNearPageBottom((current) => (current === nextIsNearBottom ? current : nextIsNearBottom));
+    };
+
+    updatePageBottomState();
+    window.addEventListener("scroll", updatePageBottomState, { passive: true });
+    window.addEventListener("resize", updatePageBottomState);
+    return () => {
+      window.removeEventListener("scroll", updatePageBottomState);
+      window.removeEventListener("resize", updatePageBottomState);
+    };
+  }, []);
 
   const saveConversationToCurrentStore = useCallback(
     async (conversation: ImageConversation) => {
@@ -507,19 +594,75 @@ export default function ImagePage() {
     clearComposerInputs();
   }, [clearComposerInputs, handleImageModeChange]);
 
+  const createDraftConversation = useCallback((): ImageConversation => {
+    const now = new Date().toISOString();
+    const draftOwnerRole: UserRole = viewerRole === "admin" ? "admin" : "user";
+    return {
+      id: createId(),
+      title: DRAFT_CONVERSATION_TITLE,
+      createdAt: now,
+      updatedAt: now,
+      ownerRole: draftOwnerRole,
+      ownerId: viewerSession?.id || (draftOwnerRole === "admin" ? "admin" : "unknown"),
+      ownerName: viewerSession?.name || (draftOwnerRole === "admin" ? "管理员" : "普通用户"),
+      turns: [],
+    };
+  }, [viewerRole, viewerSession?.id, viewerSession?.name]);
+
+  const scrollPageToTop = useCallback(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const scrollPageToBottom = useCallback(() => {
+    const scrollingElement = document.scrollingElement ?? document.documentElement;
+    window.scrollTo({ top: scrollingElement.scrollHeight, behavior: "smooth" });
+  }, []);
+
+  const focusComposer = useCallback((selectionEnd?: number) => {
+    requestAnimationFrame(() => {
+      const element = textareaRef.current;
+      if (!element) {
+        return;
+      }
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.focus();
+      const end = selectionEnd ?? element.value.length;
+      element.setSelectionRange(end, end);
+    });
+  }, []);
+
   const handleCreateDraft = () => {
-    setSelectedConversationId(null);
+    const draftConversation = createDraftConversation();
+    const nextConversations = sortImageConversations([
+      draftConversation,
+      ...conversationsRef.current.filter((conversation) => conversation.turns.length > 0),
+    ]);
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
+    setSelectedConversationId(draftConversation.id);
     resetComposer();
-    textareaRef.current?.focus();
+    focusComposer(0);
+  };
+
+  const handleTogglePageEdge = () => {
+    if (isNearPageBottom) {
+      scrollPageToTop();
+      return;
+    }
+    scrollPageToBottom();
   };
 
   const handleDeleteConversation = async (id: string) => {
+    const deletedConversation = conversations.find((item) => item.id === id);
     const nextConversations = conversations.filter((item) => item.id !== id);
     conversationsRef.current = nextConversations;
     setConversations(nextConversations);
     if (selectedConversationId === id) {
       setSelectedConversationId(pickFallbackConversationId(nextConversations));
       resetComposer();
+    }
+    if (deletedConversation?.turns.length === 0) {
+      return;
     }
 
     try {
@@ -604,19 +747,6 @@ export default function ImagePage() {
       return next;
     });
     setReferenceImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
-  }, []);
-
-  const focusComposer = useCallback((selectionEnd?: number) => {
-    requestAnimationFrame(() => {
-      const element = textareaRef.current;
-      if (!element) {
-        return;
-      }
-      element.scrollIntoView({ behavior: "smooth", block: "center" });
-      element.focus();
-      const end = selectionEnd ?? element.value.length;
-      element.setSelectionRange(end, end);
-    });
   }, []);
 
   const prepareReferenceImagesForComposer = useCallback((images: StoredReferenceImage[]) => {
@@ -968,6 +1098,10 @@ export default function ImagePage() {
     const baseConversation: ImageConversation = targetConversation
       ? {
           ...targetConversation,
+          title:
+            targetConversation.turns.length === 0 || targetConversation.title === DRAFT_CONVERSATION_TITLE
+              ? buildConversationTitle(prompt)
+              : targetConversation.title,
           updatedAt: now,
           turns: [...targetConversation.turns, draftTurn],
         }
@@ -1016,17 +1150,27 @@ export default function ImagePage() {
         </div>
 
         <div className="flex min-h-0 flex-col gap-3 sm:gap-4">
-          <div className="flex items-center justify-between gap-3 lg:hidden">
+          <div className="sticky top-2 z-30 -mx-1 flex items-center justify-between gap-3 rounded-[28px] border border-white/80 bg-white/85 p-2 shadow-[0_16px_45px_rgba(28,25,23,0.14)] backdrop-blur-xl lg:hidden">
             <Button
               variant="outline"
-              className="h-10 flex-1 rounded-2xl border-stone-200 bg-white/85 text-stone-700 shadow-sm"
+              className="h-11 flex-1 rounded-2xl border-stone-200 bg-white/90 text-stone-700 shadow-sm hover:bg-white"
               onClick={() => setIsHistoryOpen(true)}
             >
               <History className="size-4" />
               历史记录 ({conversations.length})
             </Button>
             <Button
-              className="h-10 rounded-2xl bg-stone-950 px-3 text-white shadow-sm hover:bg-stone-800"
+              type="button"
+              variant="outline"
+              className="h-11 w-11 shrink-0 rounded-2xl border-stone-200 bg-white/90 px-0 text-stone-700 shadow-sm hover:bg-white"
+              onClick={handleTogglePageEdge}
+              aria-label={isNearPageBottom ? "回到页面顶部" : "跳到页面底部"}
+              title={isNearPageBottom ? "回到顶部" : "跳到底部"}
+            >
+              {isNearPageBottom ? <ArrowUpToLine className="size-4" /> : <ArrowDownToLine className="size-4" />}
+            </Button>
+            <Button
+              className="h-11 rounded-2xl bg-stone-950 px-4 text-white shadow-sm hover:bg-stone-800"
               onClick={handleCreateDraft}
             >
               <Plus className="size-4" />
@@ -1074,14 +1218,16 @@ export default function ImagePage() {
             ref={resultsViewportRef}
             className="min-h-[220px] px-2 py-3 sm:px-4 sm:py-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
           >
-            <ImageResults
-              selectedConversation={selectedConversation}
-              showConversationOwner={showConversationOwner}
-              onOpenLightbox={openLightbox}
-              onReuseAsReference={handleReuseAsReference}
-              onReusePrompt={handleReusePrompt}
-              formatConversationTime={formatConversationTime}
-            />
+            <div ref={resultsContentRef}>
+              <ImageResults
+                selectedConversation={selectedConversation}
+                showConversationOwner={showConversationOwner}
+                onOpenLightbox={openLightbox}
+                onReuseAsReference={handleReuseAsReference}
+                onReusePrompt={handleReusePrompt}
+                formatConversationTime={formatConversationTime}
+              />
+            </div>
           </div>
 
           <ImageComposer

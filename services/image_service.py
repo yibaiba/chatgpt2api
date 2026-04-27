@@ -36,6 +36,7 @@ _BUILD_INFO_TTL = 900  # 15 分钟
 
 DEFAULT_MODEL = "auto"
 MAX_POW_ATTEMPTS = 500000
+IMAGE_DOWNLOAD_RETRY_STATUSES = (408, 409, 425, 429, 500, 502, 503, 504)
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -1147,27 +1148,45 @@ def _fetch_download_url(session: Session, access_token: str, device_id: str, con
     return str((response.json() or {}).get("download_url") or "")
 
 
+def _format_download_failure(response) -> str:
+    status_code = getattr(response, "status_code", 0)
+    response_text = str(getattr(response, "text", "") or "").strip()
+    if response_text:
+        return f"download image failed: HTTP {status_code}: {response_text[:200]}"
+    return f"download image failed: HTTP {status_code}"
+
+
+def _fetch_image_bytes(session: Session, download_url: str) -> bytes:
+    last_response = None
+    for attempt in range(3):
+        response = session.get(download_url, timeout=60)
+        last_response = response
+        if response.ok and response.content:
+            return response.content
+        should_retry = (
+            response.ok and not response.content
+        ) or response.status_code in IMAGE_DOWNLOAD_RETRY_STATUSES
+        if not should_retry or attempt == 2:
+            break
+        time.sleep(attempt + 1)
+    raise ImageGenerationError(_format_download_failure(last_response))
+
+
 def _download_as_base64(session: Session, download_url: str) -> str:
-    response = session.get(download_url, timeout=60)
-    if not response.ok or not response.content:
-        raise ImageGenerationError("download image failed")
-    return base64.b64encode(response.content).decode("ascii")
+    return base64.b64encode(_fetch_image_bytes(session, download_url)).decode("ascii")
 
 
 def _download_and_save_image(session: Session, download_url: str, base_url: str | None = None) -> str:
     """下载图片并保存到本地，返回本地 URL"""
-    response = session.get(download_url, timeout=60)
-    if not response.ok or not response.content:
-        raise ImageGenerationError("download image failed")
-
-    file_hash = hashlib.md5(response.content).hexdigest()
+    image_bytes = _fetch_image_bytes(session, download_url)
+    file_hash = hashlib.md5(image_bytes).hexdigest()
     timestamp = int(time.time())
     filename = f"{timestamp}_{file_hash}.png"
     relative_dir = Path(time.strftime("%Y"), time.strftime("%m"), time.strftime("%d"))
 
     file_path = config.images_dir / relative_dir / filename
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(response.content)
+    file_path.write_bytes(image_bytes)
 
     return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
 

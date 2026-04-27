@@ -58,6 +58,19 @@ export function ImageResults({
     );
   }
 
+  if (selectedConversation.turns.length === 0) {
+    return (
+      <div className="flex h-full min-h-[320px] items-center justify-center text-center">
+        <div className="w-full max-w-2xl rounded-[32px] border border-dashed border-stone-200 bg-white/60 px-6 py-10 shadow-sm">
+          <div className="text-sm font-semibold text-stone-900">新对话已创建</div>
+          <p className="mt-2 text-sm leading-6 text-stone-500">
+            在下方输入提示词并发送后，这条对话会自动保存到历史记录。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[980px] flex-col gap-8">
       {selectedConversation.turns.map((turn, turnIndex) => {
