@@ -84,9 +84,9 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
         </Button>
         <div className="hidden min-w-0 text-xs text-stone-500 sm:block">
           {selectedItem ? (
-            <span className="block truncate">已选灵感：{selectedItem.title}</span>
+            <span className="block truncate">已选模板：{selectedItem.title}</span>
           ) : (
-            <span className="block truncate">精选案例一键填入，不占输入区空间</span>
+            <span className="block truncate">按场景挑一个模板，再继续细化你的提示词</span>
           )}
         </div>
       </div>
@@ -162,7 +162,11 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
                   )}
                   >
                     <div className="relative aspect-[16/10] overflow-hidden bg-stone-100">
-                      <GalleryPreviewImage title={item.title} imageUrl={item.previewImageUrl} />
+                      <GalleryPreviewImage
+                        key={item.previewImageUrl || item.id}
+                        title={item.title}
+                        imageUrl={item.previewImageUrl}
+                      />
                       <div className="absolute left-3 top-3 rounded-md bg-black/60 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-white">
                         {categoryMeta.badge}
                       </div>
@@ -239,11 +243,7 @@ function getCategoryMeta(category: ImagePromptGalleryCategory) {
 }
 
 function GalleryPreviewImage({ title, imageUrl }: { title: string; imageUrl: string }) {
-  const [failed, setFailed] = useState(!imageUrl);
-
-  useEffect(() => {
-    setFailed(!imageUrl);
-  }, [imageUrl]);
+  const [failed, setFailed] = useState(() => !imageUrl);
 
   if (failed) {
     return (

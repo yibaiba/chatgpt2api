@@ -52,10 +52,15 @@ import {
   type Sub2APIRemoteGroup,
   type Sub2APIServer,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
 type AuthMode = "password" | "api_key";
+
+type Sub2APIConnectionsProps = {
+  highlightTargetId?: string;
+};
 
 function normalizeAccounts(items: Sub2APIRemoteAccount[]) {
   const seen = new Set<string>();
@@ -79,7 +84,7 @@ function normalizeAccounts(items: Sub2APIRemoteAccount[]) {
   return accounts;
 }
 
-export function Sub2APIConnections() {
+export function Sub2APIConnections({ highlightTargetId }: Sub2APIConnectionsProps) {
   const didLoadRef = useRef(false);
   const pollTimerRef = useRef<number | null>(null);
 
@@ -167,6 +172,22 @@ export function Sub2APIConnections() {
       }
     };
   }, [servers]);
+
+  useEffect(() => {
+    if (!highlightTargetId?.startsWith("sub2api-connection-")) {
+      return;
+    }
+    const element = document.getElementById(highlightTargetId);
+    if (!element) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [highlightTargetId, servers]);
 
   const openAddDialog = () => {
     setEditingServer(null);
@@ -432,8 +453,14 @@ export function Sub2APIConnections() {
                 const importJob = server.import_job ?? null;
                 return (
                   <div
+                    id={`sub2api-connection-${server.id}`}
                     key={server.id}
-                    className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3"
+                    className={cn(
+                      "flex flex-col gap-3 rounded-xl border bg-white px-4 py-3 transition-colors",
+                      highlightTargetId === `sub2api-connection-${server.id}`
+                        ? "border-blue-300 bg-blue-50/70 shadow-[0_0_0_1px_rgba(59,130,246,0.12)]"
+                        : "border-stone-200",
+                    )}
                   >
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">

@@ -47,7 +47,9 @@ export default function LoginPage() {
             </div>
             <div className="space-y-2">
               <h1 className="text-2xl font-semibold tracking-tight text-stone-950 sm:text-3xl">欢迎回来</h1>
-              <p className="text-sm leading-6 text-stone-500">输入密钥后会根据权限进入对应页面。</p>
+              <p className="text-sm leading-6 text-stone-500">
+                输入密钥后会根据权限进入对应页面；管理员会先在账号页看到系统就绪引导。
+              </p>
             </div>
           </div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -63,6 +64,7 @@ import {
   type ProxyPoolSettings,
 } from "@/lib/api";
 import { syncStoredAuthSession } from "@/lib/auth-session";
+import { cn } from "@/lib/utils";
 
 import { ConfigCard } from "./components/config-card";
 import { Sub2APIConnections } from "./components/sub2api-connections";
@@ -156,6 +158,7 @@ export default function SettingsPage() {
   const [userFormQuota, setUserFormQuota] = useState("0");
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [highlightedTargetId, setHighlightedTargetId] = useState("");
 
   const loadPools = async () => {
     setIsLoading(true);
@@ -257,6 +260,38 @@ export default function SettingsPage() {
       }
     };
   }, [pools]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncHighlightedTarget = () => {
+      setHighlightedTargetId(window.location.hash.replace(/^#/, ""));
+    };
+
+    syncHighlightedTarget();
+    window.addEventListener("hashchange", syncHighlightedTarget);
+    return () => {
+      window.removeEventListener("hashchange", syncHighlightedTarget);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!highlightedTargetId.startsWith("cpa-connection-")) {
+      return;
+    }
+    const element = document.getElementById(highlightedTargetId);
+    if (!element) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [highlightedTargetId, pools]);
 
   const openAddDialog = () => {
     setEditingPool(null);
@@ -540,9 +575,41 @@ export default function SettingsPage() {
       </section>
 
       <section className="space-y-6">
-        <ConfigCard />
-
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="space-y-4 p-4 sm:p-5">
+            <div className="space-y-1">
+              <div className="text-sm font-semibold text-stone-900">快速定位</div>
+              <p className="text-sm text-stone-500">首次接入时，通常先看系统配置和远端账号来源。</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
+                <Link href="/settings#system-config">系统配置</Link>
+              </Button>
+              <Button asChild variant="outline" className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
+                <Link href="/settings#remote-account-sources">远端账号来源</Link>
+              </Button>
+              <Button asChild variant="outline" className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
+                <Link href="/settings#cpa-connections">CPA 连接</Link>
+              </Button>
+              <Button asChild variant="outline" className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
+                <Link href="/settings#sub2api-connections">Sub2API 连接</Link>
+              </Button>
+              <Button asChild variant="outline" className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
+                <Link href="/settings#auth-users">普通用户</Link>
+              </Button>
+              <Button asChild variant="outline" className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
+                <Link href="/settings#proxy-pool">代理池</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div id="system-config" className="scroll-mt-24">
+          <ConfigCard />
+        </div>
+
+        <div id="proxy-pool" className="scroll-mt-24">
+          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-center gap-3">
@@ -657,8 +724,10 @@ export default function SettingsPage() {
             )}
           </CardContent>
         </Card>
+        </div>
 
-        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+        <div id="auth-users" className="scroll-mt-24">
+          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-center gap-3">
@@ -750,8 +819,11 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+        </div>
 
-        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+        <div id="remote-account-sources" className="space-y-6 scroll-mt-24">
+          <div id="cpa-connections" className="scroll-mt-24">
+            <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-center gap-3">
@@ -790,7 +862,16 @@ export default function SettingsPage() {
                   const isBusy = deletingId === pool.id || loadingFilesId === pool.id;
                   const importJob = pool.import_job ?? null;
                   return (
-                    <div key={pool.id} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <div
+                      id={`cpa-connection-${pool.id}`}
+                      key={pool.id}
+                      className={cn(
+                        "flex flex-col gap-3 rounded-xl border bg-white px-4 py-3 transition-colors",
+                        highlightedTargetId === `cpa-connection-${pool.id}`
+                          ? "border-blue-300 bg-blue-50/70 shadow-[0_0_0_1px_rgba(59,130,246,0.12)]"
+                          : "border-stone-200",
+                      )}
+                    >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-stone-800">{pool.name || pool.base_url}</div>
@@ -894,8 +975,12 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+          </div>
 
-        <Sub2APIConnections />
+          <div id="sub2api-connections" className="scroll-mt-24">
+            <Sub2APIConnections highlightTargetId={highlightedTargetId} />
+          </div>
+        </div>
       </section>
 
       <Dialog open={proxyDialogOpen} onOpenChange={setProxyDialogOpen}>

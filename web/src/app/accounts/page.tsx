@@ -54,6 +54,7 @@ import { syncStoredAuthSession } from "@/lib/auth-session";
 import { cn } from "@/lib/utils";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
+import { FirstSuccessChecklist } from "./components/first-success-checklist";
 
 const accountTypeOptions: { label: string; value: AccountType | "all" }[] = [
   { label: "全部类型", value: "all" },
@@ -71,6 +72,8 @@ const accountStatusOptions: { label: string; value: AccountStatus | "all" }[] = 
   { label: "异常", value: "异常" },
   { label: "禁用", value: "禁用" },
 ];
+
+type AccountFocusFilter = "all" | "attention";
 
 const statusMeta: Record<
   AccountStatus,
@@ -181,14 +184,28 @@ function normalizeAccounts(items: Account[]): Account[] {
   }));
 }
 
+function isAccountTypeFilter(value: string | null): value is AccountType | "all" {
+  return accountTypeOptions.some((option) => option.value === value);
+}
+
+function isAccountStatusFilter(value: string | null): value is AccountStatus | "all" {
+  return accountStatusOptions.some((option) => option.value === value);
+}
+
+function isAccountFocusFilter(value: string | null): value is AccountFocusFilter {
+  return value === "all" || value === "attention";
+}
+
 export default function AccountsPage() {
   const didLoadRef = useRef(false);
+  const didHydrateFiltersRef = useRef(false);
   const router = useRouter();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<AccountType | "all">("all");
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
+  const [focusFilter, setFocusFilter] = useState<AccountFocusFilter>("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState("10");
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -248,6 +265,60 @@ export default function AccountsPage() {
     };
   }, [router]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncFiltersFromLocation = () => {
+      const params = new URLSearchParams(window.location.search);
+      setQuery(params.get("q") ?? "");
+      setTypeFilter(isAccountTypeFilter(params.get("type")) ? params.get("type") : "all");
+      setStatusFilter(isAccountStatusFilter(params.get("status")) ? params.get("status") : "all");
+      setFocusFilter(isAccountFocusFilter(params.get("focus")) ? params.get("focus") : "all");
+      setPage(1);
+    };
+
+    syncFiltersFromLocation();
+    didHydrateFiltersRef.current = true;
+    window.addEventListener("popstate", syncFiltersFromLocation);
+    return () => {
+      window.removeEventListener("popstate", syncFiltersFromLocation);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !didHydrateFiltersRef.current) {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    if (query.trim()) {
+      params.set("q", query.trim());
+    } else {
+      params.delete("q");
+    }
+    if (typeFilter !== "all") {
+      params.set("type", typeFilter);
+    } else {
+      params.delete("type");
+    }
+    if (statusFilter !== "all") {
+      params.set("status", statusFilter);
+    } else {
+      params.delete("status");
+    }
+    if (focusFilter !== "all") {
+      params.set("focus", focusFilter);
+    } else {
+      params.delete("focus");
+    }
+
+    const nextSearch = params.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }, [focusFilter, query, statusFilter, typeFilter]);
+
   const filteredAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return accounts.filter((account) => {
@@ -255,9 +326,10 @@ export default function AccountsPage() {
         normalizedQuery.length === 0 || (account.email ?? "").toLowerCase().includes(normalizedQuery);
       const typeMatched = typeFilter === "all" || account.type === typeFilter;
       const statusMatched = statusFilter === "all" || account.status === statusFilter;
-      return searchMatched && typeMatched && statusMatched;
+      const focusMatched = focusFilter === "all" || account.status !== "正常";
+      return searchMatched && typeMatched && statusMatched && focusMatched;
     });
-  }, [accounts, query, statusFilter, typeFilter]);
+  }, [accounts, focusFilter, query, statusFilter, typeFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filteredAccounts.length / Number(pageSize)));
   const safePage = Math.min(page, pageCount);
@@ -396,7 +468,7 @@ export default function AccountsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">号池管理</h1>
         </div>
 
-        <div className="grid w-full gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end lg:w-auto">
+        <div id="account-actions" className="grid w-full gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end lg:w-auto">
           <Button
             variant="outline"
             className="h-10 w-full justify-center rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white sm:w-auto"
@@ -509,6 +581,8 @@ export default function AccountsPage() {
       </Dialog>
 
       <section className="space-y-3">
+        <FirstSuccessChecklist accounts={accounts} />
+
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           {metricCards.map((item) => {
             const Icon = item.icon;
@@ -532,13 +606,49 @@ export default function AccountsPage() {
         </div>
       </section>
 
-      <section className="space-y-4">
+      <section id="account-list" className="space-y-4 scroll-mt-24">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold tracking-tight">账户列表</h2>
-            <Badge variant="secondary" className="rounded-lg bg-stone-200 px-2 py-0.5 text-stone-700">
-              {filteredAccounts.length}
-            </Badge>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold tracking-tight">账户列表</h2>
+              <Badge variant="secondary" className="rounded-lg bg-stone-200 px-2 py-0.5 text-stone-700">
+                {filteredAccounts.length}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant={focusFilter === "all" ? "default" : "outline"}
+                className={cn(
+                  "h-8 rounded-full px-3 text-xs",
+                  focusFilter === "all"
+                    ? "bg-stone-950 text-white hover:bg-stone-800"
+                    : "border-stone-200 bg-white text-stone-600",
+                )}
+                onClick={() => {
+                  setFocusFilter("all");
+                  setPage(1);
+                }}
+              >
+                全部账号
+              </Button>
+              <Button
+                type="button"
+                variant={focusFilter === "attention" ? "default" : "outline"}
+                className={cn(
+                  "h-8 rounded-full px-3 text-xs",
+                  focusFilter === "attention"
+                    ? "bg-amber-600 text-white hover:bg-amber-500"
+                    : "border-stone-200 bg-white text-stone-600",
+                )}
+                onClick={() => {
+                  setFocusFilter("attention");
+                  setPage(1);
+                }}
+              >
+                待处理账号
+              </Button>
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -592,6 +702,32 @@ export default function AccountsPage() {
             </Select>
           </div>
         </div>
+
+        {focusFilter !== "all" || statusFilter !== "all" || typeFilter !== "all" || query.trim() ? (
+          <div className="flex flex-col gap-2 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">当前快捷筛选</span>
+              {focusFilter === "attention" ? <Badge variant="warning">待处理账号</Badge> : null}
+              {statusFilter !== "all" ? <Badge variant="secondary">状态：{statusFilter}</Badge> : null}
+              {typeFilter !== "all" ? <Badge variant="secondary">类型：{typeFilter}</Badge> : null}
+              {query.trim() ? <Badge variant="secondary">搜索：{query.trim()}</Badge> : null}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-8 justify-start rounded-xl px-3 text-blue-700 hover:bg-blue-100 sm:justify-center"
+              onClick={() => {
+                setFocusFilter("all");
+                setStatusFilter("all");
+                setTypeFilter("all");
+                setQuery("");
+                setPage(1);
+              }}
+            >
+              清空筛选
+            </Button>
+          </div>
+        ) : null}
 
         {isLoading && accounts.length === 0 ? (
           <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">

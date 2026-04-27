@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { History, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ import {
   type ImageAspectRatio,
   type ImageOutputQuality,
 } from "@/lib/image-options";
+import { consumeImageOnboardingIntent } from "@/lib/onboarding";
 import { upscaleGeneratedImage } from "@/lib/image-upscale";
 import {
   buildBrowserImageHistoryStorageKey,
@@ -191,6 +193,7 @@ async function recoverConversationHistory(
 export default function ImagePage() {
   const didLoadQuotaRef = useRef(false);
   const conversationsRef = useRef<ImageConversation[]>([]);
+  const runConversationQueueRef = useRef<(conversationId: string) => Promise<void>>(async () => {});
   const persistenceQueueRef = useRef<Map<string, Promise<void>>>(new Map());
   const pendingPersistenceRef = useRef<Set<string>>(new Set());
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -201,7 +204,13 @@ export default function ImagePage() {
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
   const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
-  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("1:1");
+  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>(() => {
+    if (typeof window === "undefined") {
+      return "1:1";
+    }
+    const storedAspectRatio = window.localStorage.getItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
+    return isImageAspectRatio(storedAspectRatio) ? storedAspectRatio : "1:1";
+  });
   const [imageOutputQuality, setImageOutputQuality] = useState<ImageOutputQuality>("original");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -211,6 +220,7 @@ export default function ImagePage() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
   const [viewerSession, setViewerSession] = useState<AuthSession | null>(null);
+  const [onboardingMode] = useState<string | null>(() => consumeImageOnboardingIntent());
   const [historyPersistenceMode, setHistoryPersistenceMode] = useState<ImageHistoryPersistenceMode>("browser");
   const [isHistoryModeReady, setIsHistoryModeReady] = useState(false);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
@@ -218,9 +228,15 @@ export default function ImagePage() {
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
+  const effectiveSelectedConversationId = useMemo(() => {
+    if (selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId)) {
+      return selectedConversationId;
+    }
+    return pickFallbackConversationId(conversations);
+  }, [conversations, selectedConversationId]);
   const selectedConversation = useMemo(
-    () => conversations.find((item) => item.id === selectedConversationId) ?? null,
-    [conversations, selectedConversationId],
+    () => conversations.find((item) => item.id === effectiveSelectedConversationId) ?? null,
+    [conversations, effectiveSelectedConversationId],
   );
   const activeTaskCount = useMemo(
     () =>
@@ -240,20 +256,18 @@ export default function ImagePage() {
     [viewerRole, viewerSession?.id],
   );
   const showConversationOwner = viewerRole === "admin";
+  const hasSuccessfulImageResult = useMemo(
+    () =>
+      conversations.some((conversation) =>
+        conversation.turns.some((turn) => turn.images.some((image) => image.status === "success" && image.b64_json)),
+      ),
+    [conversations],
+  );
+  const showFirstSuccessBanner = viewerRole === "admin" && onboardingMode === "first-success";
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const storedAspectRatio = window.localStorage.getItem(IMAGE_ASPECT_RATIO_STORAGE_KEY);
-    if (isImageAspectRatio(storedAspectRatio)) {
-      setImageAspectRatio(storedAspectRatio);
-    }
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -377,6 +391,14 @@ export default function ImagePage() {
       return;
     }
 
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      resultsViewportRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      return;
+    }
+
     resultsViewportRef.current?.scrollTo({
       top: resultsViewportRef.current.scrollHeight,
       behavior: "smooth",
@@ -388,18 +410,12 @@ export default function ImagePage() {
       return;
     }
 
-    if (selectedConversationId) {
-      window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, selectedConversationId);
+    if (effectiveSelectedConversationId) {
+      window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, effectiveSelectedConversationId);
     } else {
       window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
     }
-  }, [selectedConversationId]);
-
-  useEffect(() => {
-    if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
-      setSelectedConversationId(pickFallbackConversationId(conversations));
-    }
-  }, [conversations, selectedConversationId]);
+  }, [effectiveSelectedConversationId]);
 
   const saveConversationToCurrentStore = useCallback(
     async (conversation: ImageConversation) => {
@@ -686,8 +702,7 @@ export default function ImagePage() {
     setLightboxOpen(true);
   }, []);
 
-  const runConversationQueue = useCallback(
-    async (conversationId: string) => {
+  const runConversationQueue = async (conversationId: string) => {
       if (activeConversationQueueIds.has(conversationId)) {
         return;
       }
@@ -892,13 +907,15 @@ export default function ImagePage() {
             !activeConversationQueueIds.has(conversation.id) &&
             conversation.turns.some((turn) => turn.status === "queued")
           ) {
-            void runConversationQueue(conversation.id);
+            void runConversationQueueRef.current(conversation.id);
           }
         }
       }
-    },
-    [loadQuota, updateConversation],
-  );
+    };
+
+  useEffect(() => {
+    runConversationQueueRef.current = runConversationQueue;
+  });
 
   useEffect(() => {
     for (const conversation of conversations) {
@@ -906,10 +923,10 @@ export default function ImagePage() {
         !activeConversationQueueIds.has(conversation.id) &&
         conversation.turns.some((turn) => turn.status === "queued")
       ) {
-        void runConversationQueue(conversation.id);
+        void runConversationQueueRef.current(conversation.id);
       }
     }
-  }, [conversations, runConversationQueue]);
+  }, [conversations]);
 
   const handleSubmit = async () => {
     const prompt = imagePrompt.trim();
@@ -983,7 +1000,7 @@ export default function ImagePage() {
 
   return (
     <>
-      <section className="mx-auto grid h-[calc(100vh-5rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <section className="mx-auto grid min-h-[calc(100dvh-5rem)] w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:h-[calc(100dvh-5rem)] lg:min-h-0 lg:grid-cols-[240px_minmax(0,1fr)]">
         <div className="hidden min-h-0 lg:block">
           <ImageSidebar
             conversations={conversations}
@@ -1017,18 +1034,54 @@ export default function ImagePage() {
             </Button>
           </div>
 
+          {showFirstSuccessBanner ? (
+            <div
+              className={
+                hasSuccessfulImageResult
+                  ? "rounded-[24px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-950 shadow-sm"
+                  : "rounded-[24px] border border-amber-200 bg-amber-50 px-4 py-3 text-amber-950 shadow-sm"
+              }
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">
+                    {hasSuccessfulImageResult ? "首次出图已完成" : "现在就差完成第一张图"}
+                  </div>
+                  <p className="text-sm leading-6">
+                    {hasSuccessfulImageResult
+                      ? "已经检测到成功出图记录，这条首次成功路径已经打通。"
+                      : "用当前工作台完成一次成功生成后，返回账号页就能看到首次成功路径全部完成。"}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    asChild
+                    variant={hasSuccessfulImageResult ? "default" : "outline"}
+                    className={
+                      hasSuccessfulImageResult
+                        ? "h-9 rounded-xl bg-emerald-700 px-4 text-white hover:bg-emerald-800"
+                        : "h-9 rounded-xl border-amber-300 bg-white/80 px-4 text-amber-900 hover:bg-white"
+                    }
+                  >
+                    <Link href="/accounts">{hasSuccessfulImageResult ? "返回账号页查看完成状态" : "稍后返回账号页确认"}</Link>
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <div
             ref={resultsViewportRef}
-            className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4"
+            className="min-h-[220px] px-2 py-3 sm:px-4 sm:py-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
           >
-          <ImageResults
-            selectedConversation={selectedConversation}
-            showConversationOwner={showConversationOwner}
-            onOpenLightbox={openLightbox}
-            onReuseAsReference={handleReuseAsReference}
-            onReusePrompt={handleReusePrompt}
-            formatConversationTime={formatConversationTime}
-          />
+            <ImageResults
+              selectedConversation={selectedConversation}
+              showConversationOwner={showConversationOwner}
+              onOpenLightbox={openLightbox}
+              onReuseAsReference={handleReuseAsReference}
+              onReusePrompt={handleReusePrompt}
+              formatConversationTime={formatConversationTime}
+            />
           </div>
 
           <ImageComposer

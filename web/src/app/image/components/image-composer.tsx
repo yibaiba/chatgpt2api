@@ -240,10 +240,10 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[168px] resize-none rounded-[32px] border-0 bg-transparent px-5 pt-5 pb-5 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:px-6 sm:pb-20"
+              className="min-h-[168px] resize-none rounded-[32px] border-0 bg-transparent px-5 pt-5 pb-5 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:px-6 sm:pb-6"
             />
 
-            <div className="border-t border-stone-200/80 bg-white px-4 py-3 sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-gradient-to-t sm:from-white sm:via-white/95 sm:to-transparent sm:px-6 sm:pb-4 sm:pt-6">
+            <div className="border-t border-stone-200/80 bg-white px-4 py-3 sm:px-6 sm:py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:gap-3">
                   {mode === "generate" ? (
@@ -274,7 +274,9 @@ export function ImageComposer({
                       {referenceImages.length > 0 ? "继续添加参考图" : "上传参考图"}
                     </Button>
                   )}
-                  <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">剩余额度 {availableQuota}</div>
+                  <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">
+                    剩余额度 {availableQuota}
+                  </div>
                   {activeTaskCount > 0 && (
                     <div className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
                       <LoaderCircle className="size-3 animate-spin" />
