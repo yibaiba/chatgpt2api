@@ -1,12 +1,29 @@
 "use client";
-import { ArrowUp, ImagePlus, LoaderCircle, X } from "lucide-react";
-import { useMemo, useState, type ClipboardEvent, type DragEvent, type RefObject } from "react";
+import {
+  ArrowUp,
+  ChevronDown,
+  ImagePlus,
+  LoaderCircle,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
+import {
+  useMemo,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type RefObject,
+} from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { ImageModel } from "@/lib/api";
-import type { ImageAspectRatio, ImageOutputQuality } from "@/lib/image-options";
+import {
+  getImageOutputQualityLabel,
+  type ImageAspectRatio,
+  type ImageOutputQuality,
+} from "@/lib/image-options";
 import type { ImageConversationMode } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 
@@ -34,7 +51,11 @@ type ImageComposerProps = {
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
-  onReferenceImageReuse: (payload: { conversationId?: string; id?: string; dataUrl: string }) => void | Promise<void>;
+  onReferenceImageReuse: (payload: {
+    conversationId?: string;
+    id?: string;
+    dataUrl: string;
+  }) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
 };
 
@@ -65,13 +86,20 @@ export function ImageComposer({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isDropActive, setIsDropActive] = useState(false);
+  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
   const lightboxImages = useMemo(
-    () => referenceImages.map((image, index) => ({ id: `${image.name}-${index}`, src: image.dataUrl })),
+    () =>
+      referenceImages.map((image, index) => ({
+        id: `${image.name}-${index}`,
+        src: image.dataUrl,
+      })),
     [referenceImages],
   );
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith("image/"),
+    );
     if (imageFiles.length === 0) {
       return;
     }
@@ -83,8 +111,15 @@ export function ImageComposer({
     void onReferenceImageChange(imageFiles);
   };
 
-  const handleDragState = (event: DragEvent<HTMLDivElement | HTMLTextAreaElement>) => {
-    if (event.dataTransfer.types.includes("Files") || event.dataTransfer.types.includes("application/x-chatgpt2api-reference-image")) {
+  const handleDragState = (
+    event: DragEvent<HTMLDivElement | HTMLTextAreaElement>,
+  ) => {
+    if (
+      event.dataTransfer.types.includes("Files") ||
+      event.dataTransfer.types.includes(
+        "application/x-chatgpt2api-reference-image",
+      )
+    ) {
       if (mode !== "edit") {
         onModeChange("edit");
       }
@@ -94,9 +129,15 @@ export function ImageComposer({
     }
   };
 
-  const handleDrop = (event: DragEvent<HTMLDivElement | HTMLTextAreaElement>) => {
-    const droppedFiles = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/"));
-    const rawPayload = event.dataTransfer.getData("application/x-chatgpt2api-reference-image");
+  const handleDrop = (
+    event: DragEvent<HTMLDivElement | HTMLTextAreaElement>,
+  ) => {
+    const droppedFiles = Array.from(event.dataTransfer.files).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    const rawPayload = event.dataTransfer.getData(
+      "application/x-chatgpt2api-reference-image",
+    );
     setIsDropActive(false);
 
     if (droppedFiles.length === 0 && !rawPayload) {
@@ -114,7 +155,11 @@ export function ImageComposer({
     }
 
     try {
-      const payload = JSON.parse(rawPayload) as { conversationId?: string; id?: string; dataUrl?: string };
+      const payload = JSON.parse(rawPayload) as {
+        conversationId?: string;
+        id?: string;
+        dataUrl?: string;
+      };
       if (payload.dataUrl) {
         void onReferenceImageReuse({
           conversationId: payload.conversationId,
@@ -180,13 +225,17 @@ export function ImageComposer({
 
         <div
           className={cn(
-            "overflow-hidden rounded-[32px] border bg-white transition",
-            isDropActive ? "border-stone-900 bg-stone-50 shadow-[0_0_0_1px_rgba(28,25,23,0.1)]" : "border-stone-200",
+            "overflow-hidden rounded-[28px] border bg-white transition sm:rounded-[32px]",
+            isDropActive
+              ? "border-stone-900 bg-stone-50 shadow-[0_0_0_1px_rgba(28,25,23,0.1)]"
+              : "border-stone-200",
           )}
           onDragEnter={handleDragState}
           onDragOver={handleDragState}
           onDragLeave={(event) => {
-            if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            if (
+              event.currentTarget.contains(event.relatedTarget as Node | null)
+            ) {
               return;
             }
             setIsDropActive(false);
@@ -206,18 +255,34 @@ export function ImageComposer({
               onOpenChange={setLightboxOpen}
               onIndexChange={setLightboxIndex}
             />
-            <ImagePanelControls
+            <MobileImageSettingsBar
+              open={mobileSettingsOpen}
               mode={mode}
               model={model}
               aspectRatio={aspectRatio}
               imageCount={imageCount}
               outputQuality={outputQuality}
-              onModeChange={onModeChange}
-              onModelChange={onModelChange}
-              onAspectRatioChange={onAspectRatioChange}
-              onImageCountChange={onImageCountChange}
-              onOutputQualityChange={onOutputQualityChange}
+              onToggle={() => setMobileSettingsOpen((value) => !value)}
             />
+            <div
+              className={cn(
+                "sm:block",
+                mobileSettingsOpen ? "block" : "hidden",
+              )}
+            >
+              <ImagePanelControls
+                mode={mode}
+                model={model}
+                aspectRatio={aspectRatio}
+                imageCount={imageCount}
+                outputQuality={outputQuality}
+                onModeChange={onModeChange}
+                onModelChange={onModelChange}
+                onAspectRatioChange={onAspectRatioChange}
+                onImageCountChange={onImageCountChange}
+                onOutputQualityChange={onOutputQualityChange}
+              />
+            </div>
             <Textarea
               ref={textareaRef}
               value={prompt}
@@ -240,11 +305,11 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[168px] resize-none rounded-[32px] border-0 bg-transparent px-5 pt-5 pb-5 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:px-6 sm:pb-6"
+              className="min-h-[116px] resize-none rounded-[28px] border-0 bg-transparent px-5 pt-4 pb-4 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:rounded-[32px] sm:px-6 sm:pt-5 sm:pb-6"
             />
 
             <div className="border-t border-stone-200/80 bg-white px-4 py-3 sm:px-6 sm:py-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="flex items-end justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:gap-3">
                   {mode === "generate" ? (
                     <ImagePromptGallery
@@ -267,11 +332,13 @@ export function ImageComposer({
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-10 w-full rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none sm:w-auto"
+                      className="h-10 max-w-full rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none"
                       onClick={onPickReferenceImage}
                     >
                       <ImagePlus className="size-4" />
-                      {referenceImages.length > 0 ? "继续添加参考图" : "上传参考图"}
+                      {referenceImages.length > 0
+                        ? "继续添加参考图"
+                        : "上传参考图"}
                     </Button>
                   )}
                   <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">
@@ -285,17 +352,18 @@ export function ImageComposer({
                   )}
                 </div>
 
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => void onSubmit()}
-                    disabled={!prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
-                    className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
-                    aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
-                  >
-                    <ArrowUp className="size-4" />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => void onSubmit()}
+                  disabled={
+                    !prompt.trim() ||
+                    (mode === "edit" && referenceImages.length === 0)
+                  }
+                  className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
+                  aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
+                >
+                  <ArrowUp className="size-4" />
+                </button>
               </div>
             </div>
           </div>
@@ -303,4 +371,61 @@ export function ImageComposer({
       </div>
     </div>
   );
+}
+
+function MobileImageSettingsBar({
+  open,
+  mode,
+  model,
+  aspectRatio,
+  imageCount,
+  outputQuality,
+  onToggle,
+}: {
+  open: boolean;
+  mode: ImageConversationMode;
+  model: ImageModel;
+  aspectRatio: ImageAspectRatio;
+  imageCount: string;
+  outputQuality: ImageOutputQuality;
+  onToggle: () => void;
+}) {
+  const normalizedCount = Math.max(1, Math.min(10, Number(imageCount) || 1));
+  const summary = [
+    mode === "edit" ? "图生图" : "文生图",
+    getImageModelShortLabel(model),
+    aspectRatio,
+    `${normalizedCount} 张`,
+    getImageOutputQualityLabel(outputQuality),
+  ];
+
+  return (
+    <div className="border-b border-stone-200/80 px-4 py-3 sm:hidden">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-stone-500">
+          <SlidersHorizontal className="size-4 shrink-0 text-stone-400" />
+          <span className="truncate">{summary.join(" · ")}</span>
+        </div>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-stone-50 px-3 text-xs font-semibold text-stone-700 transition hover:bg-white"
+          aria-expanded={open}
+          aria-label={open ? "收起图片参数" : "展开图片参数"}
+        >
+          参数
+          <ChevronDown
+            className={cn("size-3.5 transition", open ? "rotate-180" : "")}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function getImageModelShortLabel(model: ImageModel) {
+  return model === "gpt-image-think" ? "思考" : "标准";
 }

@@ -1,6 +1,11 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, ExternalLink, Sparkles } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Sparkles,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -30,12 +35,19 @@ type ImagePromptGalleryProps = {
 
 const GALLERY_PAGE_SIZE = 9;
 
-export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImagePromptGalleryProps) {
+export function ImagePromptGallery({
+  selectedPrompt,
+  onSelectPrompt,
+}: ImagePromptGalleryProps) {
   const [open, setOpen] = useState(false);
-  const [activeCategory, setActiveCategory] = useState<ImagePromptGalleryFilter>("all");
+  const [activeCategory, setActiveCategory] =
+    useState<ImagePromptGalleryFilter>("all");
   const [currentPage, setCurrentPage] = useState(1);
-  const [galleryItems, setGalleryItems] = useState<ImagePromptGalleryItem[]>(() => [...IMAGE_PROMPT_GALLERY_ITEMS]);
-  const normalizedSelectedPrompt = normalizeImagePromptGalleryPrompt(selectedPrompt);
+  const [galleryItems, setGalleryItems] = useState<ImagePromptGalleryItem[]>(
+    () => [...IMAGE_PROMPT_GALLERY_ITEMS],
+  );
+  const normalizedSelectedPrompt =
+    normalizeImagePromptGalleryPrompt(selectedPrompt);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +67,10 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
     }
     return galleryItems.filter((item) => item.category === activeCategory);
   }, [activeCategory, galleryItems]);
-  const totalPages = Math.max(1, Math.ceil(visibleItems.length / GALLERY_PAGE_SIZE));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(visibleItems.length / GALLERY_PAGE_SIZE),
+  );
   const activePage = Math.min(currentPage, totalPages);
   const pagedItems = useMemo(() => {
     const start = (activePage - 1) * GALLERY_PAGE_SIZE;
@@ -63,17 +78,22 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
   }, [activePage, visibleItems]);
 
   const selectedItem = useMemo(
-    () => galleryItems.find((item) => normalizeImagePromptGalleryPrompt(item.prompt) === normalizedSelectedPrompt),
+    () =>
+      galleryItems.find(
+        (item) =>
+          normalizeImagePromptGalleryPrompt(item.prompt) ===
+          normalizedSelectedPrompt,
+      ),
     [galleryItems, normalizedSelectedPrompt],
   );
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex-initial">
+      <div className="flex min-w-0 flex-none flex-wrap items-center gap-2">
         <Button
           type="button"
           variant="outline"
-          className="h-10 w-full rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none hover:bg-stone-50 sm:w-auto"
+          className="h-10 max-w-full rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none hover:bg-stone-50"
           onClick={() => setOpen(true)}
         >
           <Sparkles className="size-4 text-orange-500" />
@@ -84,9 +104,13 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
         </Button>
         <div className="hidden min-w-0 text-xs text-stone-500 sm:block">
           {selectedItem ? (
-            <span className="block truncate">已选模板：{selectedItem.title}</span>
+            <span className="block truncate">
+              已选模板：{selectedItem.title}
+            </span>
           ) : (
-            <span className="block truncate">按场景挑一个模板，再继续细化你的提示词</span>
+            <span className="block truncate">
+              按场景挑一个模板，再继续细化你的提示词
+            </span>
           )}
         </div>
       </div>
@@ -96,13 +120,16 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <DialogTitle className="text-xl tracking-tight text-stone-950">提示词灵感画廊</DialogTitle>
+                <DialogTitle className="text-xl tracking-tight text-stone-950">
+                  提示词灵感画廊
+                </DialogTitle>
                 <span className="inline-flex h-6 items-center rounded-full bg-orange-100 px-2.5 text-[11px] font-semibold text-orange-600">
                   精选
                 </span>
               </div>
               <DialogDescription className="text-sm leading-6 text-stone-500">
-                精选自 awesome-gpt-image-2-prompts，并自动补充 upstream JSON 最新案例。
+                精选自 awesome-gpt-image-2-prompts，并自动补充 upstream JSON
+                最新案例。
               </DialogDescription>
             </div>
 
@@ -143,7 +170,9 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {pagedItems.map((item) => {
-              const isSelected = normalizedSelectedPrompt === normalizeImagePromptGalleryPrompt(item.prompt);
+              const isSelected =
+                normalizedSelectedPrompt ===
+                normalizeImagePromptGalleryPrompt(item.prompt);
               const categoryMeta = getCategoryMeta(item.category);
 
               return (
@@ -160,25 +189,31 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
                       ? "border-blue-500 shadow-[0_18px_50px_-30px_rgba(37,99,235,0.55)]"
                       : "border-stone-200 hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-[0_20px_60px_-32px_rgba(28,25,23,0.22)]",
                   )}
-                  >
-                    <div className="relative aspect-[16/10] overflow-hidden bg-stone-100">
-                      <GalleryPreviewImage
-                        key={item.previewImageUrl || item.id}
-                        title={item.title}
-                        imageUrl={item.previewImageUrl}
-                      />
-                      <div className="absolute left-3 top-3 rounded-md bg-black/60 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-white">
-                        {categoryMeta.badge}
-                      </div>
+                >
+                  <div className="relative aspect-[16/10] overflow-hidden bg-stone-100">
+                    <GalleryPreviewImage
+                      key={item.previewImageUrl || item.id}
+                      title={item.title}
+                      imageUrl={item.previewImageUrl}
+                    />
+                    <div className="absolute left-3 top-3 rounded-md bg-black/60 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-white">
+                      {categoryMeta.badge}
+                    </div>
                   </div>
 
                   <div className="space-y-3 p-4">
                     <div className="space-y-1.5">
-                      <div className="text-lg font-semibold tracking-tight text-stone-950">{item.title}</div>
-                      <p className="line-clamp-2 text-sm leading-6 text-stone-500">{item.summary}</p>
+                      <div className="text-lg font-semibold tracking-tight text-stone-950">
+                        {item.title}
+                      </div>
+                      <p className="line-clamp-2 text-sm leading-6 text-stone-500">
+                        {item.summary}
+                      </p>
                     </div>
 
-                    <p className="line-clamp-3 text-[13px] leading-6 text-stone-600">{item.prompt}</p>
+                    <p className="line-clamp-3 text-[13px] leading-6 text-stone-600">
+                      {item.prompt}
+                    </p>
 
                     <div className="flex items-center justify-between gap-3 text-xs">
                       <span className="truncate text-stone-400">
@@ -224,7 +259,9 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
                 type="button"
                 variant="outline"
                 className="h-9 rounded-full border-stone-200 bg-white px-3 text-stone-600 shadow-none"
-                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                onClick={() =>
+                  setCurrentPage((page) => Math.min(totalPages, page + 1))
+                }
                 disabled={activePage >= totalPages}
               >
                 下一页
@@ -239,18 +276,31 @@ export function ImagePromptGallery({ selectedPrompt, onSelectPrompt }: ImageProm
 }
 
 function getCategoryMeta(category: ImagePromptGalleryCategory) {
-  return IMAGE_PROMPT_GALLERY_CATEGORIES.find((item) => item.value === category) ?? IMAGE_PROMPT_GALLERY_CATEGORIES[0];
+  return (
+    IMAGE_PROMPT_GALLERY_CATEGORIES.find((item) => item.value === category) ??
+    IMAGE_PROMPT_GALLERY_CATEGORIES[0]
+  );
 }
 
-function GalleryPreviewImage({ title, imageUrl }: { title: string; imageUrl: string }) {
+function GalleryPreviewImage({
+  title,
+  imageUrl,
+}: {
+  title: string;
+  imageUrl: string;
+}) {
   const [failed, setFailed] = useState(() => !imageUrl);
 
   if (failed) {
     return (
       <div className="flex h-full w-full items-end bg-[radial-gradient(circle_at_top,_rgba(251,146,60,0.35),_rgba(12,10,9,0.92))] p-4 text-white">
         <div className="space-y-1">
-          <div className="text-[11px] font-semibold tracking-[0.14em] text-orange-200/90 uppercase">Prompt</div>
-          <div className="line-clamp-2 text-base font-semibold tracking-tight">{title}</div>
+          <div className="text-[11px] font-semibold tracking-[0.14em] text-orange-200/90 uppercase">
+            Prompt
+          </div>
+          <div className="line-clamp-2 text-base font-semibold tracking-tight">
+            {title}
+          </div>
         </div>
       </div>
     );
