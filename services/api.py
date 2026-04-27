@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
+import time
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, FastAPI, File, Form, Header, Request, HTTPException, Response, UploadFile
@@ -38,6 +40,8 @@ SESSION_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60
 MAX_EDIT_UPLOAD_FILES = 4
 MAX_EDIT_UPLOAD_BYTES_PER_FILE = 10 * 1024 * 1024
 MAX_EDIT_UPLOAD_BYTES_TOTAL = 20 * 1024 * 1024
+IMAGE_JOB_TTL_SECONDS = 30 * 60
+IMAGE_JOB_MAX_ITEMS = 200
 ALLOWED_EDIT_UPLOAD_MIME_TYPES = {
     "image/gif",
     "image/jpeg",
@@ -394,6 +398,15 @@ def normalize_image_response_format(value: object) -> str:
     return normalized
 
 
+def build_image_job_owner(identity: dict) -> dict[str, str]:
+    role = str(identity.get("role") or "").strip()
+    owner_id = str(identity.get("id") or ("admin" if role == "admin" else "")).strip()
+    return {
+        "ownerRole": role,
+        "ownerId": owner_id,
+    }
+
+
 def resolve_image_base_url(_request: Request | None = None) -> str:
     return str(config.base_url or "").strip().rstrip("/")
 
@@ -571,6 +584,133 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     router = APIRouter()
+    image_jobs: dict[str, dict[str, object]] = {}
+    image_jobs_lock = Lock()
+
+    def cleanup_image_jobs_locked(now: float | None = None) -> None:
+        current_time = now if now is not None else time.time()
+        expired_ids = [
+            job_id
+            for job_id, job in image_jobs.items()
+            if current_time - float(job.get("updatedAt") or job.get("createdAt") or 0) > IMAGE_JOB_TTL_SECONDS
+        ]
+        for job_id in expired_ids:
+            image_jobs.pop(job_id, None)
+
+        if len(image_jobs) <= IMAGE_JOB_MAX_ITEMS:
+            return
+        sorted_jobs = sorted(image_jobs.items(), key=lambda item: float(item[1].get("updatedAt") or 0))
+        for job_id, _job in sorted_jobs[: len(image_jobs) - IMAGE_JOB_MAX_ITEMS]:
+            image_jobs.pop(job_id, None)
+
+    def serialize_image_job(job: dict[str, object]) -> dict[str, object]:
+        payload = {
+            "id": job["id"],
+            "status": job["status"],
+            "createdAt": job["createdAt"],
+            "updatedAt": job["updatedAt"],
+        }
+        if job.get("result") is not None:
+            payload["result"] = job["result"]
+        if job.get("error"):
+            payload["error"] = job["error"]
+        return payload
+
+    def create_image_job(identity: dict) -> dict[str, object]:
+        now = time.time()
+        owner = build_image_job_owner(identity)
+        job = {
+            "id": uuid.uuid4().hex,
+            "status": "queued",
+            "createdAt": now,
+            "updatedAt": now,
+            **owner,
+        }
+        with image_jobs_lock:
+            cleanup_image_jobs_locked(now)
+            image_jobs[str(job["id"])] = job
+            return dict(job)
+
+    def get_image_job_for_identity(job_id: str, identity: dict) -> dict[str, object]:
+        owner = build_image_job_owner(identity)
+        with image_jobs_lock:
+            cleanup_image_jobs_locked()
+            job = image_jobs.get(job_id)
+            if (
+                job is None
+                or job.get("ownerRole") != owner["ownerRole"]
+                or job.get("ownerId") != owner["ownerId"]
+            ):
+                raise HTTPException(status_code=404, detail={"error": "image job not found"})
+            return dict(job)
+
+    def update_image_job(job_id: str, **updates: object) -> None:
+        with image_jobs_lock:
+            job = image_jobs.get(job_id)
+            if job is None:
+                return
+            job.update(updates)
+            job["updatedAt"] = time.time()
+
+    def run_generation_image_job(
+            job_id: str,
+            identity: dict,
+            reserved_count: int,
+            prompt: str,
+            model: str,
+            n: int,
+            response_format: str,
+            base_url: str | None,
+    ) -> None:
+        try:
+            update_image_job(job_id, status="running")
+            result = chatgpt_service.generate_with_pool(
+                prompt,
+                model,
+                n,
+                response_format=response_format,
+                base_url=base_url,
+            )
+            auth_service.settle_images_for_identity(identity, reserved_count, count_generated_images(result))
+            update_image_job(job_id, status="success", result=result)
+        except ImageGenerationError as exc:
+            auth_service.settle_images_for_identity(identity, reserved_count, 0)
+            update_image_job(job_id, status="error", error=str(exc))
+        except Exception as exc:
+            auth_service.settle_images_for_identity(identity, reserved_count, 0)
+            print(f"[image-job] generation failed job={job_id} error={exc}")
+            update_image_job(job_id, status="error", error=str(exc) or "生成图片失败")
+
+    def run_edit_image_job(
+            job_id: str,
+            identity: dict,
+            reserved_count: int,
+            prompt: str,
+            images: list[tuple[bytes, str, str]],
+            model: str,
+            n: int,
+            response_format: str,
+            base_url: str | None,
+    ) -> None:
+        try:
+            update_image_job(job_id, status="running")
+            result = chatgpt_service.edit_with_pool(
+                prompt,
+                images,
+                model,
+                n,
+                response_format=response_format,
+                base_url=base_url,
+            )
+            auth_service.settle_images_for_identity(identity, reserved_count, count_generated_images(result))
+            update_image_job(job_id, status="success", result=result)
+        except ImageGenerationError as exc:
+            auth_service.settle_images_for_identity(identity, reserved_count, 0)
+            update_image_job(job_id, status="error", error=str(exc))
+        except Exception as exc:
+            auth_service.settle_images_for_identity(identity, reserved_count, 0)
+            print(f"[image-job] edit failed job={job_id} error={exc}")
+            update_image_job(job_id, status="error", error=str(exc) or "编辑图片失败")
 
     @router.get("/v1/models")
     async def list_models():
@@ -821,6 +961,80 @@ def create_app() -> FastAPI:
         if not system_settings_service.delete_proxy_entry(proxy_id):
             raise HTTPException(status_code=404, detail={"error": "proxy not found"})
         return system_settings_service.get_proxy_pool_settings()
+
+    @router.post("/api/image-jobs/generations")
+    async def create_image_generation_job(
+            body: ImageGenerationRequest,
+            request: Request,
+            authorization: str | None = Header(default=None),
+    ):
+        identity = require_session(request, authorization)
+        reserved_count = int(body.n or 1)
+        try:
+            normalized_response_format = normalize_image_response_format(body.response_format)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        base_url = require_image_base_url() if normalized_response_format == "url" else None
+        try:
+            auth_service.reserve_images_for_identity(identity, reserved_count)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+
+        job = create_image_job(identity)
+        prompt = apply_image_size_prompt(body.prompt, body.size)
+        Thread(
+            target=run_generation_image_job,
+            args=(job["id"], dict(identity), reserved_count, prompt, body.model, body.n, normalized_response_format, base_url),
+            name=f"image-generation-job-{job['id']}",
+            daemon=True,
+        ).start()
+        return {"job": serialize_image_job(job)}
+
+    @router.post("/api/image-jobs/edits")
+    async def create_image_edit_job(
+            request: Request,
+            authorization: str | None = Header(default=None),
+            image: list[UploadFile] | None = File(default=None),
+            image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
+            prompt: str = Form(...),
+            model: str = Form(default="gpt-image-2"),
+            n: int = Form(default=1),
+            size: str | None = Form(default=None),
+            response_format: str = Form(default="b64_json"),
+    ):
+        identity = require_session(request, authorization)
+        if n < 1 or n > 4:
+            raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+
+        uploads = [*(image or []), *(image_list or [])]
+        if not uploads:
+            raise HTTPException(status_code=400, detail={"error": "image file is required"})
+
+        try:
+            normalized_response_format = normalize_image_response_format(response_format)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        base_url = require_image_base_url() if normalized_response_format == "url" else None
+        images = await load_validated_edit_uploads(uploads)
+        try:
+            auth_service.reserve_images_for_identity(identity, n)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+
+        job = create_image_job(identity)
+        normalized_prompt = apply_image_size_prompt(prompt, size)
+        Thread(
+            target=run_edit_image_job,
+            args=(job["id"], dict(identity), n, normalized_prompt, images, model, n, normalized_response_format, base_url),
+            name=f"image-edit-job-{job['id']}",
+            daemon=True,
+        ).start()
+        return {"job": serialize_image_job(job)}
+
+    @router.get("/api/image-jobs/{job_id}")
+    async def get_image_job(job_id: str, request: Request, authorization: str | None = Header(default=None)):
+        identity = require_session(request, authorization)
+        return {"job": serialize_image_job(get_image_job_for_identity(job_id, identity))}
 
     @router.post("/v1/images/generations")
     async def generate_images(

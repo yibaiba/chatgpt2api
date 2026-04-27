@@ -22,6 +22,17 @@ export type GeneratedImageResponseItem = {
   mime_type?: string;
   generation_route?: ImageGenerationRoute;
 };
+type GeneratedImageResponse = { created: number; data: GeneratedImageResponseItem[] };
+type ImageJobStatus = "queued" | "running" | "success" | "error";
+type ImageJob<T> = {
+  id: string;
+  status: ImageJobStatus;
+  result?: T;
+  error?: string;
+};
+type ImageJobResponse<T> = {
+  job: ImageJob<T>;
+};
 export type LegacyProxySettings = {
   proxy_url: string;
   enabled: boolean;
@@ -79,6 +90,46 @@ type AccountMutationResponse = {
   refreshed?: number;
   errors?: Array<{ access_token: string; error: string }>;
 };
+
+const IMAGE_JOB_POLL_INTERVAL_MS = 2_000;
+const IMAGE_JOB_MAX_WAIT_MS = 15 * 60_000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function readImageJobResult<T>(job: ImageJob<T>) {
+  if (job.status === "success") {
+    if (!job.result) {
+      throw new Error("图片任务未返回结果");
+    }
+    return job.result;
+  }
+  if (job.status === "error") {
+    throw new Error(job.error || "图片任务失败");
+  }
+  return null;
+}
+
+async function waitForImageJob<T>(initialJob: ImageJob<T>) {
+  const initialResult = readImageJobResult(initialJob);
+  if (initialResult) {
+    return initialResult;
+  }
+
+  const deadline = Date.now() + IMAGE_JOB_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(IMAGE_JOB_POLL_INTERVAL_MS);
+    const { job } = await httpRequest<ImageJobResponse<T>>(`/api/image-jobs/${initialJob.id}`);
+    const result = readImageJobResult(job);
+    if (result) {
+      return result;
+    }
+  }
+  throw new Error("图片任务仍在处理中，请稍后刷新历史记录查看结果");
+}
 
 type AccountRefreshResponse = {
   items: Account[];
@@ -278,8 +329,8 @@ export async function generateImage(
   model: ImageModel = "gpt-image-2",
   size?: string,
 ) {
-  return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
-    "/v1/images/generations",
+  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
+    "/api/image-jobs/generations",
     {
       method: "POST",
       body: {
@@ -291,6 +342,7 @@ export async function generateImage(
       },
     },
   );
+  return waitForImageJob(job);
 }
 
 export async function editImage(
@@ -312,13 +364,14 @@ export async function editImage(
   }
   formData.append("n", "1");
 
-  return httpRequest<{ created: number; data: GeneratedImageResponseItem[] }>(
-    "/v1/images/edits",
+  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
+    "/api/image-jobs/edits",
     {
       method: "POST",
       body: formData,
     },
   );
+  return waitForImageJob(job);
 }
 
 // ── CPA (CLIProxyAPI) ──────────────────────────────────────────────

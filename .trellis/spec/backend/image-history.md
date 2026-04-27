@@ -54,6 +54,26 @@ Rules:
 
 ## API Contract
 
+### Frontend-only image job APIs
+
+The image workspace must use short-lived job APIs for browser-triggered generation/edit requests:
+
+- `POST /api/image-jobs/generations`
+  - Authenticated admin or normal user
+  - Body: same JSON fields as `POST /v1/images/generations`
+  - Response: `{ job: { id, status, createdAt, updatedAt } }`
+- `POST /api/image-jobs/edits`
+  - Authenticated admin or normal user
+  - Multipart fields mirror `POST /v1/images/edits`
+  - Response: `{ job: { id, status, createdAt, updatedAt } }`
+- `GET /api/image-jobs/{job_id}`
+  - Authenticated admin or normal user
+  - Response while running: `{ job: { id, status: "queued" | "running", createdAt, updatedAt } }`
+  - Response on success: `{ job: { id, status: "success", result, createdAt, updatedAt } }`
+  - Response on failure: `{ job: { id, status: "error", error, createdAt, updatedAt } }`
+
+These routes are for the built-in web UI only. Keep `/v1/images/generations` and `/v1/images/edits` synchronous for OpenAI-compatible clients.
+
 ### `GET /api/image-conversations`
 
 - Authenticated admin or normal user
@@ -205,4 +225,83 @@ const savedConversation = {
   turns: [firstTurn],
 };
 await saveConversationToCurrentStore(savedConversation);
+```
+
+## Scenario: Browser image jobs avoid reverse-proxy 504
+
+### 1. Scope / Trigger
+- Trigger: image generation can take longer than common reverse-proxy read timeouts.
+- Trigger: backend can finish with `200 OK` while the browser receives `504 Gateway Timeout` from an intermediate proxy.
+- Trigger: the web image workspace needs a short-request flow that does not duplicate generation or lose the final image response.
+
+### 2. Signatures
+- `POST /api/image-jobs/generations`
+  - Request: `ImageGenerationRequest`
+  - Response: `{ job: ImageJob }`
+- `POST /api/image-jobs/edits`
+  - Request: multipart image edit fields
+  - Response: `{ job: ImageJob }`
+- `GET /api/image-jobs/{job_id}`
+  - Response: `{ job: ImageJob }`
+- `ImageJob`
+  - `id: string`
+  - `status: "queued" | "running" | "success" | "error"`
+  - `createdAt: number`
+  - `updatedAt: number`
+  - `result?: { created: number, data: [...] }`
+  - `error?: string`
+
+### 3. Contracts
+- Job creation must authenticate and reserve quota synchronously before returning a job id.
+- The actual upstream image call runs in a background thread.
+- The background worker must settle quota exactly once:
+  - success: settle with `count_generated_images(result)`
+  - failure: settle with `0`
+- Jobs are in-memory and short-lived; they are not persisted across process restarts.
+- Polling must require the same authenticated identity that created the job.
+- The frontend `generateImage()` and `editImage()` helpers should call `/api/image-jobs/*` and poll `GET /api/image-jobs/{id}`.
+- OpenAI-compatible `/v1/images/*` endpoints remain synchronous and should not be repurposed for the web UI polling contract.
+
+### 4. Validation & Error Matrix
+
+| Condition | Status / Behavior |
+|---|---|
+| Missing or invalid auth on job create/poll | 401 `authorization is invalid` |
+| Normal user lacks image quota | 403 quota error before job creation |
+| Polling an unknown or other-user job id | 404 `image job not found` |
+| Upstream image generation fails | Job status becomes `error`, quota settles to `0` |
+| Upstream image generation succeeds | Job status becomes `success`, result contains normal image payload |
+| Process restarts before completion | Job may disappear; frontend should surface polling error |
+
+### 5. Good/Base/Bad Cases
+- Good: UI POST returns a job id quickly, then polls until success without holding one long HTTP request open.
+- Base: one generated image returns through `job.result.data[0].b64_json`, and the existing frontend conversation update path handles it.
+- Bad: browser UI calls `/v1/images/generations` directly and waits behind a reverse proxy for the full generation duration.
+
+### 6. Tests Required
+- API integration:
+  - job creation returns a job id without waiting for the long synchronous endpoint contract
+  - polling reaches `success` and includes the image result
+  - upstream `ImageGenerationError` changes job status to `error`
+  - quota reservation/settlement is called with success and failure counts
+- Frontend build:
+  - `web/src/lib/api.ts` compiles with `generateImage()` and `editImage()` returning the original image result shape after polling.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+```typescript
+const result = await httpRequest("/v1/images/generations", {
+  method: "POST",
+  body: { prompt, model, n: 1, response_format: "b64_json" },
+});
+```
+
+#### Correct
+```typescript
+const { job } = await httpRequest("/api/image-jobs/generations", {
+  method: "POST",
+  body: { prompt, model, n: 1, response_format: "b64_json" },
+});
+const result = await waitForImageJob(job);
 ```
