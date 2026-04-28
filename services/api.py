@@ -24,6 +24,7 @@ from services.image_history_service import image_history_service
 from services.log_service import LOG_LEVEL_ALL, LOG_SOURCE_ALL, log_service
 from services.proxy_service import test_proxy
 from services.register_service import register_service
+from services.storage.factory import get_account_storage_info
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -34,9 +35,12 @@ from services.image_service import ImageGenerationError
 from services.system_settings import system_settings_service
 from services.utils import (
     apply_image_size_prompt,
+    ensure_prompt_not_blocked,
+    extract_chat_prompt,
     has_response_image_generation_tool,
     is_image_chat_request,
     parse_image_count,
+    extract_response_prompt,
 )
 from services.version import get_app_version
 
@@ -799,6 +803,11 @@ def create_app() -> FastAPI:
         require_admin_session(request, authorization)
         return {"config": config.get()}
 
+    @router.get("/api/storage/info")
+    async def get_storage_info(request: Request, authorization: str | None = Header(default=None)):
+        require_admin_session(request, authorization)
+        return {"storage": get_account_storage_info(config)}
+
     @router.post("/api/settings")
     async def save_settings(
             request: Request,
@@ -1077,13 +1086,18 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
+        prompt = apply_image_size_prompt(body.prompt, body.size)
+        ensure_prompt_not_blocked(
+            prompt,
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
         try:
             auth_service.reserve_images_for_identity(identity, reserved_count)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
 
         job = create_image_job(identity)
-        prompt = apply_image_size_prompt(body.prompt, body.size)
         Thread(
             target=run_generation_image_job,
             args=(job["id"], dict(identity), reserved_count, prompt, body.model, body.n, normalized_response_format, base_url),
@@ -1118,13 +1132,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
         images = await load_validated_edit_uploads(uploads)
+        normalized_prompt = apply_image_size_prompt(prompt, size)
+        ensure_prompt_not_blocked(
+            normalized_prompt,
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
         try:
             auth_service.reserve_images_for_identity(identity, n)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
 
         job = create_image_job(identity)
-        normalized_prompt = apply_image_size_prompt(prompt, size)
         Thread(
             target=run_edit_image_job,
             args=(job["id"], dict(identity), n, normalized_prompt, images, model, n, normalized_response_format, base_url),
@@ -1151,11 +1170,16 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
+        prompt = apply_image_size_prompt(body.prompt, body.size)
+        ensure_prompt_not_blocked(
+            prompt,
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
         try:
             auth_service.reserve_images_for_identity(identity, reserved_count)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
-        prompt = apply_image_size_prompt(body.prompt, body.size)
         try:
             result = await run_in_threadpool(
                 chatgpt_service.generate_with_pool,
@@ -1200,11 +1224,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
         images = await load_validated_edit_uploads(uploads)
+        normalized_prompt = apply_image_size_prompt(prompt, size)
+        ensure_prompt_not_blocked(
+            normalized_prompt,
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
         try:
             auth_service.reserve_images_for_identity(identity, n)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
-        normalized_prompt = apply_image_size_prompt(prompt, size)
         try:
             result = await run_in_threadpool(
                 chatgpt_service.edit_with_pool,
@@ -1235,6 +1264,11 @@ def create_app() -> FastAPI:
                     media_type="text/event-stream",
                 )
             return await run_in_threadpool(chatgpt_service.create_text_completion, payload)
+        ensure_prompt_not_blocked(
+            extract_chat_prompt(payload),
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
         reserved_count = parse_image_count(payload.get("n"))
         try:
             auth_service.reserve_images_for_identity(identity, reserved_count)
@@ -1257,6 +1291,11 @@ def create_app() -> FastAPI:
         payload = body.model_dump(mode="python")
         if not has_response_image_generation_tool(payload):
             return await run_in_threadpool(chatgpt_service.create_text_response, payload)
+        ensure_prompt_not_blocked(
+            extract_response_prompt(payload.get("input")),
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
         try:
             auth_service.reserve_images_for_identity(identity, 1)
         except ValueError as exc:

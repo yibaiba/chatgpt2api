@@ -113,6 +113,36 @@ class ConfigStore:
         integer = int(numeric)
         return max(min_value, min(max_value, integer))
 
+    @staticmethod
+    def _normalize_bool(value: object, *, fallback: bool = False) -> bool:
+        if value is None:
+            return fallback
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @staticmethod
+    def _normalize_sensitive_words(value: object) -> list[str]:
+        if isinstance(value, str):
+            raw_items = value.splitlines()
+        elif isinstance(value, list):
+            raw_items = value
+        else:
+            return []
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            word = str(item or "").strip()
+            if not word:
+                continue
+            dedupe_key = word.casefold()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            normalized.append(word)
+        return normalized
+
     @property
     def auth_key(self) -> str:
         return str(os.getenv("CHATGPT2API_AUTH_KEY") or "").strip()
@@ -175,10 +205,15 @@ class ConfigStore:
 
     @property
     def auto_remove_rate_limited_accounts(self) -> bool:
-        value = self.data.get("auto_remove_rate_limited_accounts", False)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(value)
+        return self._normalize_bool(self.data.get("auto_remove_rate_limited_accounts"), fallback=False)
+
+    @property
+    def sensitive_word_filter_enabled(self) -> bool:
+        return self._normalize_bool(self.data.get("sensitive_word_filter_enabled"), fallback=False)
+
+    @property
+    def sensitive_words(self) -> list[str]:
+        return self._normalize_sensitive_words(self.data.get("sensitive_words"))
 
     @property
     def images_dir(self) -> Path:
@@ -198,6 +233,26 @@ class ConfigStore:
     def image_history_persistence_mode(self) -> str:
         return "server" if self.data.get("image_history_persistence_mode") == "server" else "browser"
 
+    @property
+    def storage_backend(self) -> str:
+        return str(
+            os.getenv("CHATGPT2API_STORAGE_BACKEND")
+            or self.data.get("storage_backend")
+            or "json"
+        ).strip().lower() or "json"
+
+    @property
+    def storage_sqlite_path(self) -> Path:
+        raw_path = str(
+            os.getenv("CHATGPT2API_STORAGE_SQLITE_PATH")
+            or self.data.get("storage_sqlite_path")
+            or (DATA_DIR / "accounts.sqlite3")
+        ).strip()
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = (BASE_DIR / path).resolve()
+        return path
+
     def get(self) -> dict[str, object]:
         public_data = dict(self.data)
         public_data.pop("auth-key", None)
@@ -205,6 +260,8 @@ class ConfigStore:
         public_data["auth-key"] = ""
         public_data["auth_key_configured"] = self.auth_key_configured
         public_data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
+        public_data["sensitive_word_filter_enabled"] = self.sensitive_word_filter_enabled
+        public_data["sensitive_words"] = self.sensitive_words
         return public_data
 
     def get_proxy_settings(self) -> str:
@@ -245,6 +302,15 @@ class ConfigStore:
             min_value=1,
             max_value=10 ** 9,
         )
+        next_data["auto_remove_rate_limited_accounts"] = self._normalize_bool(
+            next_data.get("auto_remove_rate_limited_accounts"),
+            fallback=False,
+        )
+        next_data["sensitive_word_filter_enabled"] = self._normalize_bool(
+            next_data.get("sensitive_word_filter_enabled"),
+            fallback=False,
+        )
+        next_data["sensitive_words"] = self._normalize_sensitive_words(next_data.get("sensitive_words"))
         self.data = next_data
         self._save()
         return self.get()

@@ -1,6 +1,6 @@
 "use client";
 
-import { History, KeyRound, Link2, LoaderCircle, Save } from "lucide-react";
+import { History, KeyRound, Link2, LoaderCircle, Save, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 import { useSettingsStore } from "../store";
 
@@ -25,6 +26,8 @@ export function ConfigCard() {
   const setRemoteAccountSyncIntervalMinute = useSettingsStore((state) => state.setRemoteAccountSyncIntervalMinute);
   const setRefreshAccountBatchSize = useSettingsStore((state) => state.setRefreshAccountBatchSize);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
+  const setSensitiveWordFilterEnabled = useSettingsStore((state) => state.setSensitiveWordFilterEnabled);
+  const setSensitiveWordsText = useSettingsStore((state) => state.setSensitiveWordsText);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setImageHistoryPersistenceMode = useSettingsStore((state) => state.setImageHistoryPersistenceMode);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
@@ -127,6 +130,36 @@ export function ConfigCard() {
                 </span>
               </span>
             </label>
+          </div>
+
+          <div className="space-y-3 md:col-span-2">
+            <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+              <ShieldAlert className="size-3.5" />
+              敏感词拦截
+            </label>
+            <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
+              <Checkbox
+                checked={Boolean(config?.sensitive_word_filter_enabled)}
+                onCheckedChange={(checked) => setSensitiveWordFilterEnabled(Boolean(checked))}
+                className="mt-0.5"
+              />
+              <span className="space-y-1">
+                <span className="block font-medium text-stone-800">启用 prompt 敏感词过滤</span>
+                <span className="block text-xs text-stone-500">
+                  命中后会在调用上游前直接返回 400，同时覆盖图片直连、image jobs、chat、responses 与 messages。
+                </span>
+              </span>
+            </label>
+            <Textarea
+              value={Array.isArray(config?.sensitive_words) ? config.sensitive_words.join("\n") : ""}
+              onChange={(event) => setSensitiveWordsText(event.target.value)}
+              placeholder={"每行一个敏感词\n例如：nsfw"}
+              disabled={!config?.sensitive_word_filter_enabled}
+              className="min-h-28 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs text-stone-500">
+              按子串匹配，忽略大小写；建议只填写明确需要拦截的关键词，避免误伤正常 prompt。
+            </p>
           </div>
 
           <div className="space-y-2 md:col-span-2">

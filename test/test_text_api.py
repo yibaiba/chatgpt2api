@@ -63,6 +63,8 @@ class _FakeConfig:
         self.refresh_account_interval_minute = 60
         self.remote_account_sync_interval_minute = 60
         self.session_signing_secret = "test-session-secret"
+        self.sensitive_word_filter_enabled = False
+        self.sensitive_words: list[str] = []
 
     def verify_admin_auth_key(self, value: str) -> bool:
         return str(value or "").strip() == "test-auth"
@@ -115,13 +117,14 @@ class TextApiTests(unittest.TestCase):
         self.account_service = _FakeAccountService()
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
-        fake_config = _FakeConfig(Path(self.temp_dir.name) / "images")
+        self.fake_config = _FakeConfig(Path(self.temp_dir.name) / "images")
         self.patches = [
             mock.patch.object(api_module, "auth_service", self.auth_service),
             mock.patch.object(api_module, "account_service", self.account_service),
-            mock.patch.object(api_module, "config", fake_config),
+            mock.patch.object(api_module, "config", self.fake_config),
             mock.patch.object(api_module, "start_limited_account_watcher", lambda _stop_event: _FakeThread()),
             mock.patch.object(api_module, "start_remote_account_sync_watcher", lambda _stop_event: _FakeThread()),
+            mock.patch.object(chatgpt_service_module, "config", self.fake_config),
             mock.patch.object(chatgpt_service_module, "TextBackend", _FakeTextBackend),
         ]
         for patcher in self.patches:
@@ -261,6 +264,23 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
 
+    def test_non_image_chat_completions_block_sensitive_words_before_backend_call(self) -> None:
+        self.fake_config.sensitive_word_filter_enabled = True
+        self.fake_config.sensitive_words = ["nsfw"]
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "make it NSFW please"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual("prompt contains blocked word: nsfw", response.json()["detail"]["error"])
+        self.assertEqual([], _FakeTextBackend.calls)
+
     def test_anthropic_messages_use_text_backend_without_image_quota(self) -> None:
         response = self.client.post(
             "/v1/messages",
@@ -283,6 +303,26 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(_FakeTextBackend.calls[-1]["prompt"], "be concise\n\nhello anthropic")
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
+
+    def test_anthropic_messages_block_sensitive_words_before_backend_call(self) -> None:
+        self.fake_config.sensitive_word_filter_enabled = True
+        self.fake_config.sensitive_words = ["violence"]
+
+        response = self.client.post(
+            "/v1/messages",
+            headers={
+                "x-api-key": "test-auth",
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-sonnet-4",
+                "messages": [{"role": "user", "content": "please add Violence details"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual("prompt contains blocked word: violence", response.json()["detail"]["error"])
+        self.assertEqual([], _FakeTextBackend.calls)
 
     def test_anthropic_messages_stream_use_text_backend_without_image_quota(self) -> None:
         with self.client.stream(

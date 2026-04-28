@@ -25,7 +25,7 @@
 git clone git@github.com:basketikun/chatgpt2api.git
 cp docker-compose-example.yml docker-compose.yml
 # 可选：cp .env.example .env
-# 按需编辑 config.json 的密钥、`refresh_account_interval_minute`、`remote_account_sync_interval_minute` 和 `proxy_pool`
+# 按需编辑 config.json 的密钥、`refresh_account_interval_minute`、`remote_account_sync_interval_minute`、`proxy_pool` 和敏感词过滤配置
 # 如果要在设置页里保存代理池等配置，不要把 /app/config.json 挂成只读
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
 # 首次启动后，config.json 中的管理员密钥会自动迁移为 `auth-key-hash`
@@ -75,6 +75,11 @@ docker compose up -d --build
 - 支持三种导入方式：本地 CPA JSON 文件导入、远程 CPA 服务器导入、`access_token` 导入
 - 支持按固定间隔自动从 CPA / Sub2API 远端拉取账号并导入本地号池
 - 设置页可管理普通用户密钥，并控制每个普通用户还能生成多少张图片
+- 设置页或 `config.json` 可开启敏感词过滤，命中后会在调用上游前直接拦截图片与文本 prompt
+- 管理员可通过 `GET /api/storage/info` 查看当前 accounts 存储后端与文件可写状态
+- 当前已支持 `storage_backend=json|sqlite` 两种 accounts 存储后端；SQLite 可通过 `storage_sqlite_path` 或环境变量 `CHATGPT2API_STORAGE_SQLITE_PATH` 指定文件位置
+- 可用 `python3 scripts/migrate_storage.py --from-backend json --to-backend sqlite` 在当前支持的 accounts 存储后端间迁移数据
+- 可用 `python3 scripts/test_storage.py --backend sqlite` 对指定 accounts backend 做隔离式 round-trip 自检
 
 #### CPA / Sub2API 远端自动同步
 

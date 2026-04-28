@@ -11,7 +11,10 @@ os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 from services.account_service import AccountService
 from services.config import config
+from services.storage.factory import build_account_store, build_account_store_for_backend, get_account_storage_info
 from services.storage.json_storage import JsonAccountStore
+from services.storage.migrate import migrate_accounts
+from services.storage.sqlite_storage import SqliteAccountStore
 from services.utils import anonymize_token
 
 
@@ -185,6 +188,95 @@ class AccountCapabilityTests(unittest.TestCase):
             path.write_text('{"access_token": "token-1"}', encoding="utf-8")
 
             self.assertEqual([], JsonAccountStore(path).load_accounts())
+
+    def test_build_account_store_uses_json_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.json"
+            fake_config = mock.Mock(storage_backend="json", accounts_file=path)
+
+            store = build_account_store(fake_config)
+
+            self.assertIsInstance(store, JsonAccountStore)
+            self.assertEqual(path, store.path)
+
+    def test_build_account_store_uses_sqlite_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.sqlite3"
+            fake_config = mock.Mock(storage_backend="sqlite", storage_sqlite_path=path)
+
+            store = build_account_store(fake_config)
+
+            self.assertIsInstance(store, SqliteAccountStore)
+            self.assertEqual(path, store.path)
+
+    def test_build_account_store_for_backend_accepts_explicit_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "accounts.json"
+            sqlite_path = Path(tmp_dir) / "accounts.sqlite3"
+
+            self.assertIsInstance(build_account_store_for_backend("json", path=json_path), JsonAccountStore)
+            self.assertIsInstance(build_account_store_for_backend("sqlite", path=sqlite_path), SqliteAccountStore)
+
+    def test_build_account_store_rejects_unsupported_backend(self) -> None:
+        fake_config = mock.Mock(storage_backend="postgres", accounts_file=Path("accounts.json"))
+
+        with self.assertRaisesRegex(ValueError, "unsupported account storage backend: postgres"):
+            build_account_store(fake_config)
+
+    def test_get_account_storage_info_reports_json_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.json"
+            fake_config = mock.Mock(storage_backend="json", accounts_file=path)
+
+            info = get_account_storage_info(fake_config)
+
+            self.assertEqual("json", info["backend"])
+            self.assertEqual(["json", "sqlite"], info["available_backends"])
+            self.assertEqual(str(path), info["path"])
+            self.assertTrue(info["writable"])
+
+    def test_get_account_storage_info_reports_sqlite_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.sqlite3"
+            fake_config = mock.Mock(storage_backend="sqlite", storage_sqlite_path=path)
+
+            info = get_account_storage_info(fake_config)
+
+            self.assertEqual("sqlite", info["backend"])
+            self.assertEqual(["json", "sqlite"], info["available_backends"])
+            self.assertEqual(str(path), info["path"])
+            self.assertTrue(info["writable"])
+
+    def test_sqlite_account_store_round_trips_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.sqlite3"
+            service = AccountService(SqliteAccountStore(path))
+
+            service.add_accounts(["token-1"])
+            service.update_account("token-1", {"status": "正常", "quota": 4})
+
+            reloaded = AccountService(SqliteAccountStore(path))
+            account = reloaded.get_account("token-1")
+
+            self.assertIsNotNone(account)
+            self.assertEqual("正常", account["status"])
+            self.assertEqual(4, account["quota"])
+            self.assertEqual(["token-1"], reloaded.list_tokens())
+
+    def test_migrate_accounts_copies_json_store_into_sqlite_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "accounts.json"
+            sqlite_path = Path(tmp_dir) / "accounts.sqlite3"
+            service = AccountService(JsonAccountStore(json_path))
+            service.add_accounts(["token-1"])
+            service.update_account("token-1", {"status": "正常", "quota": 2})
+
+            migrated = migrate_accounts(JsonAccountStore(json_path), SqliteAccountStore(sqlite_path))
+            reloaded = AccountService(SqliteAccountStore(sqlite_path))
+
+            self.assertEqual(1, migrated)
+            self.assertEqual(["token-1"], reloaded.list_tokens())
+            self.assertEqual(2, reloaded.get_account("token-1")["quota"])
 
 
 class TokenLogTests(unittest.TestCase):

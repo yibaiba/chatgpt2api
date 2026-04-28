@@ -40,6 +40,11 @@ function normalizeClampedInteger(
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const imageHistoryPersistenceMode: ImageHistoryPersistenceMode =
     config.image_history_persistence_mode === "server" ? "server" : "browser";
+  const sensitiveWords = Array.isArray(config.sensitive_words)
+    ? config.sensitive_words
+        .map((item) => String(item || "").trim())
+        .filter((item, index, array) => item && array.findIndex((value) => value.toLowerCase() === item.toLowerCase()) === index)
+    : [];
   return {
     ...config,
     "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
@@ -52,10 +57,30 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       max: 10,
     }),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
+    sensitive_word_filter_enabled: Boolean(config.sensitive_word_filter_enabled),
+    sensitive_words: sensitiveWords,
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     image_history_persistence_mode: imageHistoryPersistenceMode,
   };
+}
+
+function parseSensitiveWordsText(value: string) {
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    const normalized = line.trim();
+    if (!normalized) {
+      continue;
+    }
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    items.push(normalized);
+  }
+  return items;
 }
 
 function normalizeFiles(items: CPARemoteFile[]) {
@@ -110,6 +135,8 @@ type SettingsStore = {
   setRemoteAccountSyncIntervalMinute: (value: string) => void;
   setRefreshAccountBatchSize: (value: string) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
+  setSensitiveWordFilterEnabled: (value: boolean) => void;
+  setSensitiveWordsText: (value: string) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
   setImageHistoryPersistenceMode: (value: ImageHistoryPersistenceMode) => void;
@@ -199,6 +226,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           max: 10,
         }),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
+        sensitive_word_filter_enabled: Boolean(config.sensitive_word_filter_enabled),
+        sensitive_words: Array.isArray(config.sensitive_words) ? config.sensitive_words : [],
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
         image_history_persistence_mode:
@@ -280,6 +309,34 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           auto_remove_rate_limited_accounts: value,
+        },
+      };
+    });
+  },
+
+  setSensitiveWordFilterEnabled: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          sensitive_word_filter_enabled: value,
+        },
+      };
+    });
+  },
+
+  setSensitiveWordsText: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          sensitive_words: parseSensitiveWordsText(value),
         },
       };
     });

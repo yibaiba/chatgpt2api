@@ -13,6 +13,7 @@ from curl_cffi.requests import Session
 
 from services.config import config
 from services.storage.base import AccountStore
+from services.storage.factory import build_account_store
 from services.storage.json_storage import JsonAccountStore
 from services.system_settings import system_settings_service
 from services.utils import anonymize_token
@@ -588,4 +589,4 @@ class AccountService:
         }
 
 
-account_service = AccountService(JsonAccountStore(config.accounts_file))
+account_service = AccountService(build_account_store(config))

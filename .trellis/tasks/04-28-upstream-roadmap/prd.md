@@ -129,8 +129,8 @@
    * 当前进展：已完成首个低风险 UI 管理切片——在现有 `/image` 工作台上补齐删除确认、结果图尺寸/体积展示、侧边栏滚动体验优化，复用现有 `image_history` 与权限边界；独立 admin-only 图片后台页暂不引入
 
 4. **Phase B4 — 敏感词/高级运营能力**
-   * 仅在前面 3 阶段稳定后再评估
-   * 先不作为首轮吸收目标
+   * 目标：先落一个低风险、管理员可配的敏感词拦截能力，不引入更重的运营后台
+   * 当前进展：已完成首个可用切片——`config.json` / `/api/settings` / 设置页新增敏感词开关与词表，图片直连、`/api/image-jobs/*`、`/v1/chat/completions`、`/v1/responses`、`/v1/messages` 都会在调用上游前拦截命中 prompt，并补齐后端回归测试与前端 build 验证
 
 ### Track C: 基础设施能力
 
@@ -153,6 +153,7 @@
 3. **Phase C3 — SQLite/Postgres/Git backend**
    * 仅在 C2 稳定后再逐项引入
    * 每种 backend 单独作为一阶段，不打包一起上
+   * 当前进展：已完成四个低风险切片——先新增 `services/storage/factory.py` 统一 accounts store 构建，并补充 admin-only `GET /api/storage/info` 用于查看当前 backend、存储路径与可写状态；随后新增基于标准库 `sqlite3` 的 `SqliteAccountStore`，支持通过 `storage_backend=sqlite` + `storage_sqlite_path` 切换 accounts 存储后端；再补充 `scripts/migrate_storage.py`，支持当前 `json` 与 `sqlite` 后端之间的 accounts 数据迁移；最后新增 `scripts/test_storage.py` 作为 `json/sqlite` backend 的隔离式 round-trip 自检工具。当前 fork 按 SQLite-only 路线收口，Postgres/Git 具体实现与新增依赖不再继续推进
 
 ## Research Notes
 

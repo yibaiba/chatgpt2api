@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from services.account_service import AccountService
 from services.anthropic_protocol import message_response, stream_events
+from services.config import config
 from services.image_service import (
     ImageGenerationError,
     edit_image_result,
@@ -19,6 +20,7 @@ from services.image_service import (
 from services.text_backend import TextBackend, TextBackendError
 from services.utils import (
     build_chat_image_completion,
+    ensure_prompt_not_blocked,
     extract_assistant_history_messages,
     extract_assistant_history_text,
     extract_chat_image,
@@ -303,6 +305,14 @@ class ChatGPTService:
             tools=tools,
         )
 
+    @staticmethod
+    def _enforce_sensitive_word_filter(prompt: str) -> None:
+        ensure_prompt_not_blocked(
+            prompt,
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
+
     def create_text_completion(self, body: dict[str, object]) -> dict[str, object]:
         if bool(body.get("stream")):
             raise HTTPException(status_code=400, detail={"error": "stream is not supported for text completions"})
@@ -311,6 +321,7 @@ class ChatGPTService:
         prompt = self._build_chat_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages or prompt is required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         try:
             backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model)
@@ -325,6 +336,7 @@ class ChatGPTService:
         prompt = self._build_chat_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages or prompt is required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         try:
             backend_stream = TextBackend(self._get_text_access_token()).stream(prompt, model)
@@ -368,6 +380,7 @@ class ChatGPTService:
         prompt = self._build_response_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "input text is required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         try:
             backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model)
@@ -382,6 +395,7 @@ class ChatGPTService:
         prompt = self._build_message_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages are required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         try:
             backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model)
@@ -396,6 +410,7 @@ class ChatGPTService:
         prompt = self._build_message_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages are required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         try:
             backend_stream = TextBackend(self._get_text_access_token()).stream(prompt, model)
@@ -571,6 +586,7 @@ class ChatGPTService:
         prompt = extract_chat_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "prompt is required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         image_infos = extract_chat_image(body)
         try:
@@ -597,6 +613,7 @@ class ChatGPTService:
         prompt = extract_response_prompt(body.get("input"))
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "input text is required"})
+        self._enforce_sensitive_word_filter(prompt)
 
         image_infos = _extract_response_images(body.get("input"))
         model = str(body.get("model") or "gpt-5").strip() or "gpt-5"

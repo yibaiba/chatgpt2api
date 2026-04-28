@@ -22,6 +22,7 @@ SUPPORTED_API_MODELS = tuple(dict.fromkeys((*SUPPORTED_TEXT_MODELS, *SUPPORTED_I
 IMAGE_MODELS = set(SUPPORTED_IMAGE_MODELS)
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ASPECT_RATIO_PREFIX_RE = re.compile(r"^\s*Make the aspect ratio\s+\S+\s*,\s*", re.IGNORECASE)
+BLOCKED_PROMPT_ERROR_PREFIX = "prompt contains blocked word"
 
 
 def anonymize_token(token: object) -> str:
@@ -181,6 +182,29 @@ def apply_image_size_prompt(prompt: object, size: object) -> str:
         lines[0] = ASPECT_RATIO_PREFIX_RE.sub(prefix, lines[0], count=1)
         return "\n".join(lines).strip()
     return f"{prefix}{normalized_prompt}"
+
+
+def find_sensitive_word(text: object, sensitive_words: object) -> str | None:
+    normalized_text = str(text or "").casefold()
+    if not normalized_text or not isinstance(sensitive_words, (list, tuple, set)):
+        return None
+    for item in sensitive_words:
+        word = str(item or "").strip()
+        if word and word.casefold() in normalized_text:
+            return word
+    return None
+
+
+def ensure_prompt_not_blocked(prompt: object, *, enabled: bool, sensitive_words: object) -> None:
+    if not enabled:
+        return
+    blocked_word = find_sensitive_word(prompt, sensitive_words)
+    if not blocked_word:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={"error": f"{BLOCKED_PROMPT_ERROR_PREFIX}: {blocked_word}"},
+    )
 
 
 def extract_image_from_message_content(content: object) -> list[tuple[bytes, str]]:
