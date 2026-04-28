@@ -15,6 +15,17 @@ export function getConversationPrompt(conversation: ImageConversation): string {
   return conversation.turns[conversation.turns.length - 1]?.prompt ?? "";
 }
 
+export function getConversationModel(conversation: ImageConversation): string {
+  return conversation.turns[conversation.turns.length - 1]?.model ?? "";
+}
+
+export function getConversationImageCount(conversation: ImageConversation) {
+  return conversation.turns.reduce(
+    (sum, turn) => sum + turn.images.filter((image) => image.status === "success" && image.b64_json).length,
+    0,
+  );
+}
+
 export function getConversationImages(conversation: ImageConversation) {
   return conversation.turns.flatMap((turn) =>
     turn.images

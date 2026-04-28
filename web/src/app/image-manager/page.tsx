@@ -6,9 +6,9 @@ import { LoaderCircle, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { getConversationImages, getConversationMode, getConversationPrompt, getConversationStatus, getModeLabel, getStatusBadgeVariant } from "@/app/image-manager/conversation-utils";
-import { FilterToolbar, type ConversationStatusFilter } from "@/app/image-manager/filter-toolbar";
-import { buildPresetDateRange, describeDateRange, formatShanghaiDateKey, isDateRangeInvalid, matchesDateRange, type ConversationDatePreset } from "@/app/image-manager/date-range";
+import { getConversationImageCount, getConversationImages, getConversationMode, getConversationPrompt, getConversationStatus, getModeLabel, getStatusBadgeVariant } from "@/app/image-manager/conversation-utils";
+import { FilterToolbar } from "@/app/image-manager/filter-toolbar";
+import { useImageManagerFilters } from "@/app/image-manager/use-image-manager-filters";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,13 +31,6 @@ export default function ImageManagerPage() {
   const router = useRouter();
   const [session, setSession] = useState<AuthSession | null>(null);
   const [items, setItems] = useState<ImageConversation[]>([]);
-  const [queryInput, setQueryInput] = useState("");
-  const [appliedQuery, setAppliedQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<ConversationStatusFilter>("all");
-  const [modeFilter, setModeFilter] = useState<"all" | ImageConversationMode>("all");
-  const [datePreset, setDatePreset] = useState<ConversationDatePreset>("all");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
   const [selectedConversation, setSelectedConversation] = useState<ImageConversation | null>(null);
   const [lightboxImages, setLightboxImages] = useState<Array<{ id: string; src: string }>>([]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -86,33 +79,37 @@ export default function ImageManagerPage() {
     };
   }, [loadItems, router]);
 
-  const dateRangeError = useMemo(
-    () => (isDateRangeInvalid(startDate, endDate) ? "开始日期不能晚于结束日期" : ""),
-    [endDate, startDate],
-  );
-  const filteredItems = useMemo(() => {
-    const query = appliedQuery.trim().toLowerCase();
-    return items.filter((conversation) => {
-      const statusMatched = statusFilter === "all" || getConversationStatus(conversation) === statusFilter;
-      const modeMatched = modeFilter === "all" || getConversationMode(conversation) === modeFilter;
-      const dateMatched = matchesDateRange(formatShanghaiDateKey(conversation.updatedAt), startDate, endDate);
-      if (!statusMatched || !modeMatched || !dateMatched) return false;
-      if (!query) return true;
-      const haystack = [
-        conversation.title,
-        conversation.ownerName,
-        conversation.ownerId,
-        getConversationPrompt(conversation),
-        ...conversation.turns.map((turn) => turn.model),
-      ]
-        .join("\n")
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [appliedQuery, endDate, items, modeFilter, startDate, statusFilter]);
+  const {
+    filteredItems,
+    ownerOptions,
+    modelOptions,
+    queryInput,
+    statusFilter,
+    modeFilter,
+    ownerFilter,
+    modelFilter,
+    imageCountFilter,
+    datePreset,
+    startDate,
+    endDate,
+    dateRangeError,
+    dateRangeLabel,
+    setQueryInput,
+    setAppliedQuery,
+    setStatusFilter,
+    setModeFilter,
+    setOwnerFilter,
+    setModelFilter,
+    setImageCountFilter,
+    setStartDate,
+    setEndDate,
+    setDatePreset,
+    applyDatePreset,
+    resetFilters,
+  } = useImageManagerFilters(items);
 
   const summary = useMemo(() => {
-    const successfulImages = items.reduce((sum, conversation) => sum + getConversationImages(conversation).length, 0);
+    const successfulImages = items.reduce((sum, conversation) => sum + getConversationImageCount(conversation), 0);
     const userConversations = items.filter((conversation) => conversation.ownerRole === "user").length;
     return { total: items.length, successfulImages, userConversations };
   }, [items]);
@@ -153,7 +150,6 @@ export default function ImageManagerPage() {
   }
 
   const historyDisabled = session.image_history_persistence_mode !== "server";
-  const dateRangeLabel = describeDateRange(datePreset, startDate, endDate);
 
   return (
     <div className="space-y-5">
@@ -186,21 +182,24 @@ export default function ImageManagerPage() {
             queryInput={queryInput}
             statusFilter={statusFilter}
             modeFilter={modeFilter}
+            ownerFilter={ownerFilter}
+            modelFilter={modelFilter}
+            imageCountFilter={imageCountFilter}
             datePreset={datePreset}
             startDate={startDate}
             endDate={endDate}
             dateRangeError={dateRangeError}
+            ownerOptions={ownerOptions}
+            modelOptions={modelOptions}
             historyDisabled={historyDisabled}
             isLoading={isLoading}
             onQueryInputChange={setQueryInput}
             onStatusFilterChange={setStatusFilter}
             onModeFilterChange={setModeFilter}
-            onDatePresetChange={(value) => {
-              setDatePreset(value);
-              const range = buildPresetDateRange(value);
-              setStartDate(range.start);
-              setEndDate(range.end);
-            }}
+            onOwnerFilterChange={setOwnerFilter}
+            onModelFilterChange={setModelFilter}
+            onImageCountFilterChange={setImageCountFilter}
+            onDatePresetChange={applyDatePreset}
             onStartDateChange={(value) => {
               setDatePreset("custom");
               setStartDate(value);
@@ -209,15 +208,7 @@ export default function ImageManagerPage() {
               setDatePreset("custom");
               setEndDate(value);
             }}
-            onReset={() => {
-              setQueryInput("");
-              setAppliedQuery("");
-              setStatusFilter("all");
-              setModeFilter("all");
-              setDatePreset("all");
-              setStartDate("");
-              setEndDate("");
-            }}
+            onReset={resetFilters}
             onRefresh={() => loadItems()}
             onApplyQuery={() => setAppliedQuery(queryInput)}
           />
@@ -238,7 +229,7 @@ export default function ImageManagerPage() {
                     const images = getConversationImages(conversation);
                     return (
                       <tr key={conversation.id} className="align-top text-stone-700">
-                        <td className="px-4 py-3"><div className="space-y-1"><div className="font-medium text-stone-900">{conversation.title}</div><div className="line-clamp-2 text-xs text-stone-500">{getConversationPrompt(conversation) || "—"}</div><div className="flex flex-wrap gap-2"><Badge variant="secondary">{getModeLabel(mode)}</Badge><Badge variant="outline">{conversation.turns.length} 轮</Badge><Badge variant="outline">{images.length} 张</Badge></div></div></td>
+                        <td className="px-4 py-3"><div className="space-y-1"><div className="font-medium text-stone-900">{conversation.title}</div><div className="line-clamp-2 text-xs text-stone-500">{getConversationPrompt(conversation) || "—"}</div><div className="flex flex-wrap gap-2"><Badge variant="secondary">{getModeLabel(mode)}</Badge><Badge variant="outline">{conversation.turns.length} 轮</Badge><Badge variant="outline">{images.length} 张</Badge><Badge variant="outline">{conversation.turns[conversation.turns.length - 1]?.model || "未知模型"}</Badge></div></div></td>
                         <td className="px-4 py-3"><div className="space-y-1"><div className="font-medium text-stone-800">{conversation.ownerName}</div><div className="text-xs text-stone-500">{conversation.ownerRole === "admin" ? "管理员" : conversation.ownerId}</div></div></td>
                         <td className="px-4 py-3"><Badge variant={getStatusBadgeVariant(status)}>{status === "success" ? "成功" : status === "error" ? "失败" : status === "generating" ? "生成中" : "排队中"}</Badge></td>
                         <td className="px-4 py-3 text-xs text-stone-500">{formatMonthDayTimeInShanghai(conversation.updatedAt) || "—"}</td>

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { ImageConversationMode, ImageTurnStatus } from "@/store/image-conversations";
 
 import { DATE_PRESET_OPTIONS, type ConversationDatePreset } from "./date-range";
+import type { ImageCountFilter } from "./use-image-manager-filters";
 
 export type ConversationStatusFilter = "all" | ImageTurnStatus;
 
@@ -16,15 +17,23 @@ type FilterToolbarProps = {
   queryInput: string;
   statusFilter: ConversationStatusFilter;
   modeFilter: "all" | ImageConversationMode;
+  ownerFilter: string;
+  modelFilter: string;
+  imageCountFilter: ImageCountFilter;
   datePreset: ConversationDatePreset;
   startDate: string;
   endDate: string;
   dateRangeError: string;
+  ownerOptions: Array<{ value: string; label: string }>;
+  modelOptions: Array<{ value: string; label: string }>;
   historyDisabled: boolean;
   isLoading: boolean;
   onQueryInputChange: (value: string) => void;
   onStatusFilterChange: (value: ConversationStatusFilter) => void;
   onModeFilterChange: (value: "all" | ImageConversationMode) => void;
+  onOwnerFilterChange: (value: string) => void;
+  onModelFilterChange: (value: string) => void;
+  onImageCountFilterChange: (value: ImageCountFilter) => void;
   onDatePresetChange: (value: Exclude<ConversationDatePreset, "custom">) => void;
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
@@ -37,15 +46,23 @@ export function FilterToolbar({
   queryInput,
   statusFilter,
   modeFilter,
+  ownerFilter,
+  modelFilter,
+  imageCountFilter,
   datePreset,
   startDate,
   endDate,
   dateRangeError,
+  ownerOptions,
+  modelOptions,
   historyDisabled,
   isLoading,
   onQueryInputChange,
   onStatusFilterChange,
   onModeFilterChange,
+  onOwnerFilterChange,
+  onModelFilterChange,
+  onImageCountFilterChange,
   onDatePresetChange,
   onStartDateChange,
   onEndDateChange,
@@ -102,7 +119,7 @@ export function FilterToolbar({
         </div>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-[180px_180px_minmax(0,1fr)_auto_auto_auto]">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[170px_170px_220px_180px_170px_minmax(0,1fr)_auto_auto_auto]">
         <Select value={statusFilter} onValueChange={(value) => onStatusFilterChange(value as ConversationStatusFilter)}>
           <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
             <SelectValue placeholder="状态" />
@@ -123,6 +140,40 @@ export function FilterToolbar({
             <SelectItem value="all">全部模式</SelectItem>
             <SelectItem value="generate">生成</SelectItem>
             <SelectItem value="edit">编辑</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={ownerFilter} onValueChange={onOwnerFilterChange}>
+          <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
+            <SelectValue placeholder="归属" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部归属</SelectItem>
+            {ownerOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={modelFilter} onValueChange={onModelFilterChange}>
+          <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
+            <SelectValue placeholder="模型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部模型</SelectItem>
+            {modelOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={imageCountFilter} onValueChange={(value) => onImageCountFilterChange(value as ImageCountFilter)}>
+          <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
+            <SelectValue placeholder="图片数量" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部图片数量</SelectItem>
+            <SelectItem value="1">至少 1 张</SelectItem>
+            <SelectItem value="2">至少 2 张</SelectItem>
+            <SelectItem value="4">至少 4 张</SelectItem>
+            <SelectItem value="8">至少 8 张</SelectItem>
           </SelectContent>
         </Select>
         <Input
