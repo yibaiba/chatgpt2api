@@ -160,6 +160,7 @@ export type SettingsConfig = {
   refresh_account_interval_minute?: number | string;
   refresh_account_batch_size?: number | string;
   remote_account_sync_interval_minute?: number | string;
+  auto_remove_rate_limited_accounts?: boolean;
   image_history_persistence_mode?: ImageHistoryPersistenceMode | string;
   [key: string]: unknown;
 };

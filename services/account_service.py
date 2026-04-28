@@ -401,6 +401,18 @@ class AccountService:
             items = self._public_items(self._accounts)
         return {"removed": removed, "removed_tokens": removed_tokens, "items": items}
 
+    def _remove_account_at_index(self, index: int) -> None:
+        del self._accounts[index]
+        if self._accounts:
+            self._index %= len(self._accounts)
+        else:
+            self._index = 0
+        self._save_accounts()
+
+    @staticmethod
+    def _should_auto_remove_rate_limited_account(account: dict | None) -> bool:
+        return bool(account) and account.get("status") == "限流" and config.auto_remove_rate_limited_accounts
+
     def update_account(self, access_token: str, updates: dict) -> dict | None:
         access_token = self._clean_token(access_token)
         if not access_token:
@@ -411,6 +423,9 @@ class AccountService:
                 return None
             account = self._normalize_account({**self._accounts[index], **updates, "access_token": access_token})
             if account is None:
+                return None
+            if self._should_auto_remove_rate_limited_account(account):
+                self._remove_account_at_index(index)
                 return None
             self._accounts[index] = account
             self._save_accounts()
@@ -441,6 +456,9 @@ class AccountService:
                 next_item["fail"] = int(next_item.get("fail") or 0) + 1
             account = self._normalize_account(next_item)
             if account is None:
+                return None
+            if self._should_auto_remove_rate_limited_account(account):
+                self._remove_account_at_index(index)
                 return None
             self._accounts[index] = account
             self._save_accounts()

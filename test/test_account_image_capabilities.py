@@ -4,10 +4,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 from services.account_service import AccountService
+from services.config import config
 from services.utils import anonymize_token
 
 
@@ -81,6 +83,39 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertCountEqual(["token-abnormal", "token-disabled"], result["removed_tokens"])
             remaining_tokens = [item["access_token"] for item in service.list_accounts()]
             self.assertCountEqual(["token-normal", "token-limited"], remaining_tokens)
+
+    def test_update_account_auto_removes_rate_limited_account_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["token-1"])
+
+            with mock.patch.object(
+                type(config),
+                "auto_remove_rate_limited_accounts",
+                new_callable=mock.PropertyMock,
+                return_value=True,
+            ):
+                updated = service.update_account("token-1", {"status": "限流"})
+
+            self.assertIsNone(updated)
+            self.assertEqual([], service.list_accounts())
+
+    def test_mark_image_result_auto_removes_rate_limited_account_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["token-1"])
+            service.update_account("token-1", {"status": "正常", "quota": 1, "image_quota_unknown": False})
+
+            with mock.patch.object(
+                type(config),
+                "auto_remove_rate_limited_accounts",
+                new_callable=mock.PropertyMock,
+                return_value=True,
+            ):
+                updated = service.mark_image_result("token-1", success=True)
+
+            self.assertIsNone(updated)
+            self.assertEqual([], service.list_accounts())
 
 
 class TokenLogTests(unittest.TestCase):

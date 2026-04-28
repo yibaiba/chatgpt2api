@@ -51,6 +51,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       min: 1,
       max: 10,
     }),
+    auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
     image_history_persistence_mode: imageHistoryPersistenceMode,
@@ -108,6 +109,7 @@ type SettingsStore = {
   setRefreshAccountIntervalMinute: (value: string) => void;
   setRemoteAccountSyncIntervalMinute: (value: string) => void;
   setRefreshAccountBatchSize: (value: string) => void;
+  setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
   setImageHistoryPersistenceMode: (value: ImageHistoryPersistenceMode) => void;
@@ -196,6 +198,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           min: 1,
           max: 10,
         }),
+        auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
         image_history_persistence_mode:
@@ -263,6 +266,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           refresh_account_batch_size: value,
+        },
+      };
+    });
+  },
+
+  setAutoRemoveRateLimitedAccounts: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          auto_remove_rate_limited_accounts: value,
         },
       };
     });

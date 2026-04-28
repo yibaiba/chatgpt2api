@@ -4,6 +4,7 @@ import { History, KeyRound, Link2, LoaderCircle, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -23,6 +24,7 @@ export function ConfigCard() {
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
   const setRemoteAccountSyncIntervalMinute = useSettingsStore((state) => state.setRemoteAccountSyncIntervalMinute);
   const setRefreshAccountBatchSize = useSettingsStore((state) => state.setRefreshAccountBatchSize);
+  const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setImageHistoryPersistenceMode = useSettingsStore((state) => state.setImageHistoryPersistenceMode);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
@@ -108,6 +110,23 @@ export function ConfigCard() {
             <p className="text-xs text-stone-500">
               控制 CPA / Sub2API 自动同步频率；只有在连接详情里额外开启了「自动同步」的来源，才会按这个间隔全量拉取。
             </p>
+          </div>
+
+          <div className="space-y-2 md:col-span-2">
+            <label className="text-sm font-medium text-stone-700">账号自动清理</label>
+            <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
+              <Checkbox
+                checked={Boolean(config?.auto_remove_rate_limited_accounts)}
+                onCheckedChange={(checked) => setAutoRemoveRateLimitedAccounts(Boolean(checked))}
+                className="mt-0.5"
+              />
+              <span className="space-y-1">
+                <span className="block font-medium text-stone-800">自动移除限流账号</span>
+                <span className="block text-xs text-stone-500">
+                  当账号因图片额度耗尽被标记为“限流”时，自动从当前号池移除，避免后续反复轮询到不可用账号。
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="space-y-2 md:col-span-2">

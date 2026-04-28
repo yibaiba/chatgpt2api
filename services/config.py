@@ -174,6 +174,13 @@ class ConfigStore:
         )
 
     @property
+    def auto_remove_rate_limited_accounts(self) -> bool:
+        value = self.data.get("auto_remove_rate_limited_accounts", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def images_dir(self) -> Path:
         path = DATA_DIR / "images"
         path.mkdir(parents=True, exist_ok=True)
@@ -197,6 +204,7 @@ class ConfigStore:
         public_data.pop("auth-key-hash", None)
         public_data["auth-key"] = ""
         public_data["auth_key_configured"] = self.auth_key_configured
+        public_data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
         return public_data
 
     def get_proxy_settings(self) -> str:
