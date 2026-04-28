@@ -4,14 +4,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
 import hashlib
 import json
-from pathlib import Path
 from threading import Lock
 from typing import Any
 from datetime import datetime
+from pathlib import Path
 
 from curl_cffi.requests import Session
 
 from services.config import config
+from services.storage.base import AccountStore
+from services.storage.json_storage import JsonAccountStore
 from services.system_settings import system_settings_service
 from services.utils import anonymize_token
 
@@ -29,8 +31,13 @@ class AccountService:
         "business": "Team",
         "enterprise": "Team",
     }
-    def __init__(self, store_file: Path):
-        self.store_file = store_file
+    def __init__(self, store: AccountStore | Path):
+        if isinstance(store, Path):
+            self._store = JsonAccountStore(store)
+            self.store_file = store
+        else:
+            self._store = store
+            self.store_file = getattr(store, "path", Path("accounts.json"))
         self._lock = Lock()
         self._index = 0
         self._accounts = self._load_accounts()
@@ -163,22 +170,13 @@ class AccountService:
         return quota, restore_at, True
 
     def _load_accounts(self) -> list[dict]:
-        if not self.store_file.exists():
-            return []
-        try:
-            data = json.loads(self.store_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return []
+        data = self._store.load_accounts()
         if not isinstance(data, list):
             return []
         return [normalized for item in data if (normalized := self._normalize_account(item)) is not None]
 
     def _save_accounts(self) -> None:
-        self.store_file.parent.mkdir(parents=True, exist_ok=True)
-        self.store_file.write_text(
-            json.dumps(self._accounts, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._store.save_accounts(self._accounts)
 
     def _build_remote_headers(self, access_token: str) -> tuple[dict[str, str], str]:
         account = self.get_account(access_token) or {}
@@ -590,4 +588,4 @@ class AccountService:
         }
 
 
-account_service = AccountService(config.accounts_file)
+account_service = AccountService(JsonAccountStore(config.accounts_file))

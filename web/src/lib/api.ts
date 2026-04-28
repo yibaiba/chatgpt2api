@@ -174,6 +174,68 @@ type AuthUserMutationResponse = {
   items: AuthUser[];
 };
 
+export type RegisterMode = "total" | "quota" | "available";
+export type SystemLogSource = "all" | "server" | "register";
+export type SystemLogLevel = "all" | "info" | "warning" | "error" | "success";
+
+export type RegisterMailProvider = {
+  id: string;
+  type: string;
+  enabled: boolean;
+  api_key?: string;
+  api_base?: string;
+  default_domain?: string;
+  domains: string[];
+};
+
+export type RegisterConfig = {
+  enabled: boolean;
+  mail: {
+    request_timeout: number;
+    wait_timeout: number;
+    wait_interval: number;
+    providers: RegisterMailProvider[];
+  };
+  proxy: string;
+  total: number;
+  threads: number;
+  mode: RegisterMode;
+  target_quota: number;
+  target_available: number;
+  check_interval: number;
+  stats: {
+    job_id?: string;
+    success: number;
+    fail: number;
+    done: number;
+    running: number;
+    threads: number;
+    elapsed_seconds?: number;
+    avg_seconds?: number;
+    success_rate?: number;
+    current_quota?: number;
+    current_available?: number;
+    started_at?: string;
+    updated_at?: string;
+    finished_at?: string;
+  };
+  logs?: Array<{
+    time: string;
+    text: string;
+    level: string;
+  }>;
+};
+
+export type SystemLog = {
+  id: string;
+  source: SystemLogSource;
+  level: Exclude<SystemLogLevel, "all">;
+  time?: string | null;
+  summary: string;
+  message: string;
+  detail?: Record<string, unknown>;
+};
+
 type LegacyProxySettingsResponse = {
   item: LegacyProxySettings;
 };
@@ -209,6 +271,68 @@ export async function updateSettingsConfig(settings: SettingsConfig) {
     method: "POST",
     body: settings,
   });
+}
+
+export async function fetchRegisterConfig() {
+  return httpRequest<{ register: RegisterConfig }>("/api/register");
+}
+
+export async function updateRegisterConfig(register: {
+  mail: RegisterConfig["mail"];
+  proxy: string;
+  total: number;
+  threads: number;
+  mode: RegisterMode;
+  target_quota: number;
+  target_available: number;
+  check_interval: number;
+}) {
+  return httpRequest<{ register: RegisterConfig }>("/api/register", {
+    method: "POST",
+    body: register,
+  });
+}
+
+export async function startRegisterRunner() {
+  return httpRequest<{ register: RegisterConfig }>("/api/register/start", {
+    method: "POST",
+  });
+}
+
+export async function stopRegisterRunner() {
+  return httpRequest<{ register: RegisterConfig }>("/api/register/stop", {
+    method: "POST",
+  });
+}
+
+export async function resetRegisterRunner() {
+  return httpRequest<{ register: RegisterConfig }>("/api/register/reset", {
+    method: "POST",
+  });
+}
+
+export async function fetchSystemLogs(filters: {
+  source?: SystemLogSource;
+  query?: string;
+  level?: SystemLogLevel;
+  limit?: number;
+}) {
+  const params = new URLSearchParams();
+  if (filters.source && filters.source !== "all") {
+    params.set("source", filters.source);
+  }
+  if (filters.query) {
+    params.set("query", filters.query);
+  }
+  if (filters.level && filters.level !== "all") {
+    params.set("level", filters.level);
+  }
+  if (filters.limit) {
+    params.set("limit", String(filters.limit));
+  }
+  return httpRequest<{ items: SystemLog[]; query: { source: string; query: string; level: string; limit: number } }>(
+    `/api/logs${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 export async function fetchAccounts() {

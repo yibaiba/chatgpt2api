@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -10,7 +11,22 @@ os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 from services.account_service import AccountService
 from services.config import config
+from services.storage.json_storage import JsonAccountStore
 from services.utils import anonymize_token
+
+
+class _MemoryAccountStore:
+    def __init__(self, items: list[dict] | None = None) -> None:
+        self._items = [dict(item) for item in (items or [])]
+        self.saved_snapshots: list[list[dict]] = []
+
+    def load_accounts(self) -> list[dict]:
+        return [dict(item) for item in self._items]
+
+    def save_accounts(self, accounts: list[dict]) -> None:
+        snapshot = [dict(item) for item in accounts]
+        self.saved_snapshots.append(snapshot)
+        self._items = snapshot
 
 
 class AccountCapabilityTests(unittest.TestCase):
@@ -116,6 +132,59 @@ class AccountCapabilityTests(unittest.TestCase):
 
             self.assertIsNone(updated)
             self.assertEqual([], service.list_accounts())
+
+    def test_account_service_uses_store_backend_for_load_and_save(self) -> None:
+        store = _MemoryAccountStore(
+            [
+                {
+                    "access_token": "token-1",
+                    "status": "正常",
+                    "quota": 2,
+                }
+            ]
+        )
+
+        service = AccountService(store)
+        added = service.add_accounts(["token-2"])
+
+        self.assertEqual(["token-1", "token-2"], sorted(service.list_tokens()))
+        self.assertEqual(1, added["added"])
+        self.assertTrue(store.saved_snapshots)
+        self.assertEqual(["token-1", "token-2"], sorted(item["access_token"] for item in store.saved_snapshots[-1]))
+
+    def test_json_account_store_round_trips_accounts_file_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.json"
+            service = AccountService(JsonAccountStore(path))
+
+            service.add_accounts(["token-1"])
+            service.update_account("token-1", {"status": "正常", "quota": 3})
+
+            reloaded = AccountService(JsonAccountStore(path))
+            account = reloaded.get_account("token-1")
+
+            self.assertIsNotNone(account)
+            self.assertEqual("正常", account["status"])
+            self.assertEqual(3, account["quota"])
+            self.assertEqual(["token-1"], reloaded.list_tokens())
+
+    def test_json_account_store_save_is_not_plain_write_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.json"
+            store = JsonAccountStore(path)
+            payload = [{"access_token": "token-1", "status": "正常", "quota": 1}]
+
+            with mock.patch("pathlib.Path.write_text", side_effect=AssertionError("write_text should not be used")):
+                store.save_accounts(payload)
+
+            self.assertEqual(payload, json.loads(path.read_text(encoding="utf-8")))
+
+    def test_json_account_store_ignores_invalid_json_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "accounts.json"
+            path.write_text('{"access_token": "token-1"}', encoding="utf-8")
+
+            self.assertEqual([], JsonAccountStore(path).load_accounts())
 
 
 class TokenLogTests(unittest.TestCase):

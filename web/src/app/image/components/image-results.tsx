@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Clock3, CornerDownLeft, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,21 @@ export function ImageResults({
   onReusePrompt,
   formatConversationTime,
 }: ImageResultsProps) {
+  const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
+
+  const updateImageDimensions = (id: string, width: number, height: number) => {
+    const dimensions = formatImageDimensions(width, height);
+    setImageDimensions((current) => {
+      if (current[id] === dimensions) {
+        return current;
+      }
+      return {
+        ...current,
+        [id]: dimensions,
+      };
+    });
+  };
+
   if (!selectedConversation) {
     return (
       <div className="flex h-full min-h-[420px] items-center justify-center text-center">
@@ -189,6 +205,9 @@ export function ImageResults({
                   {turn.images.map((image, index) => {
                     if (image.status === "success" && image.b64_json) {
                       const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
+                      const imageMeta = [formatBase64ImageSize(image.b64_json), imageDimensions[image.id]]
+                        .filter(Boolean)
+                        .join(" · ");
 
                       return (
                         <div
@@ -218,13 +237,21 @@ export function ImageResults({
                               src={buildImageDataUrl(image)}
                               alt={`Generated result ${index + 1}`}
                               className="block h-auto w-full transition duration-200 group-hover:brightness-90"
+                              onLoad={(event) => {
+                                updateImageDimensions(
+                                  image.id,
+                                  event.currentTarget.naturalWidth,
+                                  event.currentTarget.naturalHeight,
+                                );
+                              }}
                             />
                           </button>
                           <div className="flex items-center justify-between gap-2 px-3 py-3">
-                            <div className="flex items-center gap-2 text-xs text-stone-500">
+                            <div className="min-w-0 text-xs text-stone-500">
                               <span>结果 {index + 1}</span>
+                              {imageMeta ? <span className="ml-2 text-stone-400">{imageMeta}</span> : null}
                               {image.generation_route ? (
-                                <span className={getGenerationRouteBadgeClassName(image.generation_route)}>
+                                <span className={`ml-2 ${getGenerationRouteBadgeClassName(image.generation_route)}`}>
                                   {getGenerationRouteLabel(image.generation_route)}
                                 </span>
                               ) : null}
@@ -311,6 +338,23 @@ function getTurnStatusLabel(status: ImageTurnStatus) {
 
 function buildImageDataUrl(image: StoredImage) {
   return `data:${image.mime_type || "image/png"};base64,${image.b64_json || ""}`;
+}
+
+function formatBase64ImageSize(base64: string) {
+  const normalized = base64.replace(/\s/g, "");
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  const bytes = Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function formatImageDimensions(width: number, height: number) {
+  return `${width} x ${height}`;
 }
 
 function getGenerationRouteLabel(route: ImageGenerationRoute) {

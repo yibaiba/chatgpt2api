@@ -53,6 +53,8 @@ export function TopNav() {
       ? [
           { href: "/image", label: "画图" },
           { href: "/accounts", label: "号池管理" },
+          { href: "/register", label: "注册" },
+          { href: "/logs", label: "日志" },
           { href: "/settings", label: "设置" },
         ]
       : [{ href: "/image", label: "画图" }];

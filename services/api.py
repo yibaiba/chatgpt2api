@@ -21,7 +21,9 @@ from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.image_history_service import image_history_service
+from services.log_service import LOG_LEVEL_ALL, LOG_SOURCE_ALL, log_service
 from services.proxy_service import test_proxy
+from services.register_service import register_service
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -131,6 +133,34 @@ class AuthUserUpdateRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+class RegisterProviderPayload(BaseModel):
+    id: str | None = None
+    type: str = ""
+    enabled: bool = True
+    api_key: str | None = None
+    api_base: str | None = None
+    default_domain: str | None = None
+    domains: list[str] = Field(default_factory=list)
+
+
+class RegisterMailPayload(BaseModel):
+    request_timeout: int | None = Field(default=None, ge=1)
+    wait_timeout: int | None = Field(default=None, ge=1)
+    wait_interval: int | None = Field(default=None, ge=1)
+    providers: list[RegisterProviderPayload] | None = None
+
+
+class RegisterConfigUpdateRequest(BaseModel):
+    mail: RegisterMailPayload | None = None
+    proxy: str | None = None
+    total: int | None = Field(default=None, ge=1)
+    threads: int | None = Field(default=None, ge=1)
+    mode: str | None = None
+    target_quota: int | None = Field(default=None, ge=1)
+    target_available: int | None = Field(default=None, ge=1)
+    check_interval: int | None = Field(default=None, ge=1)
 
 
 class ProxySettingsUpdateRequest(BaseModel):
@@ -762,6 +792,63 @@ def create_app() -> FastAPI:
     ):
         require_admin_session(request, authorization)
         return {"config": config.update(body.model_dump(mode="python"))}
+
+    @router.get("/api/register")
+    async def get_register(request: Request, authorization: str | None = Header(default=None)):
+        require_admin_session(request, authorization)
+        return {"register": register_service.get()}
+
+    @router.post("/api/register")
+    async def update_register(
+            request: Request,
+            body: RegisterConfigUpdateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin_session(request, authorization)
+        payload = body.model_dump(mode="python", exclude_none=True)
+        return {"register": register_service.update(payload)}
+
+    @router.post("/api/register/start")
+    async def start_register(request: Request, authorization: str | None = Header(default=None)):
+        require_admin_session(request, authorization)
+        try:
+            return {"register": register_service.start()}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/register/stop")
+    async def stop_register(request: Request, authorization: str | None = Header(default=None)):
+        require_admin_session(request, authorization)
+        return {"register": register_service.stop()}
+
+    @router.post("/api/register/reset")
+    async def reset_register(request: Request, authorization: str | None = Header(default=None)):
+        require_admin_session(request, authorization)
+        try:
+            return {"register": register_service.reset()}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.get("/api/logs")
+    async def get_logs(
+            request: Request,
+            authorization: str | None = Header(default=None),
+            source: str = LOG_SOURCE_ALL,
+            query: str = "",
+            level: str = LOG_LEVEL_ALL,
+            limit: int = 200,
+    ):
+        require_admin_session(request, authorization)
+        items = log_service.list(source=source, query=query, level=level, limit=limit)
+        return {
+            "items": items,
+            "query": {
+                "source": source,
+                "query": query,
+                "level": level,
+                "limit": limit,
+            },
+        }
 
     @router.get("/api/accounts")
     async def get_accounts(request: Request, authorization: str | None = Header(default=None)):
