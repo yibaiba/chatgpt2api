@@ -51,6 +51,7 @@ import {
   type AccountType,
 } from "@/lib/api";
 import { syncStoredAuthSession } from "@/lib/auth-session";
+import { formatDateTimeInShanghai } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
@@ -133,11 +134,7 @@ function formatRestoreAt(value?: string | null) {
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
   const relative = diffMs > 0 ? `剩余 ${days}d ${hours}h` : "已到恢复时间";
-
-  const pad = (num: number) => String(num).padStart(2, "0");
-  const absolute = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const absolute = formatDateTimeInShanghai(value) || value;
 
   return { absolute, relative };
 }

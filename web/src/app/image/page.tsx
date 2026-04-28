@@ -25,6 +25,7 @@ import {
   type Account,
   type ImageModel,
 } from "@/lib/api";
+import { formatMonthDayTimeInShanghai } from "@/lib/time";
 import {
   applyAspectRatioPrompt,
   isImageAspectRatio,
@@ -70,16 +71,7 @@ function buildConversationTitle(prompt: string) {
 }
 
 function formatConversationTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return formatMonthDayTimeInShanghai(value);
 }
 
 function formatAvailableQuota(accounts: Account[]) {
