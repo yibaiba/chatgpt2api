@@ -1,4 +1,5 @@
 import unittest
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from services import api as api_module
+from services.image_service import ImageGenerationError
 
 
 class _FakeThread:
@@ -16,6 +18,7 @@ class _FakeThread:
 
 class _FakeChatGPTService:
     last_call: dict[str, object] | None = None
+    generate_error: Exception | None = None
 
     def __init__(self, _account_service) -> None:
         return None
@@ -53,6 +56,8 @@ class _FakeChatGPTService:
         response_format: str = "b64_json",
         base_url: str | None = None,
     ):
+        if type(self).generate_error is not None:
+            raise type(self).generate_error
         type(self).last_call = {
             "prompt": prompt,
             "model": model,
@@ -80,15 +85,37 @@ class _FakeConfig:
         return ""
 
 
+class _FakeAuthService:
+    def __init__(self) -> None:
+        self.reserved: list[int] = []
+        self.settled: list[tuple[int, int]] = []
+
+    def authenticate(self, auth_key: str):
+        if auth_key == "test-auth":
+            return {"id": "admin", "role": "admin", "name": "管理员"}
+        return None
+
+    def reserve_images_for_identity(self, _identity: dict, image_count: int):
+        self.reserved.append(image_count)
+        return None
+
+    def settle_images_for_identity(self, _identity: dict, reserved_count: int, actual_count: int):
+        self.settled.append((reserved_count, actual_count))
+        return None
+
+
 class ImageEditsApiTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeChatGPTService.last_call = None
+        _FakeChatGPTService.generate_error = None
         self.auth_header = {"Authorization": "Bearer test-auth"}
+        self.auth_service = _FakeAuthService()
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         fake_config = _FakeConfig(Path(self.temp_dir.name) / "images")
         self.patches = [
             mock.patch.object(api_module, "ChatGPTService", _FakeChatGPTService),
+            mock.patch.object(api_module, "auth_service", self.auth_service),
             mock.patch.object(api_module, "config", fake_config),
             mock.patch.object(api_module, "start_limited_account_watcher", lambda _stop_event: _FakeThread()),
         ]
@@ -101,6 +128,16 @@ class ImageEditsApiTests(unittest.TestCase):
     def _cleanup_patches(self) -> None:
         for patcher in reversed(self.patches):
             patcher.stop()
+
+    def _wait_for_job(self, job_id: str):
+        for _ in range(50):
+            response = self.client.get(f"/api/image-jobs/{job_id}", headers=self.auth_header)
+            self.assertEqual(response.status_code, 200)
+            job = response.json()["job"]
+            if job["status"] in {"success", "error"}:
+                return job
+            time.sleep(0.01)
+        self.fail("image job did not settle")
 
     def test_accepts_repeated_image_field(self) -> None:
         response = self.client.post(
@@ -208,6 +245,34 @@ class ImageEditsApiTests(unittest.TestCase):
             "Make the aspect ratio 3:4 , test prompt",
             _FakeChatGPTService.last_call["prompt"],
         )
+
+    def test_generation_job_completes_through_polling_api(self) -> None:
+        response = self.client.post(
+            "/api/image-jobs/generations",
+            headers=self.auth_header,
+            json={"prompt": "draw a cat", "model": "gpt-image-think", "n": 1},
+        )
+        self.assertEqual(response.status_code, 200)
+        job = self._wait_for_job(response.json()["job"]["id"])
+
+        self.assertEqual("success", job["status"])
+        self.assertEqual("ZmFrZQ==", job["result"]["data"][0]["b64_json"])
+        self.assertEqual([1], self.auth_service.reserved)
+        self.assertEqual([(1, 1)], self.auth_service.settled)
+
+    def test_generation_job_error_refunds_reserved_quota(self) -> None:
+        _FakeChatGPTService.generate_error = ImageGenerationError("upstream failed")
+        response = self.client.post(
+            "/api/image-jobs/generations",
+            headers=self.auth_header,
+            json={"prompt": "draw a cat", "model": "gpt-image-think", "n": 1},
+        )
+        self.assertEqual(response.status_code, 200)
+        job = self._wait_for_job(response.json()["job"]["id"])
+
+        self.assertEqual("error", job["status"])
+        self.assertEqual("upstream failed", job["error"])
+        self.assertEqual([(1, 0)], self.auth_service.settled)
 
 
 if __name__ == "__main__":

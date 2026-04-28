@@ -64,6 +64,24 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertEqual(updated["status"], "正常")
             self.assertTrue(updated["image_quota_unknown"])
 
+    def test_delete_accounts_by_status_only_removes_matching_abnormal_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["token-normal", "token-abnormal", "token-limited", "token-disabled"])
+            service.update_account("token-normal", {"status": "正常"})
+            service.update_account("token-abnormal", {"status": "异常"})
+            service.update_account("token-limited", {"status": "限流"})
+            service.update_account("token-disabled", {"status": "禁用"})
+
+            result = service.delete_accounts_by_status(
+                ["token-normal", "token-abnormal", "token-limited", "token-disabled"]
+            )
+
+            self.assertEqual(2, result["removed"])
+            self.assertCountEqual(["token-abnormal", "token-disabled"], result["removed_tokens"])
+            remaining_tokens = [item["access_token"] for item in service.list_accounts()]
+            self.assertCountEqual(["token-normal", "token-limited"], remaining_tokens)
+
 
 class TokenLogTests(unittest.TestCase):
     def test_anonymize_token_hides_raw_value(self) -> None:
