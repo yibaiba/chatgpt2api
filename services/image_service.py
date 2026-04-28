@@ -423,6 +423,14 @@ def is_token_invalid_error(message: str) -> bool:
     )
 
 
+def is_retryable_image_output_error(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    return text in {
+        "no image returned from upstream",
+        "failed to get download url",
+    }
+
+
 def is_conversation_forbidden_error(message: str) -> bool:
     text = str(message or "").lower()
     return (

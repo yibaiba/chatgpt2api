@@ -5,7 +5,13 @@ from typing import Iterable
 from fastapi import HTTPException
 
 from services.account_service import AccountService
-from services.image_service import ImageGenerationError, edit_image_result, generate_image_result, is_token_invalid_error
+from services.image_service import (
+    ImageGenerationError,
+    edit_image_result,
+    generate_image_result,
+    is_retryable_image_output_error,
+    is_token_invalid_error,
+)
 from services.utils import (
     build_chat_image_completion,
     extract_chat_image,
@@ -16,6 +22,9 @@ from services.utils import (
     is_image_chat_request,
     parse_image_count,
 )
+
+
+MAX_TRANSIENT_IMAGE_EDIT_RETRIES = 1
 
 
 def _extract_response_images(input_value: object) -> list[tuple[bytes, str]]:
@@ -120,6 +129,7 @@ class ChatGPTService:
             raise ImageGenerationError("image is required")
 
         for index in range(1, n + 1):
+            transient_retry_count = 0
             while True:
                 try:
                     request_token = self.account_service.get_available_access_token()
@@ -163,6 +173,16 @@ class ChatGPTService:
                     if is_token_invalid_error(message):
                         self.account_service.remove_token(request_token)
                         print(f"[image-edit] remove invalid token={request_token[:12]}...")
+                        continue
+                    if (
+                        is_retryable_image_output_error(message)
+                        and transient_retry_count < MAX_TRANSIENT_IMAGE_EDIT_RETRIES
+                    ):
+                        transient_retry_count += 1
+                        print(
+                            f"[image-edit] retry transient upstream failure token={request_token[:12]}... "
+                            f"attempt={transient_retry_count}/{MAX_TRANSIENT_IMAGE_EDIT_RETRIES} error={message}"
+                        )
                         continue
                     break
 
