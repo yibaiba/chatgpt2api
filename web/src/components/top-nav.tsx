@@ -52,6 +52,7 @@ export function TopNav() {
     session?.role === "admin"
       ? [
           { href: "/image", label: "画图" },
+          { href: "/image-manager", label: "图片管理" },
           { href: "/accounts", label: "号池管理" },
           { href: "/register", label: "注册" },
           { href: "/logs", label: "日志" },
