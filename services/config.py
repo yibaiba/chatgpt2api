@@ -143,6 +143,48 @@ class ConfigStore:
             normalized.append(word)
         return normalized
 
+    @staticmethod
+    def _normalize_storage_backend(value: object) -> str:
+        backend = str(value or "json").strip().lower() or "json"
+        if backend not in {"json", "sqlite"}:
+            raise ValueError(f"unsupported storage_backend: {backend}")
+        return backend
+
+    @staticmethod
+    def _normalize_storage_sqlite_path(value: object) -> str:
+        return str(value or "").strip()
+
+    def _build_public_data(self, data: dict[str, object]) -> dict[str, object]:
+        public_data = dict(data)
+        public_data.pop("auth-key", None)
+        public_data.pop("auth-key-hash", None)
+        public_data["auth-key"] = ""
+        public_data["auth_key_configured"] = self.auth_key_configured
+        public_data["auto_remove_rate_limited_accounts"] = self._normalize_bool(
+            public_data.get("auto_remove_rate_limited_accounts"),
+            fallback=False,
+        )
+        public_data["sensitive_word_filter_enabled"] = self._normalize_bool(
+            public_data.get("sensitive_word_filter_enabled"),
+            fallback=False,
+        )
+        public_data["sensitive_words"] = self._normalize_sensitive_words(public_data.get("sensitive_words"))
+        public_data["storage_backend"] = self._normalize_storage_backend(public_data.get("storage_backend"))
+        public_data["storage_sqlite_path"] = str(self._resolve_storage_sqlite_path(public_data))
+        return public_data
+
+    def _resolve_storage_sqlite_path(self, data: dict[str, object] | None = None) -> Path:
+        source = self.data if data is None else data
+        raw_path = str(
+            os.getenv("CHATGPT2API_STORAGE_SQLITE_PATH")
+            or source.get("storage_sqlite_path")
+            or (DATA_DIR / "accounts.sqlite3")
+        ).strip()
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = (BASE_DIR / path).resolve()
+        return path
+
     @property
     def auth_key(self) -> str:
         return str(os.getenv("CHATGPT2API_AUTH_KEY") or "").strip()
@@ -235,34 +277,18 @@ class ConfigStore:
 
     @property
     def storage_backend(self) -> str:
-        return str(
+        return self._normalize_storage_backend(
             os.getenv("CHATGPT2API_STORAGE_BACKEND")
             or self.data.get("storage_backend")
             or "json"
-        ).strip().lower() or "json"
+        )
 
     @property
     def storage_sqlite_path(self) -> Path:
-        raw_path = str(
-            os.getenv("CHATGPT2API_STORAGE_SQLITE_PATH")
-            or self.data.get("storage_sqlite_path")
-            or (DATA_DIR / "accounts.sqlite3")
-        ).strip()
-        path = Path(raw_path).expanduser()
-        if not path.is_absolute():
-            path = (BASE_DIR / path).resolve()
-        return path
+        return self._resolve_storage_sqlite_path()
 
     def get(self) -> dict[str, object]:
-        public_data = dict(self.data)
-        public_data.pop("auth-key", None)
-        public_data.pop("auth-key-hash", None)
-        public_data["auth-key"] = ""
-        public_data["auth_key_configured"] = self.auth_key_configured
-        public_data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
-        public_data["sensitive_word_filter_enabled"] = self.sensitive_word_filter_enabled
-        public_data["sensitive_words"] = self.sensitive_words
-        return public_data
+        return self._build_public_data(self.data)
 
     def get_proxy_settings(self) -> str:
         return str(self.data.get("proxy") or "").strip()
@@ -311,9 +337,15 @@ class ConfigStore:
             fallback=False,
         )
         next_data["sensitive_words"] = self._normalize_sensitive_words(next_data.get("sensitive_words"))
+        next_data["storage_backend"] = self._normalize_storage_backend(next_data.get("storage_backend"))
+        normalized_sqlite_path = self._normalize_storage_sqlite_path(next_data.get("storage_sqlite_path"))
+        if normalized_sqlite_path:
+            next_data["storage_sqlite_path"] = normalized_sqlite_path
+        else:
+            next_data.pop("storage_sqlite_path", None)
         self.data = next_data
         self._save()
-        return self.get()
+        return self._build_public_data(next_data)
 
 
 config = ConfigStore(CONFIG_FILE)

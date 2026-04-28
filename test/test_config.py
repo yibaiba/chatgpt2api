@@ -163,6 +163,56 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_normalizes_storage_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            sqlite_path = base_dir / "custom.sqlite3"
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+
+                data = store.update(
+                    {
+                        "storage_backend": "SQLITE",
+                        "storage_sqlite_path": f"  {sqlite_path}  ",
+                    }
+                )
+
+                self.assertEqual("sqlite", data["storage_backend"])
+                self.assertEqual(str(sqlite_path), data["storage_sqlite_path"])
+                self.assertEqual("sqlite", store.storage_backend)
+                self.assertEqual(sqlite_path, store.storage_sqlite_path)
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
+    def test_config_store_rejects_unsupported_storage_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+
+                with self.assertRaisesRegex(ValueError, "unsupported storage_backend: postgres"):
+                    store.update({"storage_backend": "postgres"})
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
     def test_config_store_hashes_and_hides_admin_auth_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)

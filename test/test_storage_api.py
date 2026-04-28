@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import unittest
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
 from services import api as api_module
+from services import config as config_module
+
+
+os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 
 class _FakeThread:
@@ -41,26 +45,33 @@ class _FakeAuthService:
         }
 
 
+class _FakeAccountService:
+    def __init__(self) -> None:
+        self.rebind_paths: list[Path] = []
+        self.raise_error: Exception | None = None
+
+    def rebind_store(self, store) -> list[dict]:
+        if self.raise_error is not None:
+            raise self.raise_error
+        path = getattr(store, "path", None)
+        if isinstance(path, Path):
+            self.rebind_paths.append(path)
+        return []
+
+
 class StorageApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
-        fake_config = SimpleNamespace(
-            base_url="",
-            images_dir=Path(self.temp_dir.name) / "images",
-            accounts_file=Path(self.temp_dir.name) / "accounts.json",
-            storage_backend="json",
-            refresh_account_interval_minute=60,
-            session_signing_secret="test-session-secret",
-            get_proxy_settings=lambda: "",
-            verify_admin_auth_key=lambda value: str(value or "").strip() == "test-auth",
-            get=lambda: {"auth_key_configured": True},
-            update=lambda data: data,
-        )
+        self.config_file = Path(self.temp_dir.name) / "config.json"
+        self.config_file.write_text('{"auth-key":"test-auth"}\n', encoding="utf-8")
+        self.fake_config = config_module.ConfigStore(self.config_file)
+        self.fake_account_service = _FakeAccountService()
         self.patches = [
             mock.patch.object(api_module, "ChatGPTService", _FakeChatGPTService),
             mock.patch.object(api_module, "auth_service", _FakeAuthService()),
-            mock.patch.object(api_module, "config", fake_config),
+            mock.patch.object(api_module, "config", self.fake_config),
+            mock.patch.object(api_module, "account_service", self.fake_account_service),
             mock.patch.object(api_module, "start_limited_account_watcher", lambda _stop_event: _FakeThread()),
             mock.patch.object(api_module, "start_remote_account_sync_watcher", lambda _stop_event: _FakeThread()),
         ]
@@ -89,6 +100,59 @@ class StorageApiTests(unittest.TestCase):
 
         self.assertEqual(403, response.status_code)
         self.assertEqual("admin permission required", response.json()["detail"]["error"])
+
+    def test_admin_save_settings_rebinds_runtime_storage_backend(self) -> None:
+        sqlite_path = Path(self.temp_dir.name) / "runtime.sqlite3"
+
+        response = self.client.post(
+            "/api/settings",
+            headers={"Authorization": "Bearer test-auth"},
+            json={
+                "storage_backend": "sqlite",
+                "storage_sqlite_path": str(sqlite_path),
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["config"]
+        self.assertEqual("sqlite", payload["storage_backend"])
+        self.assertEqual(str(sqlite_path), payload["storage_sqlite_path"])
+        self.assertEqual([sqlite_path], self.fake_account_service.rebind_paths)
+
+        info_response = self.client.get("/api/storage/info", headers={"Authorization": "Bearer test-auth"})
+        self.assertEqual(200, info_response.status_code)
+        self.assertEqual("sqlite", info_response.json()["storage"]["backend"])
+        self.assertEqual(str(sqlite_path), info_response.json()["storage"]["path"])
+
+    def test_admin_save_settings_rejects_unsupported_storage_backend(self) -> None:
+        response = self.client.post(
+            "/api/settings",
+            headers={"Authorization": "Bearer test-auth"},
+            json={"storage_backend": "postgres"},
+        )
+
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("unsupported storage_backend: postgres", response.json()["detail"]["error"])
+        self.assertEqual([], self.fake_account_service.rebind_paths)
+        self.assertEqual("json", self.fake_config.storage_backend)
+
+    def test_admin_save_settings_rolls_back_when_runtime_rebind_fails(self) -> None:
+        sqlite_path = Path(self.temp_dir.name) / "runtime.sqlite3"
+        self.fake_account_service.raise_error = RuntimeError("boom")
+
+        response = self.client.post(
+            "/api/settings",
+            headers={"Authorization": "Bearer test-auth"},
+            json={
+                "storage_backend": "sqlite",
+                "storage_sqlite_path": str(sqlite_path),
+            },
+        )
+
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("failed to apply storage settings: boom", response.json()["detail"]["error"])
+        self.assertEqual("json", self.fake_config.storage_backend)
+        self.assertTrue(self.fake_config.accounts_file.name.endswith("accounts.json"))
 
 
 if __name__ == "__main__":

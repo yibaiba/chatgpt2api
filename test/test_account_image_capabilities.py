@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -155,6 +156,26 @@ class AccountCapabilityTests(unittest.TestCase):
         self.assertTrue(store.saved_snapshots)
         self.assertEqual(["token-1", "token-2"], sorted(item["access_token"] for item in store.saved_snapshots[-1]))
 
+    def test_account_service_rebind_store_switches_runtime_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "accounts.json"
+            sqlite_path = Path(tmp_dir) / "accounts.sqlite3"
+            JsonAccountStore(json_path).save_accounts(
+                [{"access_token": "token-json", "status": "正常", "quota": 1}]
+            )
+            SqliteAccountStore(sqlite_path).save_accounts(
+                [{"access_token": "token-sqlite", "status": "正常", "quota": 2}]
+            )
+
+            service = AccountService(JsonAccountStore(json_path))
+            self.assertEqual(["token-json"], service.list_tokens())
+
+            items = service.rebind_store(SqliteAccountStore(sqlite_path))
+
+            self.assertEqual(["token-sqlite"], service.list_tokens())
+            self.assertEqual(sqlite_path, service.store_file)
+            self.assertEqual("token-sqlite", items[0]["access_token"])
+
     def test_json_account_store_round_trips_accounts_file_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "accounts.json"
@@ -216,6 +237,31 @@ class AccountCapabilityTests(unittest.TestCase):
 
             self.assertIsInstance(build_account_store_for_backend("json", path=json_path), JsonAccountStore)
             self.assertIsInstance(build_account_store_for_backend("sqlite", path=sqlite_path), SqliteAccountStore)
+
+    def test_build_account_store_for_backend_does_not_require_config_import_for_explicit_paths(self) -> None:
+        script = f"""
+import sys
+import types
+from pathlib import Path
+
+sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+
+sentinel = types.ModuleType("services.config")
+def _blocked(name):
+    raise RuntimeError(f"unexpected services.config access: {{name}}")
+sentinel.__getattr__ = _blocked
+sys.modules["services.config"] = sentinel
+
+from services.storage.factory import build_account_store_for_backend
+
+json_store = build_account_store_for_backend("json", path=Path("accounts.json"))
+sqlite_store = build_account_store_for_backend("sqlite", path=Path("accounts.sqlite3"))
+assert json_store.path == Path("accounts.json")
+assert sqlite_store.path == Path("accounts.sqlite3")
+"""
+        result = subprocess.run(["python3", "-c", script], capture_output=True, text=True)
+
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_build_account_store_rejects_unsupported_backend(self) -> None:
         fake_config = mock.Mock(storage_backend="postgres", accounts_file=Path("accounts.json"))

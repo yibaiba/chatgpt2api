@@ -176,6 +176,12 @@ class AccountService:
             return []
         return [normalized for item in data if (normalized := self._normalize_account(item)) is not None]
 
+    def _load_accounts_from_store(self, store: AccountStore) -> list[dict]:
+        data = store.load_accounts()
+        if not isinstance(data, list):
+            return []
+        return [normalized for item in data if (normalized := self._normalize_account(item)) is not None]
+
     def _save_accounts(self) -> None:
         self._store.save_accounts(self._accounts)
 
@@ -303,6 +309,16 @@ class AccountService:
 
     def list_accounts(self) -> list[dict]:
         with self._lock:
+            return self._public_items(self._accounts)
+
+    def rebind_store(self, store: AccountStore) -> list[dict]:
+        next_accounts = self._load_accounts_from_store(store)
+        next_store_file = getattr(store, "path", Path("accounts.json"))
+        with self._lock:
+            self._store = store
+            self.store_file = next_store_file
+            self._accounts = next_accounts
+            self._index = self._index % len(self._accounts) if self._accounts else 0
             return self._public_items(self._accounts)
 
     def list_limited_tokens(self) -> list[str]:

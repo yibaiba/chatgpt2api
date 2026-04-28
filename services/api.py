@@ -24,7 +24,7 @@ from services.image_history_service import image_history_service
 from services.log_service import LOG_LEVEL_ALL, LOG_SOURCE_ALL, log_service
 from services.proxy_service import test_proxy
 from services.register_service import register_service
-from services.storage.factory import get_account_storage_info
+from services.storage.factory import build_account_store, get_account_storage_info
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -815,7 +815,23 @@ def create_app() -> FastAPI:
             authorization: str | None = Header(default=None),
     ):
         require_admin_session(request, authorization)
-        return {"config": config.update(body.model_dump(mode="python"))}
+        previous_config = dict(config.data)
+        try:
+            updated_config = config.update(body.model_dump(mode="python"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        try:
+            account_service.rebind_store(build_account_store(config))
+        except Exception as exc:
+            if dict(config.data) != previous_config:
+                config.data = previous_config
+                config._save()
+                try:
+                    account_service.rebind_store(build_account_store(config))
+                except Exception:
+                    pass
+            raise HTTPException(status_code=400, detail={"error": f"failed to apply storage settings: {exc}"}) from exc
+        return {"config": updated_config}
 
     @router.get("/api/register")
     async def get_register(request: Request, authorization: str | None = Header(default=None)):
