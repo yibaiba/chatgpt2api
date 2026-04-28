@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Images, LoaderCircle, RefreshCw, Search, Trash2 } from "lucide-react";
+import { LoaderCircle, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
+import { getConversationImages, getConversationMode, getConversationPrompt, getConversationStatus, getModeLabel, getStatusBadgeVariant } from "@/app/image-manager/conversation-utils";
+import { FilterToolbar, type ConversationStatusFilter } from "@/app/image-manager/filter-toolbar";
+import { buildPresetDateRange, describeDateRange, formatShanghaiDateKey, isDateRangeInvalid, matchesDateRange, type ConversationDatePreset } from "@/app/image-manager/date-range";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { syncStoredAuthSession } from "@/lib/auth-session";
 import { type AuthSession } from "@/lib/auth-types";
 import { formatDateTimeInShanghai, formatMonthDayTimeInShanghai } from "@/lib/time";
@@ -22,47 +23,9 @@ import {
   listImageConversations,
   type ImageConversation,
   type ImageConversationMode,
-  type ImageTurnStatus,
 } from "@/store/image-conversations";
 
-type ConversationStatusFilter = "all" | ImageTurnStatus;
-
 type DeleteConfirmState = { type: "one"; conversationId: string; title: string } | { type: "all" } | null;
-
-function getConversationStatus(conversation: ImageConversation): ImageTurnStatus {
-  const lastTurn = conversation.turns[conversation.turns.length - 1];
-  return lastTurn?.status ?? "success";
-}
-
-function getConversationMode(conversation: ImageConversation): ImageConversationMode {
-  return conversation.turns[conversation.turns.length - 1]?.mode ?? "generate";
-}
-
-function getConversationPrompt(conversation: ImageConversation): string {
-  return conversation.turns[conversation.turns.length - 1]?.prompt ?? "";
-}
-
-function getConversationImages(conversation: ImageConversation) {
-  return conversation.turns.flatMap((turn) =>
-    turn.images
-      .filter((image) => image.status === "success" && image.b64_json)
-      .map((image) => ({
-        id: image.id,
-        src: `data:${image.mime_type || "image/png"};base64,${image.b64_json}`,
-      })),
-  );
-}
-
-function getStatusBadgeVariant(status: ImageTurnStatus) {
-  if (status === "error") return "danger" as const;
-  if (status === "generating") return "warning" as const;
-  if (status === "queued") return "info" as const;
-  return "success" as const;
-}
-
-function getModeLabel(mode: ImageConversationMode) {
-  return mode === "edit" ? "编辑" : "生成";
-}
 
 export default function ImageManagerPage() {
   const router = useRouter();
@@ -72,6 +35,9 @@ export default function ImageManagerPage() {
   const [appliedQuery, setAppliedQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ConversationStatusFilter>("all");
   const [modeFilter, setModeFilter] = useState<"all" | ImageConversationMode>("all");
+  const [datePreset, setDatePreset] = useState<ConversationDatePreset>("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [selectedConversation, setSelectedConversation] = useState<ImageConversation | null>(null);
   const [lightboxImages, setLightboxImages] = useState<Array<{ id: string; src: string }>>([]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -120,12 +86,17 @@ export default function ImageManagerPage() {
     };
   }, [loadItems, router]);
 
+  const dateRangeError = useMemo(
+    () => (isDateRangeInvalid(startDate, endDate) ? "开始日期不能晚于结束日期" : ""),
+    [endDate, startDate],
+  );
   const filteredItems = useMemo(() => {
     const query = appliedQuery.trim().toLowerCase();
     return items.filter((conversation) => {
       const statusMatched = statusFilter === "all" || getConversationStatus(conversation) === statusFilter;
       const modeMatched = modeFilter === "all" || getConversationMode(conversation) === modeFilter;
-      if (!statusMatched || !modeMatched) return false;
+      const dateMatched = matchesDateRange(formatShanghaiDateKey(conversation.updatedAt), startDate, endDate);
+      if (!statusMatched || !modeMatched || !dateMatched) return false;
       if (!query) return true;
       const haystack = [
         conversation.title,
@@ -138,7 +109,7 @@ export default function ImageManagerPage() {
         .toLowerCase();
       return haystack.includes(query);
     });
-  }, [appliedQuery, items, modeFilter, statusFilter]);
+  }, [appliedQuery, endDate, items, modeFilter, startDate, statusFilter]);
 
   const summary = useMemo(() => {
     const successfulImages = items.reduce((sum, conversation) => sum + getConversationImages(conversation).length, 0);
@@ -182,6 +153,7 @@ export default function ImageManagerPage() {
   }
 
   const historyDisabled = session.image_history_persistence_mode !== "server";
+  const dateRangeLabel = describeDateRange(datePreset, startDate, endDate);
 
   return (
     <div className="space-y-5">
@@ -210,27 +182,48 @@ export default function ImageManagerPage() {
 
       <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
         <CardContent className="space-y-4 p-5">
-          <div className="grid gap-3 lg:grid-cols-[180px_180px_minmax(0,1fr)_auto_auto_auto]">
-            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as ConversationStatusFilter)}>
-              <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white"><SelectValue placeholder="状态" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem><SelectItem value="success">成功</SelectItem><SelectItem value="generating">生成中</SelectItem><SelectItem value="queued">排队中</SelectItem><SelectItem value="error">失败</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={modeFilter} onValueChange={(value) => setModeFilter(value as "all" | ImageConversationMode)}>
-              <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white"><SelectValue placeholder="模式" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部模式</SelectItem><SelectItem value="generate">生成</SelectItem><SelectItem value="edit">编辑</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="搜索标题、提示词、用户或模型" className="h-11 rounded-xl border-stone-200 bg-white" />
-            <Button variant="outline" className="h-11 rounded-xl border-stone-200 bg-white px-4 text-stone-700" onClick={() => { setQueryInput(""); setAppliedQuery(""); setStatusFilter("all"); setModeFilter("all"); }}>清空</Button>
-            <Button variant="outline" className="h-11 rounded-xl border-stone-200 bg-white px-4 text-stone-700" onClick={() => void loadItems()} disabled={historyDisabled}><RefreshCw className="size-4" />刷新</Button>
-            <Button className="h-11 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={() => setAppliedQuery(queryInput)} disabled={historyDisabled}>{isLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}查询</Button>
-          </div>
+          <FilterToolbar
+            queryInput={queryInput}
+            statusFilter={statusFilter}
+            modeFilter={modeFilter}
+            datePreset={datePreset}
+            startDate={startDate}
+            endDate={endDate}
+            dateRangeError={dateRangeError}
+            historyDisabled={historyDisabled}
+            isLoading={isLoading}
+            onQueryInputChange={setQueryInput}
+            onStatusFilterChange={setStatusFilter}
+            onModeFilterChange={setModeFilter}
+            onDatePresetChange={(value) => {
+              setDatePreset(value);
+              const range = buildPresetDateRange(value);
+              setStartDate(range.start);
+              setEndDate(range.end);
+            }}
+            onStartDateChange={(value) => {
+              setDatePreset("custom");
+              setStartDate(value);
+            }}
+            onEndDateChange={(value) => {
+              setDatePreset("custom");
+              setEndDate(value);
+            }}
+            onReset={() => {
+              setQueryInput("");
+              setAppliedQuery("");
+              setStatusFilter("all");
+              setModeFilter("all");
+              setDatePreset("all");
+              setStartDate("");
+              setEndDate("");
+            }}
+            onRefresh={() => loadItems()}
+            onApplyQuery={() => setAppliedQuery(queryInput)}
+          />
 
           <div className="flex items-center justify-between text-sm text-stone-500">
-            <span>当前结果：{filteredItems.length} 条 · 服务端历史模式：{session.image_history_persistence_mode === "server" ? "已启用" : "未启用"}</span>
+            <span>当前结果：{filteredItems.length} 条 · 时间范围：{dateRangeLabel} · 服务端历史模式：{session.image_history_persistence_mode === "server" ? "已启用" : "未启用"}</span>
             <Button variant="destructive" className="rounded-xl px-4" onClick={() => setDeleteConfirm({ type: "all" })} disabled={historyDisabled || items.length === 0}><Trash2 className="size-4" />清空全部</Button>
           </div>
 
