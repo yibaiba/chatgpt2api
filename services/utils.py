@@ -8,11 +8,17 @@ import uuid
 from fastapi import HTTPException
 
 
+SUPPORTED_TEXT_MODELS = (
+    "auto",
+    "gpt-4.1",
+    "gpt-5",
+)
 SUPPORTED_IMAGE_MODELS = (
     "gpt-image-1",
     "gpt-image-2",
     "gpt-image-think",
 )
+SUPPORTED_API_MODELS = tuple(dict.fromkeys((*SUPPORTED_TEXT_MODELS, *SUPPORTED_IMAGE_MODELS)))
 IMAGE_MODELS = set(SUPPORTED_IMAGE_MODELS)
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ASPECT_RATIO_PREFIX_RE = re.compile(r"^\s*Make the aspect ratio\s+\S+\s*,\s*", re.IGNORECASE)
@@ -51,9 +57,42 @@ def _extract_text_block_text(item: dict[str, object]) -> str:
 def strip_assistant_history_prefix(text: object, history_text: object) -> str:
     normalized_text = str(text or "").strip()
     normalized_history = str(history_text or "").strip()
-    if normalized_history and normalized_text.startswith(normalized_history):
-        return normalized_text[len(normalized_history):].lstrip()
+    while normalized_history and normalized_text.startswith(normalized_history):
+        normalized_text = normalized_text[len(normalized_history):].lstrip()
     return normalized_text
+
+
+def extract_assistant_history_messages(messages: object) -> list[str]:
+    if isinstance(messages, dict):
+        messages = [messages]
+    if not isinstance(messages, list):
+        return []
+    if not any(isinstance(item, dict) and "role" in item for item in messages):
+        history = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").strip() != "output_text":
+                continue
+            text = _extract_text_block_text(item)
+            if text:
+                history.append(text)
+        return history
+
+    history = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip().lower() != "assistant":
+            continue
+        text = extract_prompt_from_message_content(message.get("content"))
+        if text:
+            history.append(text)
+    return history
+
+
+def extract_assistant_history_text(messages: object) -> str:
+    return "".join(extract_assistant_history_messages(messages))
 
 
 def extract_response_prompt(input_value: object) -> str:

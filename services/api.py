@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, FastAPI, File, Form, Header, Request, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,7 +32,12 @@ from services.sub2api_service import (
 )
 from services.image_service import ImageGenerationError
 from services.system_settings import system_settings_service
-from services.utils import SUPPORTED_IMAGE_MODELS, apply_image_size_prompt, parse_image_count
+from services.utils import (
+    apply_image_size_prompt,
+    has_response_image_generation_tool,
+    is_image_chat_request,
+    parse_image_count,
+)
 from services.version import get_app_version
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -96,8 +101,18 @@ class ResponseCreateRequest(BaseModel):
 
     model: str | None = None
     input: object | None = None
+    instructions: object | None = None
     tools: list[dict[str, object]] | None = None
     tool_choice: object | None = None
+    stream: bool | None = None
+
+
+class AnthropicMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str | None = None
+    messages: list[dict[str, object]] | None = None
+    system: object | None = None
     stream: bool | None = None
 
 
@@ -746,7 +761,7 @@ def create_app() -> FastAPI:
     async def list_models():
         return {
             "object": "list",
-            "data": [build_model_item(model) for model in SUPPORTED_IMAGE_MODELS],
+            "data": [build_model_item(model) for model in chatgpt_service.list_models()],
         }
 
     @router.post("/auth/login")
@@ -1213,6 +1228,13 @@ def create_app() -> FastAPI:
     async def create_chat_completion(request: Request, body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
         identity = require_session(request, authorization)
         payload = body.model_dump(mode="python")
+        if not is_image_chat_request(payload):
+            if bool(payload.get("stream")):
+                return StreamingResponse(
+                    chatgpt_service.create_text_completion_stream(payload),
+                    media_type="text/event-stream",
+                )
+            return await run_in_threadpool(chatgpt_service.create_text_completion, payload)
         reserved_count = parse_image_count(payload.get("n"))
         try:
             auth_service.reserve_images_for_identity(identity, reserved_count)
@@ -1233,6 +1255,8 @@ def create_app() -> FastAPI:
     async def create_response(request: Request, body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
         identity = require_session(request, authorization)
         payload = body.model_dump(mode="python")
+        if not has_response_image_generation_tool(payload):
+            return await run_in_threadpool(chatgpt_service.create_text_response, payload)
         try:
             auth_service.reserve_images_for_identity(identity, 1)
         except ValueError as exc:
@@ -1247,6 +1271,25 @@ def create_app() -> FastAPI:
             raise
         auth_service.settle_images_for_identity(identity, 1, count_response_images(result))
         return result
+
+    @router.post("/v1/messages")
+    async def create_message(
+        request: Request,
+        body: AnthropicMessageRequest,
+        authorization: str | None = Header(default=None),
+        x_api_key: str | None = Header(default=None, alias="x-api-key"),
+        anthropic_version: str | None = Header(default=None, alias="anthropic-version"),
+    ):
+        _ = anthropic_version
+        auth_header = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+        require_session(request, auth_header)
+        payload = body.model_dump(mode="python")
+        if bool(payload.get("stream")):
+            return StreamingResponse(
+                chatgpt_service.stream_message(payload),
+                media_type="text/event-stream",
+            )
+        return await run_in_threadpool(chatgpt_service.create_message, payload)
 
     # ── CPA multi-pool endpoints ────────────────────────────────────
 

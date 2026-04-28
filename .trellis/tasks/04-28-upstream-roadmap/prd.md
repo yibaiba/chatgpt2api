@@ -67,29 +67,39 @@
 
 先处理最容易独立验证的文本能力，再决定是否进一步引入 protocol 层。
 
-1. **Phase A1 — 文本链路基线对齐**
+1. **Phase A0 — Text backend bridge MVP**
+   * 目标：先在当前 fork 中建立最小可用的非图片文本桥接层，让 `/v1/chat/completions`、`/v1/responses` 不再只是 image shim
+   * 影响层：`services/api.py`、`services/chatgpt_service.py`、`services/image_service.py` 的可复用 transport、以及新的 `services/text_backend.py`（或等价模块）
+   * 风险：需要把图片 quota 逻辑与文本路由正确拆开，避免影响现有图片路径
+   * 验证：非图片 chat completions / responses、assistant-history 去重、最小文本流式 smoke test
+   * 当前进展：已完成首个 MVP——新增 `services/text_backend.py`，将 `/v1/chat/completions` 与 `/v1/responses` 按 image/text 分流，新增最小文本 token 选择与 assistant-history 去重；当前先支持非图片非流式文本路径，streaming 与 `/v1/messages` 仍留给后续阶段
+
+2. **Phase A1 — 文本链路基线对齐**
    * 目标：补齐 `8f1c666` 里仍对当前分支有价值的文本对话修正（避免 assistant 历史重复、文本 access token 获取策略等）
    * 影响层：`services/chatgpt_service.py`、文本后端桥接层、相关测试
    * 风险：可能影响现有非图片文本 API 行为
    * 验证：文本 completions / responses 非流式 + 流式回归测试
-   * 最新判断：当前分支尚无通用文本后端链路，这一阶段需要先补足文本基础设施或改写为更小的“文本能力引入前置任务”，暂时阻塞
+   * 当前进展：已完成首个 baseline 对齐——`/v1/chat/completions` 非图片文本路径新增最小 SSE stream，`/v1/models` 不再是 image-only 列表，相关文本流回归测试已补齐；`/v1/responses` 仍保持非流式最小文本返回，`/v1/messages` 继续留给 A2
 
-2. **Phase A2 — Anthropic messages MVP**
+3. **Phase A2 — Anthropic messages MVP**
    * 目标：吸收 `740b306`，先提供最小可用 `/v1/messages` 或等价 Anthropic 入口
    * 影响层：API 路由、`chatgpt_service`、helper / SSE 适配
    * 风险：协议映射与错误模型不一致
    * 验证：最小请求/响应测试、错误路径测试、流式兼容测试
+   * 当前进展：已完成首个 MVP——新增 `/v1/messages`，支持最小非流式文本返回与 Anthropic 风格 SSE 事件流（`message_start` / `content_block_*` / `message_delta` / `message_stop`）；当前仍只覆盖纯文本消息，不含 tool use、thinking 或更完整协议细节
 
-3. **Phase A3 — Claude 文本流修复**
+4. **Phase A3 — Claude 文本流修复**
    * 目标：在 MVP Anthropic 能跑通后，再吸收 `69e3446`
    * 影响层：Anthropic 协议层、SSE 输出、文本后端桥接
    * 风险：与当前文本流事件格式冲突
    * 验证：流式分块顺序、delta 合并、tool / content block 边界测试
+   * 当前进展：已完成首个 Claude streaming fix——新增轻量 `services/anthropic_protocol.py`，让 `/v1/messages` 在工具场景下可把 tool markup 收敛成 `tool_use` content blocks，并在流式模式下输出 `input_json_delta`；仍未覆盖 thinking 与更完整协议分支
 
-4. **Phase A4 — 文本流回归修复**
+5. **Phase A4 — 文本流回归修复**
    * 目标：评估 `aaab38f` 是否需要在当前分支建立轻量 conversation/protocol 适配层后再吸收
    * 风险：它依赖 upstream `services/protocol/conversation.py`，不能生搬硬套
    * 建议：先做“最小等价修复”，仅移植具体 bug 逻辑，不完整搬 protocol 目录
+   * 当前进展：已完成最小等价修复——assistant-history 前缀剥离改为循环处理，并补到 chat/messages 的非流式与流式 snapshot 归一化中，避免 replay 旧 assistant 文本导致重复 delta；仍未引入 upstream `services/protocol/conversation.py`
 
 ### Track B: 管理与运营能力
 

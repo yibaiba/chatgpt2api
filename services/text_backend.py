@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+import json
+import random
+import time
+import uuid
+
+from services.image_service import (
+    BASE_URL,
+    USER_AGENT,
+    _bootstrap,
+    _cached_build_number,
+    _cached_client_version,
+    _chat_requirements,
+    _conversation_init,
+    _generate_proof_token,
+    _new_session,
+    _pow_config,
+    _retry,
+    is_conversation_forbidden_error,
+)
+
+
+class TextBackendError(Exception):
+    pass
+
+
+def _close_response(response) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
+
+
+def _build_text_conversation_body(prompt: str, parent_message_id: str, model: str) -> dict[str, object]:
+    return {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": {"content_type": "text", "parts": [prompt]},
+                "metadata": {
+                    "selected_github_repos": [],
+                    "selected_all_github_repos": False,
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                },
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "success",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+
+
+def _send_text_conversation(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token: str | None,
+    parent_message_id: str,
+    prompt: str,
+    model: str,
+    conversation_id: str = "",
+):
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "openai-sentinel-chat-requirements-token": chat_token,
+    }
+    if proof_token:
+        headers["openai-sentinel-proof-token"] = proof_token
+    body = _build_text_conversation_body(prompt, parent_message_id, model)
+    if conversation_id:
+        body["conversation_id"] = conversation_id
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/conversation",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=180,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise TextBackendError(response.text[:400] or f"conversation failed: {response.status_code}")
+    return response
+
+
+def _iter_text_sse_events(response) -> Iterator[dict[str, object]]:
+    conversation_id = ""
+    latest_text = ""
+    for raw_line in response.iter_lines():
+        if not raw_line:
+            continue
+        if isinstance(raw_line, bytes):
+            raw_line = raw_line.decode("utf-8", errors="replace")
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload in ("", "[DONE]"):
+            break
+        try:
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        conversation_id = str(obj.get("conversation_id") or conversation_id)
+        data = obj.get("v")
+        if isinstance(data, dict):
+            conversation_id = str(data.get("conversation_id") or conversation_id)
+        message = obj.get("message") or {}
+        content = message.get("content") or {}
+        if content.get("content_type") != "text":
+            continue
+        parts = content.get("parts") or []
+        next_text = str(parts[0] or "").strip() if parts else ""
+        if not next_text or next_text == latest_text:
+            continue
+        latest_text = next_text
+        yield {
+            "conversation_id": conversation_id,
+            "text": latest_text,
+        }
+
+
+class TextBackend:
+    def __init__(self, access_token: str):
+        self.access_token = str(access_token or "").strip()
+
+    @staticmethod
+    def _normalize_request(prompt: str, model: str) -> tuple[str, str]:
+        normalized_prompt = str(prompt or "").strip()
+        normalized_model = str(model or "auto").strip() or "auto"
+        return normalized_prompt, normalized_model
+
+    def _open_conversation(self, prompt: str, model: str):
+        normalized_prompt, normalized_model = self._normalize_request(prompt, model)
+        if not self.access_token:
+            raise TextBackendError("token is required")
+        if not normalized_prompt:
+            raise TextBackendError("prompt is required")
+
+        session, fp = _new_session(self.access_token)
+        try:
+            device_id = _bootstrap(session, fp)
+            chat_token, pow_info = _chat_requirements(session, self.access_token, device_id)
+            proof_token = None
+            if pow_info.get("required"):
+                proof_token = _generate_proof_token(
+                    seed=str(pow_info["seed"]),
+                    difficulty=str(pow_info["difficulty"]),
+                    user_agent=USER_AGENT,
+                    proof_config=_pow_config(USER_AGENT),
+                )
+            parent_message_id = str(uuid.uuid4())
+            conversation_id = _conversation_init(session, self.access_token, device_id)
+            try:
+                response = _send_text_conversation(
+                    session,
+                    self.access_token,
+                    device_id,
+                    chat_token,
+                    proof_token,
+                    parent_message_id,
+                    normalized_prompt,
+                    normalized_model,
+                    conversation_id=conversation_id,
+                )
+            except TextBackendError as exc:
+                if conversation_id and is_conversation_forbidden_error(str(exc)):
+                    response = _send_text_conversation(
+                        session,
+                        self.access_token,
+                        device_id,
+                        chat_token,
+                        proof_token,
+                        parent_message_id,
+                        normalized_prompt,
+                        normalized_model,
+                        conversation_id="",
+                    )
+                else:
+                    raise
+            return session, response, conversation_id, normalized_model
+        except Exception:
+            session.close()
+            raise
+
+    def complete(self, prompt: str, model: str = "auto") -> dict[str, object]:
+        session, response, conversation_id, normalized_model = self._open_conversation(prompt, model)
+        try:
+            latest_event: dict[str, object] | None = None
+            for event in _iter_text_sse_events(response):
+                latest_event = event
+            text = str((latest_event or {}).get("text") or "").strip()
+            if not text:
+                raise TextBackendError("no text returned from upstream")
+            return {
+                "created": time.time_ns() // 1_000_000_000,
+                "model": normalized_model,
+                "text": text,
+                "conversation_id": str((latest_event or {}).get("conversation_id") or conversation_id),
+            }
+        finally:
+            _close_response(response)
+            session.close()
+
+    def stream(self, prompt: str, model: str = "auto") -> Iterator[dict[str, object]]:
+        session, response, conversation_id, normalized_model = self._open_conversation(prompt, model)
+        created = time.time_ns() // 1_000_000_000
+
+        def generate() -> Iterator[dict[str, object]]:
+            has_text = False
+            latest_conversation_id = conversation_id
+            try:
+                for event in _iter_text_sse_events(response):
+                    latest_conversation_id = str(event.get("conversation_id") or latest_conversation_id)
+                    has_text = True
+                    yield {
+                        "created": created,
+                        "model": normalized_model,
+                        "text": str(event.get("text") or ""),
+                        "conversation_id": latest_conversation_id,
+                    }
+                if not has_text:
+                    raise TextBackendError("no text returned from upstream")
+            finally:
+                _close_response(response)
+                session.close()
+
+        return generate()

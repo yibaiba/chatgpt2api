@@ -46,9 +46,10 @@ docker compose up -d --build
 
 - 兼容 `POST /v1/images/generations` 图片生成接口
 - 兼容 `POST /v1/images/edits` 图片编辑接口
-- 兼容面向图片场景的 `POST /v1/chat/completions`
-- 兼容面向图片场景的 `POST /v1/responses`
-- `GET /v1/models` 返回 `gpt-image-1` 与 `gpt-image-2`
+- 兼容图片场景与最小文本场景的 `POST /v1/chat/completions`
+- 兼容图片场景与最小非流式文本场景的 `POST /v1/responses`
+- 兼容最小 Anthropic `POST /v1/messages`，并支持基础 Claude tool-use content blocks
+- `GET /v1/models` 返回最小文本模型入口（如 `auto`）以及图片模型
 - 支持通过 `n` 返回多张生成结果
 
 ### 在线画图功能
@@ -160,7 +161,7 @@ Authorization: Bearer <auth-key>
 <summary><code>GET /v1/models</code></summary>
 <br>
 
-返回当前暴露的图片模型列表。
+返回当前暴露的最小文本模型入口与图片模型列表。
 
 ```bash
 curl http://localhost:8000/v1/models \
@@ -173,8 +174,8 @@ curl http://localhost:8000/v1/models \
 
 | 字段   | 说明                                       |
 |:-----|:-----------------------------------------|
-| 返回模型 | 当前返回 `gpt-image-1`、`gpt-image-2`         |
-| 注意事项 | `gpt-image-2` 当前仍处于灰度 / 实验状态，不保证实际效果完全稳定 |
+| 返回模型 | 当前返回 `auto`、`gpt-4.1`、`gpt-5` 以及图片模型 `gpt-image-1`、`gpt-image-2`、`gpt-image-think` |
+| 注意事项 | 文本模型当前走最小 bridge 直通路径，图片模型仍按现有图片兼容逻辑执行 |
 
 <br>
 </details>
@@ -289,10 +290,10 @@ curl http://localhost:8000/v1/chat/completions \
 
 | 字段         | 说明                   |
 |:-----------|:---------------------|
-| `model`    | 图片模型，默认按图片生成场景处理     |
-| `messages` | 消息数组，需要是图片相关请求内容     |
-| `n`        | 生成数量，按当前实现解析为图片数量    |
-| `stream`   | 当前不支持，传入 `true` 会被拒绝 |
+| `model`    | 图片请求推荐使用图片模型；文本请求可传 `auto`、`gpt-4.1`、`gpt-5` 等直通模型 |
+| `messages` | 消息数组；图片请求会走图片兼容逻辑，非图片请求会走最小文本 bridge |
+| `n`        | 图片请求时解析为图片数量；文本请求当前按单轮文本完成处理 |
+| `stream`   | 图片请求仍不支持；非图片文本请求支持最小 SSE 流式输出 |
 
 <br>
 </details>
@@ -302,7 +303,7 @@ curl http://localhost:8000/v1/chat/completions \
 <summary><code>POST /v1/responses</code></summary>
 <br>
 
-面向图片生成工具调用的 Responses API 兼容接口，不是完整通用 Responses API 代理。
+面向图片生成工具调用与最小非流式文本返回的 Responses API 兼容接口，不是完整通用 Responses API 代理。
 
 ```bash
 curl http://localhost:8000/v1/responses \
@@ -325,10 +326,49 @@ curl http://localhost:8000/v1/responses \
 
 | 字段       | 说明                            |
 |:---------|:------------------------------|
-| `model`  | 响应中会回显该模型字段，但图片生成当前仍走图片生成兼容逻辑 |
-| `input`  | 输入内容，需要能解析出图片生成提示词            |
-| `tools`  | 必须包含 `image_generation` 工具请求  |
-| `stream` | 当前不支持，传入 `true` 会被拒绝          |
+| `model`  | 图片请求会回显该模型字段；非图片请求走最小文本 bridge 并回显原模型 |
+| `input`  | 输入内容；包含图片工具请求时解析图片提示词，否则解析文本输入 |
+| `tools`  | 包含 `image_generation` 时走图片路径；省略时走最小文本路径 |
+| `stream` | 当前仍不支持，传入 `true` 会被拒绝          |
+
+<br>
+</details>
+</details>
+
+<details>
+<summary><code>POST /v1/messages</code></summary>
+<br>
+
+最小 Anthropic Messages 兼容接口，当前支持纯文本 `messages` / `system` 输入、基础 SSE 文本流，以及兼容 Claude 风格的基础 `tool_use` content blocks；暂不包含 thinking 或更完整的 Anthropic 协议特性。
+
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <auth-key>" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "system": "You are a concise assistant.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hello in Chinese."
+      }
+    ]
+  }'
+```
+
+<details>
+<summary>字段说明</summary>
+<br>
+
+| 字段 | 说明 |
+|:---|:---|
+| `model` | 透传到最小文本 bridge，可使用 Anthropic 风格模型名 |
+| `system` | 支持字符串或文本 block，作为指令前缀拼到文本请求前 |
+| `messages` | 当前支持 `user` / `assistant` 文本内容；会沿用现有 assistant-history 去重规则 |
+| `tools` | 传入时会把兼容的 tool markup 收敛成 Anthropic `tool_use` content blocks |
+| `stream` | 支持最小 SSE 文本流，返回 `message_start` / `content_block_*` / `message_delta` / `message_stop`，并在适用时输出 `input_json_delta` |
 
 <br>
 </details>

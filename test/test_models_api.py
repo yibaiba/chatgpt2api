@@ -6,11 +6,11 @@ import unittest
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 from services.api import create_app
-from services.utils import SUPPORTED_IMAGE_MODELS
+from services.utils import SUPPORTED_API_MODELS
 
 
 class ModelsApiTests(unittest.TestCase):
-    def test_v1_models_matches_supported_image_models(self) -> None:
+    def test_v1_models_matches_supported_api_models(self) -> None:
         app = create_app()
         route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/models")
 
@@ -23,7 +23,7 @@ class ModelsApiTests(unittest.TestCase):
         self.assertEqual(response["object"], "list")
         self.assertEqual(
             [item["id"] for item in response["data"]],
-            list(SUPPORTED_IMAGE_MODELS),
+            list(SUPPORTED_API_MODELS),
         )
 
 
