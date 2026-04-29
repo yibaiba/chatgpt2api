@@ -8,6 +8,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from services import api as api_module
+from services.image_history_service import ImageHistoryService
 from services.image_service import ImageGenerationError
 
 
@@ -307,6 +308,20 @@ class ImageEditsApiTests(unittest.TestCase):
         self.assertEqual("error", job["status"])
         self.assertEqual("upstream failed", job["error"])
         self.assertEqual([(1, 0)], self.auth_service.settled)
+
+    def test_image_history_normalize_keeps_job_id(self) -> None:
+        history_service = ImageHistoryService(Path(self.temp_dir.name) / "image_history.json")
+
+        normalized = history_service._normalize_image(
+            {
+                "id": "img_1",
+                "status": "loading",
+                "job_id": "job-123",
+            }
+        )
+
+        self.assertIsNotNone(normalized)
+        self.assertEqual("job-123", normalized["job_id"])
 
 
 if __name__ == "__main__":

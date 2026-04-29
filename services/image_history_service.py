@@ -104,6 +104,7 @@ class ImageHistoryService:
         b64_json = self._clean_text(raw.get("b64_json"))
         mime_type = self._clean_text(raw.get("mime_type") or raw.get("mimeType")) or "image/png"
         error = self._clean_text(raw.get("error")) or None
+        job_id = self._clean_text(raw.get("job_id") or raw.get("jobId")) or None
         generation_route = self._clean_text(raw.get("generation_route") or raw.get("generationRoute")).lower() or None
         raw_status = self._clean_text(raw.get("status")).lower()
         if raw_status not in ALLOWED_IMAGE_STATUSES:
@@ -114,6 +115,7 @@ class ImageHistoryService:
             "b64_json": b64_json or None,
             "mime_type": mime_type,
             "error": error,
+            "job_id": job_id,
             "generation_route": generation_route if generation_route in ALLOWED_GENERATION_ROUTES else None,
         }
 

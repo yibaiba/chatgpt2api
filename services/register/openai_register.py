@@ -98,6 +98,12 @@ def _response_error_summary(response: object | None) -> str:
     return _response_detail_suffix(response)
 
 
+def _otp_failure_detail(response: object | None, fallback: str) -> str:
+    data = _response_json(response) if response is not None else {}
+    message = str((data.get("error") or {}).get("message") or data.get("message") or "").strip()
+    return f"{fallback}: {message}" if message else fallback
+
+
 def _make_trace_headers() -> dict[str, str]:
     trace_id = str(random.getrandbits(64))
     parent_id = str(random.getrandbits(64))
@@ -463,7 +469,13 @@ class PlatformRegistrar:
     def _validate_otp(self, code: str) -> None:
         response, error = validate_otp(self.session, self.device_id, code)
         if response is None or response.status_code != 200:
-            raise RuntimeError(error or f"validate_otp_http_{getattr(response, 'status_code', 'unknown')}")
+            raise RuntimeError(
+                error
+                or _otp_failure_detail(
+                    response,
+                    f"validate_otp_http_{getattr(response, 'status_code', 'unknown')}",
+                )
+            )
 
     def _create_account(self, name: str, birthdate: str) -> None:
         headers = self._json_headers(f"{AUTH_BASE}/about-you")
@@ -515,7 +527,7 @@ class PlatformRegistrar:
                 raise RuntimeError("login email verification timed out")
             response, reason = validate_otp(self.session, self.device_id, code)
             if response is None or response.status_code != 200:
-                raise RuntimeError(reason or "login email verification failed")
+                raise RuntimeError(reason or _otp_failure_detail(response, "login email verification failed"))
             otp_payload = _response_json(response)
             continue_url = str(otp_payload.get("continue_url") or continue_url).strip()
         if not continue_url:

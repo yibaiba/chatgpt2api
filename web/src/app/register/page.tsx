@@ -196,7 +196,7 @@ export default function RegisterPage() {
         <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">Register</div>
         <h1 className="text-2xl font-semibold tracking-tight text-stone-950">注册 runner</h1>
         <p className="text-sm text-stone-500">
-          当前已接入 `tempmail_lol` 的最小真实执行链路：可以保存配置、查看状态、启动/停止，并在成功后把新 token 回灌到现有号池。
+          当前已接入 `tempmail_lol` 与 `moemail` 的最小真实执行链路：可以保存配置、查看状态、启动/停止，并在成功后把新 token 回灌到现有号池。
         </p>
       </section>
 

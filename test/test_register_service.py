@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from services.register import mail_provider
 from services.register.openai_register import PlatformRegistrar
 from services.register_service import RegisterService
 
@@ -29,6 +30,22 @@ class _FakeAccountsService:
     def refresh_accounts(self, tokens: list[str]):
         self.refreshed_tokens.extend(tokens)
         return {"refreshed": len(tokens), "errors": [], "items": []}
+
+
+class _SequenceMailProvider(mail_provider.BaseMailProvider):
+    def __init__(self, messages: list[dict]) -> None:
+        super().__init__({"wait_timeout": 0.05, "wait_interval": 0.001})
+        self._messages = messages
+        self._index = 0
+
+    def fetch_latest_message(self, _mailbox: dict[str, object]) -> dict | None:
+        if not self._messages:
+            return None
+        if self._index >= len(self._messages):
+            return self._messages[-1]
+        message = self._messages[self._index]
+        self._index += 1
+        return message
 
 
 class RegisterServiceTests(unittest.TestCase):
@@ -68,6 +85,40 @@ class RegisterServiceTests(unittest.TestCase):
 
             reloaded = RegisterService(Path(tmp_dir) / "register.json", accounts_service=_FakeAccountsService())
             self.assertEqual("tempmail_lol", reloaded.get()["mail"]["providers"][0]["type"])
+
+    def test_update_persists_moemail_provider_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RegisterService(Path(tmp_dir) / "register.json", accounts_service=_FakeAccountsService(), executor=lambda _config, _log: {})
+
+            updated = service.update(
+                {
+                    "mail": {
+                        "providers": [
+                            {
+                                "type": "moemail",
+                                "enabled": True,
+                                "api_key": "mo-key",
+                                "api_base": "https://mail.example.com/",
+                                "expiry_time": "600",
+                                "domains": ["alpha.example", "beta.example"],
+                            }
+                        ]
+                    }
+                }
+            )
+
+            provider = updated["mail"]["providers"][0]
+            self.assertEqual("moemail", provider["type"])
+            self.assertEqual("mo-key", provider["api_key"])
+            self.assertEqual("https://mail.example.com/", provider["api_base"])
+            self.assertEqual(600, provider["expiry_time"])
+            self.assertEqual(["alpha.example", "beta.example"], provider["domains"])
+
+            reloaded = RegisterService(Path(tmp_dir) / "register.json", accounts_service=_FakeAccountsService())
+            reloaded_provider = reloaded.get()["mail"]["providers"][0]
+            self.assertEqual("moemail", reloaded_provider["type"])
+            self.assertEqual("https://mail.example.com/", reloaded_provider["api_base"])
+            self.assertEqual(600, reloaded_provider["expiry_time"])
 
     def test_start_requires_enabled_supported_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -116,6 +167,112 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertEqual(["token-1"], accounts_service.added_tokens)
             self.assertEqual(["token-1"], accounts_service.refreshed_tokens)
             self.assertTrue(any("模拟注册成功" in item["text"] for item in finished["logs"]))
+
+    def test_start_accepts_moemail_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            accounts_service = _FakeAccountsService()
+
+            def fake_executor(_config, log):
+                log("使用 moemail 模拟注册成功", "success")
+                return {"email": "demo@example.com", "access_token": "token-mo"}
+
+            service = RegisterService(
+                Path(tmp_dir) / "register.json",
+                accounts_service=accounts_service,
+                executor=fake_executor,
+            )
+            service.update(
+                {
+                    "total": 1,
+                    "threads": 1,
+                    "mail": {
+                        "providers": [
+                            {
+                                "type": "moemail",
+                                "enabled": True,
+                                "api_key": "demo-key",
+                                "api_base": "https://mail.example.com",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            started = service.start()
+            self.assertTrue(started["enabled"])
+            if service._runner is not None:
+                service._runner.join(timeout=1)
+            finished = service.get()
+
+            self.assertFalse(finished["enabled"])
+            self.assertEqual(1, finished["stats"]["success"])
+            self.assertEqual(["token-mo"], accounts_service.added_tokens)
+            self.assertEqual(["token-mo"], accounts_service.refreshed_tokens)
+
+    def test_start_rejects_moemail_without_api_base(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RegisterService(Path(tmp_dir) / "register.json", accounts_service=_FakeAccountsService(), executor=lambda _config, _log: {})
+            service.update(
+                {
+                    "mail": {
+                        "providers": [
+                            {
+                                "type": "moemail",
+                                "enabled": True,
+                                "api_key": "demo-key",
+                            }
+                        ]
+                    }
+                }
+            )
+
+            with self.assertRaisesRegex(ValueError, "moemail provider requires api_base"):
+                service.start()
+
+    def test_default_mail_wait_interval_uses_faster_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = RegisterService(Path(tmp_dir) / "register.json", accounts_service=_FakeAccountsService())
+
+            self.assertEqual(2, service.get()["mail"]["wait_interval"])
+
+
+class MailProviderPollingTests(unittest.TestCase):
+    def test_wait_for_code_skips_seen_message_refs(self) -> None:
+        provider = _SequenceMailProvider(
+            [
+                {
+                    "provider": "test",
+                    "mailbox": "demo@example.com",
+                    "message_id": "msg-1",
+                    "subject": "Verification code",
+                    "text_content": "Verification code: 123456",
+                    "html_content": "",
+                },
+                {
+                    "provider": "test",
+                    "mailbox": "demo@example.com",
+                    "message_id": "msg-1",
+                    "subject": "Verification code",
+                    "text_content": "Verification code: 123456",
+                    "html_content": "",
+                },
+                {
+                    "provider": "test",
+                    "mailbox": "demo@example.com",
+                    "message_id": "msg-2",
+                    "subject": "Verification code",
+                    "text_content": "Verification code: 654321",
+                    "html_content": "",
+                },
+            ]
+        )
+        mailbox = {"address": "demo@example.com"}
+
+        first_code = provider.wait_for_code(mailbox)
+        second_code = provider.wait_for_code(mailbox)
+
+        self.assertEqual("123456", first_code)
+        self.assertEqual("654321", second_code)
 
 
 class _FakeResponse:
@@ -203,6 +360,16 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
             "创建账号失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名",
             "warning",
         )
+
+    def test_validate_otp_includes_response_message(self) -> None:
+        response = _FakeResponse(400, {"message": "expired otp"})
+
+        with mock.patch(
+            "services.register.openai_register.validate_otp",
+            return_value=(response, None),
+        ):
+            with self.assertRaisesRegex(RuntimeError, r"validate_otp_http_400: expired otp"):
+                self.registrar._validate_otp("123456")
 
 
 if __name__ == "__main__":

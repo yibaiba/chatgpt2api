@@ -22,9 +22,9 @@ export type GeneratedImageResponseItem = {
   mime_type?: string;
   generation_route?: ImageGenerationRoute;
 };
-type GeneratedImageResponse = { created: number; data: GeneratedImageResponseItem[] };
-type ImageJobStatus = "queued" | "running" | "success" | "error";
-type ImageJob<T> = {
+export type GeneratedImageResponse = { created: number; data: GeneratedImageResponseItem[] };
+export type ImageJobStatus = "queued" | "running" | "success" | "error";
+export type ImageJob<T> = {
   id: string;
   status: ImageJobStatus;
   result?: T;
@@ -113,7 +113,13 @@ function readImageJobResult<T>(job: ImageJob<T>) {
   return null;
 }
 
-async function waitForImageJob<T>(initialJob: ImageJob<T>) {
+export async function getImageJob<T>(jobId: string) {
+  const { job } = await httpRequest<ImageJobResponse<T>>(`/api/image-jobs/${jobId}`);
+  return job;
+}
+
+export async function waitForImageJob<T>(initialJobOrId: ImageJob<T> | string) {
+  const initialJob = typeof initialJobOrId === "string" ? await getImageJob<T>(initialJobOrId) : initialJobOrId;
   const initialResult = readImageJobResult(initialJob);
   if (initialResult) {
     return initialResult;
@@ -122,13 +128,63 @@ async function waitForImageJob<T>(initialJob: ImageJob<T>) {
   const deadline = Date.now() + IMAGE_JOB_MAX_WAIT_MS;
   while (Date.now() < deadline) {
     await sleep(IMAGE_JOB_POLL_INTERVAL_MS);
-    const { job } = await httpRequest<ImageJobResponse<T>>(`/api/image-jobs/${initialJob.id}`);
+    const job = await getImageJob<T>(initialJob.id);
     const result = readImageJobResult(job);
     if (result) {
       return result;
     }
   }
   throw new Error("图片任务仍在处理中，请稍后刷新历史记录查看结果");
+}
+
+export async function createImageGenerationJob(
+  prompt: string,
+  model: ImageModel = "gpt-image-2",
+  size?: string,
+) {
+  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
+    "/api/image-jobs/generations",
+    {
+      method: "POST",
+      body: {
+        prompt,
+        model,
+        ...(size ? { size } : {}),
+        n: 1,
+        response_format: "b64_json",
+      },
+    },
+  );
+  return job;
+}
+
+export async function createImageEditJob(
+  files: File | File[],
+  prompt: string,
+  model: ImageModel = "gpt-image-2",
+  size?: string,
+) {
+  const formData = new FormData();
+  const uploadFiles = Array.isArray(files) ? files : [files];
+
+  uploadFiles.forEach((file) => {
+    formData.append("image", file);
+  });
+  formData.append("prompt", prompt);
+  formData.append("model", model);
+  if (size) {
+    formData.append("size", size);
+  }
+  formData.append("n", "1");
+
+  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
+    "/api/image-jobs/edits",
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+  return job;
 }
 
 type AccountRefreshResponse = {
@@ -187,6 +243,7 @@ export type RegisterMailProvider = {
   api_key?: string;
   api_base?: string;
   default_domain?: string;
+  expiry_time?: number;
   domains: string[];
 };
 
@@ -456,19 +513,7 @@ export async function generateImage(
   model: ImageModel = "gpt-image-2",
   size?: string,
 ) {
-  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
-    "/api/image-jobs/generations",
-    {
-      method: "POST",
-      body: {
-        prompt,
-        model,
-        ...(size ? { size } : {}),
-        n: 1,
-        response_format: "b64_json",
-      },
-    },
-  );
+  const job = await createImageGenerationJob(prompt, model, size);
   return waitForImageJob(job);
 }
 
@@ -478,26 +523,7 @@ export async function editImage(
   model: ImageModel = "gpt-image-2",
   size?: string,
 ) {
-  const formData = new FormData();
-  const uploadFiles = Array.isArray(files) ? files : [files];
-
-  uploadFiles.forEach((file) => {
-    formData.append("image", file);
-  });
-  formData.append("prompt", prompt);
-  formData.append("model", model);
-  if (size) {
-    formData.append("size", size);
-  }
-  formData.append("n", "1");
-
-  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
-    "/api/image-jobs/edits",
-    {
-      method: "POST",
-      body: formData,
-    },
-  );
+  const job = await createImageEditJob(files, prompt, model, size);
   return waitForImageJob(job);
 }
 

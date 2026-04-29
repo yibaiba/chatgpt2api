@@ -27,6 +27,7 @@ export type StoredImage = {
   b64_json?: string;
   mime_type?: string;
   error?: string;
+  job_id?: string;
   generation_route?: ImageGenerationRoute;
 };
 
@@ -73,10 +74,12 @@ function isImageGenerationRoute(value: unknown): value is ImageGenerationRoute {
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const normalizedMimeType = image.mime_type || "image/png";
+  const normalizedJobId = typeof image.job_id === "string" && image.job_id.trim() ? image.job_id.trim() : undefined;
   if (image.status === "loading" || image.status === "error" || image.status === "success") {
     return {
       ...image,
       mime_type: image.b64_json ? normalizedMimeType : image.mime_type,
+      job_id: normalizedJobId,
       generation_route: isImageGenerationRoute(image.generation_route) ? image.generation_route : undefined,
     };
   }
@@ -84,6 +87,7 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     ...image,
     status: image.b64_json ? "success" : "loading",
     mime_type: image.b64_json ? normalizedMimeType : image.mime_type,
+    job_id: normalizedJobId,
     generation_route: isImageGenerationRoute(image.generation_route) ? image.generation_route : undefined,
   };
 }

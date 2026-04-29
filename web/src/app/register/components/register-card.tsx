@@ -86,13 +86,13 @@ export function RegisterCard({
       <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
         <CardContent className="space-y-6 p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-stone-900">
-                <UserPlus className="size-4" />
-                <h2 className="text-lg font-semibold tracking-tight">注册配置</h2>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-stone-900">
+                  <UserPlus className="size-4" />
+                  <h2 className="text-lg font-semibold tracking-tight">注册配置</h2>
+                </div>
+                <p className="text-sm text-stone-500">当前已支持 `tempmail_lol` 与 `moemail` provider；成功后会自动把 access token 导入现有号池并刷新状态。</p>
               </div>
-              <p className="text-sm text-stone-500">当前先支持 `tempmail_lol` provider；成功后会自动把 access token 导入现有号池并刷新状态。</p>
-            </div>
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -231,10 +231,10 @@ export function RegisterCard({
           </div>
 
           <div className="space-y-4 border-t border-stone-200 pt-4">
-            <div className="space-y-1">
-              <h3 className="text-sm font-semibold text-stone-800">邮箱 provider 配置</h3>
-              <p className="text-xs text-stone-500">这一版只对 `tempmail_lol` 开启真实执行；其余 provider 会在后续阶段补齐。</p>
-            </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold text-stone-800">邮箱 provider 配置</h3>
+                <p className="text-xs text-stone-500">这一版已对 `tempmail_lol` 与 `moemail` 开启真实执行；其余 provider 会在后续阶段补齐。</p>
+              </div>
 
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
@@ -348,6 +348,7 @@ export function RegisterCard({
                           }))
                         }
                         className="h-11 rounded-xl border-stone-200 bg-white"
+                        placeholder="tempmail_lol / moemail"
                         disabled={config.enabled}
                       />
                     </div>
@@ -530,7 +531,7 @@ export function RegisterCard({
 
           <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             <AlertTriangle className="size-4 shrink-0" />
-            真实执行目前只支持 `tempmail_lol`。若 provider 类型或 api_key 不可用，启动时会直接返回错误。
+            真实执行目前支持 `tempmail_lol` 与 `moemail`。若 provider 类型、api_key 或 moemail 的 api_base 不可用，启动时会直接返回错误。
           </div>
 
           <div className="space-y-2">

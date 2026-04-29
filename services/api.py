@@ -161,6 +161,7 @@ class RegisterProviderPayload(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     default_domain: str | None = None
+    expiry_time: int | None = Field(default=None, ge=0)
     domains: list[str] = Field(default_factory=list)
 
 

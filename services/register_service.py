@@ -50,7 +50,7 @@ def _default_mail_config() -> dict[str, Any]:
     return {
         "request_timeout": 30,
         "wait_timeout": 180,
-        "wait_interval": 5,
+        "wait_interval": 2,
         "providers": [],
     }
 
@@ -109,6 +109,7 @@ def _normalize_provider(raw: object) -> dict[str, Any] | None:
         "api_key": _clean_text(raw.get("api_key")),
         "api_base": _clean_text(raw.get("api_base")),
         "default_domain": _clean_text(raw.get("default_domain")),
+        "expiry_time": _clean_int(raw.get("expiry_time"), fallback=0, min_value=0, max_value=31_536_000),
         "domains": domains,
     }
 
@@ -303,7 +304,7 @@ class RegisterService:
                 "started_at": _now_text(),
             }
             self._config["logs"] = []
-            self._append_log_locked("注册 runner 已启动；当前阶段已接入 tempmail_lol 真实注册执行链路。", "warning")
+            self._append_log_locked("注册 runner 已启动；当前阶段已接入 tempmail_lol / moemail 真实注册执行链路。", "warning")
             self._refresh_stats_locked()
             stop_event = threading.Event()
             self._stop_event = stop_event

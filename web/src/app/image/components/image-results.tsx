@@ -51,10 +51,10 @@ export function ImageResults({
 
   if (!selectedConversation) {
     return (
-      <div className="flex h-full min-h-[420px] items-center justify-center text-center">
+      <div className="flex h-full min-h-[260px] items-center justify-center text-center sm:min-h-[420px]">
         <div className="w-full max-w-4xl">
           <h1
-            className="text-3xl font-semibold tracking-tight text-stone-950 md:text-5xl"
+            className="text-2xl font-semibold tracking-tight text-stone-950 sm:text-3xl md:text-5xl"
             style={{
               fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
             }}
@@ -62,7 +62,7 @@ export function ImageResults({
             Turn ideas into images
           </h1>
           <p
-            className="mt-4 text-[15px] italic tracking-[0.01em] text-stone-500"
+            className="mx-auto mt-3 max-w-[280px] text-sm italic tracking-[0.01em] text-stone-500 sm:mt-4 sm:max-w-none sm:text-[15px]"
             style={{
               fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
             }}
@@ -88,7 +88,7 @@ export function ImageResults({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[980px] flex-col gap-8">
+    <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5 sm:gap-8">
       {selectedConversation.turns.map((turn, turnIndex) => {
         const referenceLightboxImages = turn.referenceImages.map((image, index) => ({
           id: `${turn.id}-reference-${index}`,
@@ -101,10 +101,10 @@ export function ImageResults({
         );
 
         return (
-          <div key={turn.id} className="flex flex-col gap-4">
+          <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
             <div className="flex justify-end">
-              <div className="max-w-[82%] px-1 py-1 text-[15px] leading-7 text-stone-900">
-                <div className="mb-2 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400">
+              <div className="max-w-[90%] px-1 py-1 text-[14px] leading-6 text-stone-900 sm:max-w-[82%] sm:text-[15px] sm:leading-7">
+                <div className="mb-1.5 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400 sm:mb-2">
                   <span>第 {turnIndex + 1} 轮</span>
                   <span>
                     {turn.mode === "edit" ? "编辑图" : "文生图"}
@@ -189,7 +189,7 @@ export function ImageResults({
                   </div>
                 ) : null}
 
-                <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-stone-500">
+                <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
                   <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
                   {turn.aspectRatio ? <span className="rounded-full bg-stone-100 px-3 py-1">{turn.aspectRatio}</span> : null}
                   {turn.outputQuality ? (
@@ -201,7 +201,7 @@ export function ImageResults({
                   ) : null}
                 </div>
 
-                <div className="columns-1 gap-4 space-y-4 sm:columns-2 xl:columns-3">
+                <div className="columns-1 gap-3 space-y-3 sm:columns-2 sm:gap-4 sm:space-y-4 xl:columns-3">
                   {turn.images.map((image, index) => {
                     if (image.status === "success" && image.b64_json) {
                       const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
@@ -280,9 +280,9 @@ export function ImageResults({
                       return (
                         <div
                           key={image.id}
-                          className="break-inside-avoid overflow-hidden border border-rose-200 bg-rose-50"
+                          className="break-inside-avoid overflow-hidden rounded-2xl border border-rose-200 bg-rose-50 sm:rounded-none"
                         >
-                          <div className="flex min-h-[320px] items-center justify-center px-6 py-8 text-center text-sm leading-6 text-rose-600">
+                          <div className="flex min-h-16 items-center justify-center px-4 py-4 text-center text-sm leading-6 text-rose-600 sm:min-h-[320px] sm:px-6 sm:py-8">
                             {image.error || "生成失败"}
                           </div>
                         </div>
@@ -292,9 +292,9 @@ export function ImageResults({
                     return (
                       <div
                         key={image.id}
-                        className="break-inside-avoid overflow-hidden border border-stone-200/80 bg-stone-100/80"
+                        className="break-inside-avoid overflow-hidden rounded-2xl border border-stone-200/80 bg-stone-100/80 sm:rounded-none"
                       >
-                        <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 px-6 py-8 text-center text-stone-500">
+                        <div className="flex min-h-16 flex-col items-center justify-center gap-3 px-4 py-4 text-center text-stone-500 sm:min-h-[320px] sm:px-6 sm:py-8">
                           <div className="rounded-full bg-white p-3 shadow-sm">
                             {turn.status === "queued" ? (
                               <Clock3 className="size-5" />

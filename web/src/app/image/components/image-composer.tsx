@@ -173,7 +173,7 @@ export function ImageComposer({
   };
 
   return (
-    <div className="shrink-0 flex justify-center">
+    <div className="shrink-0 flex justify-center px-1 sm:px-0">
       <div style={{ width: "min(980px, 100%)" }}>
         {mode === "edit" && (
           <input
@@ -189,16 +189,16 @@ export function ImageComposer({
         )}
 
         {mode === "edit" && referenceImages.length > 0 ? (
-          <div className="mb-3 flex flex-wrap gap-2 px-1">
+          <div className="mb-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mb-3 sm:flex-wrap sm:overflow-visible sm:pb-0">
             {referenceImages.map((image, index) => (
-              <div key={`${image.name}-${index}`} className="relative size-16">
+              <div key={`${image.name}-${index}`} className="relative size-14 shrink-0 sm:size-16">
                 <button
                   type="button"
                   onClick={() => {
                     setLightboxIndex(index);
                     setLightboxOpen(true);
                   }}
-                  className="group size-16 overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 transition hover:border-stone-300"
+                  className="group size-14 overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 transition hover:border-stone-300 sm:size-16"
                   aria-label={`预览参考图 ${image.name || index + 1}`}
                 >
                   <img
@@ -225,7 +225,7 @@ export function ImageComposer({
 
         <div
           className={cn(
-            "overflow-hidden rounded-[28px] border bg-white transition sm:rounded-[32px]",
+            "overflow-hidden rounded-[24px] border bg-white transition shadow-[0_14px_60px_-42px_rgba(15,23,42,0.45)] sm:rounded-[32px] sm:shadow-none",
             isDropActive
               ? "border-stone-900 bg-stone-50 shadow-[0_0_0_1px_rgba(28,25,23,0.1)]"
               : "border-stone-200",
@@ -305,7 +305,7 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[116px] resize-none rounded-[28px] border-0 bg-transparent px-5 pt-4 pb-4 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:rounded-[32px] sm:px-6 sm:pt-5 sm:pb-6"
+              className="min-h-[82px] resize-none rounded-[24px] border-0 bg-transparent px-4 pt-4 pb-4 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[152px] sm:rounded-[32px] sm:px-6 sm:pt-5 sm:pb-6 sm:leading-7"
             />
 
             <div className="border-t border-stone-200/80 bg-white px-4 py-3 sm:px-6 sm:py-4">

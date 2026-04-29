@@ -21,10 +21,12 @@ import { Button } from "@/components/ui/button";
 import { getCachedOrSyncAuthSession, syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 import type { AuthSession, ImageHistoryPersistenceMode, UserRole } from "@/lib/auth-types";
 import {
-  editImage,
+  createImageEditJob,
+  createImageGenerationJob,
   fetchAccounts,
-  generateImage,
+  waitForImageJob,
   type Account,
+  type GeneratedImageResponse,
   type ImageModel,
 } from "@/lib/api";
 import { formatMonthDayTimeInShanghai } from "@/lib/time";
@@ -50,7 +52,6 @@ import {
   type ImageConversation,
   type ImageConversationMode,
   type ImageTurn,
-  type ImageTurnStatus,
   type StoredImage,
   type StoredReferenceImage,
 } from "@/store/image-conversations";
@@ -121,6 +122,38 @@ function pickFallbackConversationId(conversations: ImageConversation[]) {
   return activeConversation?.id ?? conversations[0]?.id ?? null;
 }
 
+function getLoadingImages(turn: ImageTurn) {
+  return turn.images.filter((image) => image.status === "loading");
+}
+
+function hasRecoverableImageJob(image: StoredImage) {
+  return image.status === "loading" && typeof image.job_id === "string" && image.job_id.trim().length > 0;
+}
+
+function hasPendingTurnWork(turn: ImageTurn) {
+  return (turn.status === "queued" || turn.status === "generating") && getLoadingImages(turn).length > 0;
+}
+
+function resolveCompletedTurnState(turn: ImageTurn) {
+  const failedCount = turn.images.filter((image) => image.status === "error").length;
+  const successCount = turn.images.filter((image) => image.status === "success").length;
+  return {
+    status: failedCount > 0 ? ("error" as const) : successCount > 0 ? ("success" as const) : ("queued" as const),
+    error: failedCount > 0 ? `其中 ${failedCount} 张未成功生成` : undefined,
+  };
+}
+
+function resolveRecoveredTurnState(turn: ImageTurn) {
+  const loadingImages = getLoadingImages(turn);
+  if (loadingImages.length === 0) {
+    return resolveCompletedTurnState(turn);
+  }
+  return {
+    status: loadingImages.every(hasRecoverableImageJob) ? ("generating" as const) : ("queued" as const),
+    error: undefined,
+  };
+}
+
 function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -133,29 +166,7 @@ async function recoverConversationHistory(
     let changed = false;
 
     const turns = conversation.turns.map((turn) => {
-      if (turn.status !== "queued" && turn.status !== "generating") {
-        return turn;
-      }
-
-      const loadingCount = turn.images.filter((image) => image.status === "loading").length;
-      if (loadingCount > 0) {
-        const message = "页面刷新或任务中断，未完成的图片已标记为失败";
-        changed = true;
-        return {
-          ...turn,
-          status: "error" as const,
-          error: message,
-          images: turn.images.map((image) =>
-            image.status === "loading" ? { ...image, status: "error" as const, error: message } : image,
-          ),
-        };
-      }
-
-      const failedCount = turn.images.filter((image) => image.status === "error").length;
-      const successCount = turn.images.filter((image) => image.status === "success").length;
-      const nextStatus: ImageTurnStatus =
-        failedCount > 0 ? "error" : successCount > 0 ? "success" : "queued";
-      const nextError = failedCount > 0 ? turn.error || `其中 ${failedCount} 张未成功生成` : undefined;
+      const { status: nextStatus, error: nextError } = resolveRecoveredTurnState(turn);
       if (nextStatus === turn.status && nextError === turn.error) {
         return turn;
       }
@@ -863,34 +874,36 @@ export default function ImagePage() {
       }
 
       const snapshot = conversationsRef.current.find((conversation) => conversation.id === conversationId);
-      const queuedTurn = snapshot?.turns.find((turn) => turn.status === "queued");
+      const queuedTurn = snapshot?.turns.find(hasPendingTurnWork);
       if (!snapshot || !queuedTurn) {
         return;
       }
 
       activeConversationQueueIds.add(conversationId);
-      await updateConversation(conversationId, (current) => {
-        const conversation = current ?? snapshot;
-        return {
-          ...conversation,
-          updatedAt: new Date().toISOString(),
-          turns: conversation.turns.map((turn) =>
-            turn.id === queuedTurn.id
-              ? {
-                  ...turn,
-                  status: "generating",
-                  error: undefined,
-                }
-              : turn,
-          ),
-        };
-      });
+      if (queuedTurn.status !== "generating" || queuedTurn.error) {
+        await updateConversation(conversationId, (current) => {
+          const conversation = current ?? snapshot;
+          return {
+            ...conversation,
+            updatedAt: new Date().toISOString(),
+            turns: conversation.turns.map((turn) =>
+              turn.id === queuedTurn.id
+                ? {
+                    ...turn,
+                    status: "generating",
+                    error: undefined,
+                  }
+                : turn,
+            ),
+          };
+        });
+      }
 
       try {
         const referenceFiles = queuedTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${queuedTurn.id}-${index + 1}.png`, image.type),
         );
-        const pendingImages = queuedTurn.images.filter((image) => image.status === "loading");
+        const pendingImages = getLoadingImages(queuedTurn);
         const submittedPrompt = applyAspectRatioPrompt(queuedTurn.prompt, queuedTurn.aspectRatio);
         const submittedModel = queuedTurn.mode === "edit" ? "gpt-image-2" : queuedTurn.model;
 
@@ -899,21 +912,18 @@ export default function ImagePage() {
         }
 
         if (pendingImages.length === 0) {
-          const existingFailedCount = queuedTurn.images.filter((image) => image.status === "error").length;
-          const existingSuccessCount = queuedTurn.images.filter((image) => image.status === "success").length;
           await updateConversation(conversationId, (current) => {
             const conversation = current ?? snapshot;
             return {
               ...conversation,
               updatedAt: new Date().toISOString(),
               turns: conversation.turns.map((turn) =>
-                turn.id === queuedTurn.id
-                  ? {
-                      ...turn,
-                      status: existingFailedCount > 0 ? "error" : existingSuccessCount > 0 ? "success" : "queued",
-                      error: existingFailedCount > 0 ? `其中 ${existingFailedCount} 张未成功生成` : undefined,
-                    }
-                  : turn,
+                  turn.id === queuedTurn.id
+                    ? {
+                        ...turn,
+                        ...resolveCompletedTurnState(turn),
+                      }
+                    : turn,
               ),
             };
           });
@@ -922,10 +932,46 @@ export default function ImagePage() {
 
         const tasks = pendingImages.map(async (pendingImage) => {
           try {
-            const data =
-              queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, submittedPrompt, submittedModel)
-                : await generateImage(submittedPrompt, submittedModel);
+            let jobOrId: string | Awaited<ReturnType<typeof createImageGenerationJob>> = pendingImage.job_id || "";
+            let jobId = pendingImage.job_id?.trim() || "";
+
+            if (!jobId) {
+              const job =
+                queuedTurn.mode === "edit"
+                  ? await createImageEditJob(referenceFiles, submittedPrompt, submittedModel)
+                  : await createImageGenerationJob(submittedPrompt, submittedModel);
+              jobOrId = job;
+              jobId = job.id;
+
+              await updateConversation(conversationId, (current) => {
+                const conversation = current ?? snapshot;
+                return {
+                  ...conversation,
+                  updatedAt: new Date().toISOString(),
+                  turns: conversation.turns.map((turn) =>
+                    turn.id === queuedTurn.id
+                      ? {
+                          ...turn,
+                          status: "generating",
+                          error: undefined,
+                          images: turn.images.map((image) =>
+                            image.id === pendingImage.id
+                              ? {
+                                  ...image,
+                                  status: "loading",
+                                  error: undefined,
+                                  job_id: jobId,
+                                }
+                              : image,
+                          ),
+                        }
+                      : turn,
+                  ),
+                };
+              });
+            }
+
+            const data = await waitForImageJob<GeneratedImageResponse>(jobOrId);
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
@@ -952,25 +998,21 @@ export default function ImagePage() {
               generation_route: first.generation_route,
             };
 
-            await updateConversation(
-              conversationId,
-              (current) => {
-                const conversation = current ?? snapshot;
-                return {
-                  ...conversation,
-                  updatedAt: new Date().toISOString(),
-                  turns: conversation.turns.map((turn) =>
-                    turn.id === queuedTurn.id
-                      ? {
-                          ...turn,
-                          images: turn.images.map((image) => (image.id === nextImage.id ? nextImage : image)),
-                        }
-                      : turn,
-                  ),
-                };
-              },
-              { persist: false },
-            );
+            await updateConversation(conversationId, (current) => {
+              const conversation = current ?? snapshot;
+              return {
+                ...conversation,
+                updatedAt: new Date().toISOString(),
+                turns: conversation.turns.map((turn) =>
+                  turn.id === queuedTurn.id
+                    ? {
+                        ...turn,
+                        images: turn.images.map((image) => (image.id === nextImage.id ? nextImage : image)),
+                      }
+                    : turn,
+                ),
+              };
+            });
 
             return nextImage;
           } catch (error) {
@@ -981,40 +1023,27 @@ export default function ImagePage() {
               error: message,
             };
 
-            await updateConversation(
-              conversationId,
-              (current) => {
-                const conversation = current ?? snapshot;
-                return {
-                  ...conversation,
-                  updatedAt: new Date().toISOString(),
-                  turns: conversation.turns.map((turn) =>
-                    turn.id === queuedTurn.id
-                      ? {
-                          ...turn,
-                          images: turn.images.map((image) => (image.id === failedImage.id ? failedImage : image)),
-                        }
-                      : turn,
-                  ),
-                };
-              },
-              { persist: false },
-            );
+            await updateConversation(conversationId, (current) => {
+              const conversation = current ?? snapshot;
+              return {
+                ...conversation,
+                updatedAt: new Date().toISOString(),
+                turns: conversation.turns.map((turn) =>
+                  turn.id === queuedTurn.id
+                    ? {
+                        ...turn,
+                        images: turn.images.map((image) => (image.id === failedImage.id ? failedImage : image)),
+                      }
+                    : turn,
+                ),
+              };
+            });
 
             throw error;
           }
         });
 
-        const settled = await Promise.allSettled(tasks);
-        const resumedSuccessCount = settled.filter(
-          (item): item is PromiseFulfilledResult<StoredImage> => item.status === "fulfilled",
-        ).length;
-        const resumedFailedCount = settled.length - resumedSuccessCount;
-        const existingSuccessCount = queuedTurn.images.filter((image) => image.status === "success").length;
-        const existingFailedCount = queuedTurn.images.filter((image) => image.status === "error").length;
-        const successCount = existingSuccessCount + resumedSuccessCount;
-        const failedCount = existingFailedCount + resumedFailedCount;
-
+        await Promise.allSettled(tasks);
         await updateConversation(conversationId, (current) => {
           const conversation = current ?? snapshot;
           return {
@@ -1024,8 +1053,7 @@ export default function ImagePage() {
               turn.id === queuedTurn.id
                 ? {
                     ...turn,
-                    status: failedCount > 0 ? "error" : "success",
-                    error: failedCount > 0 ? `其中 ${failedCount} 张未成功生成` : undefined,
+                    ...resolveCompletedTurnState(turn),
                   }
                 : turn,
             ),
@@ -1047,7 +1075,7 @@ export default function ImagePage() {
                     status: "error",
                     error: message,
                     images: turn.images.map((image) =>
-                      image.status === "loading" ? { ...image, status: "error", error: message } : image,
+                      image.status === "loading" ? { ...image, status: "error", error: message, job_id: undefined } : image,
                     ),
                   }
                 : turn,
@@ -1060,7 +1088,7 @@ export default function ImagePage() {
         for (const conversation of conversationsRef.current) {
           if (
             !activeConversationQueueIds.has(conversation.id) &&
-            conversation.turns.some((turn) => turn.status === "queued")
+            conversation.turns.some(hasPendingTurnWork)
           ) {
             void runConversationQueueRef.current(conversation.id);
           }
@@ -1076,7 +1104,7 @@ export default function ImagePage() {
     for (const conversation of conversations) {
       if (
         !activeConversationQueueIds.has(conversation.id) &&
-        conversation.turns.some((turn) => turn.status === "queued")
+        conversation.turns.some(hasPendingTurnWork)
       ) {
         void runConversationQueueRef.current(conversation.id);
       }
@@ -1159,7 +1187,7 @@ export default function ImagePage() {
 
   return (
     <>
-      <section className="mx-auto grid min-h-[calc(100dvh-5rem)] w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:h-[calc(100dvh-5rem)] lg:min-h-0 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <section className="mx-auto grid min-h-[calc(100dvh-5rem)] w-full max-w-[1380px] grid-cols-1 gap-2 px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:gap-3 sm:px-3 sm:pb-6 lg:h-[calc(100dvh-5rem)] lg:min-h-0 lg:grid-cols-[240px_minmax(0,1fr)]">
         <div className="hidden min-h-0 lg:block">
           <ImageSidebar
             conversations={conversations}
@@ -1174,7 +1202,7 @@ export default function ImagePage() {
           />
         </div>
 
-        <div className="flex min-h-0 flex-col gap-3 sm:gap-4">
+        <div className="flex min-h-0 flex-col gap-2 sm:gap-4">
           <div className="sticky top-2 z-30 -mx-1 flex items-center justify-between gap-3 rounded-[28px] border border-white/80 bg-white/85 p-2 shadow-[0_16px_45px_rgba(28,25,23,0.14)] backdrop-blur-xl lg:hidden">
             <Button
               variant="outline"
@@ -1241,7 +1269,7 @@ export default function ImagePage() {
 
           <div
             ref={resultsViewportRef}
-            className="min-h-[220px] px-2 py-3 sm:px-4 sm:py-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
+            className="min-h-[220px] px-1 py-2 sm:px-4 sm:py-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
           >
             <div ref={resultsContentRef}>
               <ImageResults
@@ -1294,6 +1322,7 @@ export default function ImagePage() {
             <ImageSidebar
               conversations={conversations}
               className="border-r-0 pr-0"
+              hideActionButtons
               showConversationOwner={showConversationOwner}
               isLoadingHistory={isLoadingHistory}
               selectedConversationId={selectedConversationId}
