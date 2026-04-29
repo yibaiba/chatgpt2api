@@ -197,6 +197,41 @@ class ProxyPoolEntryUpdateRequest(BaseModel):
     proxy_url: str | None = None
 
 
+def _sanitize_storage_settings_update(body: dict[str, object]) -> dict[str, object]:
+    payload = dict(body)
+    storage_keys = ("storage_backend", "storage_sqlite_path")
+    if not any(key in payload for key in storage_keys):
+        return payload
+    if not config.has_storage_env_override():
+        return payload
+    if config.storage_backend_env_override() is not None:
+        requested_backend = str(payload.get("storage_backend") or "").strip().lower()
+        if requested_backend == config.storage_backend:
+            payload.pop("storage_backend", None)
+    if config.storage_sqlite_path_env_override() is not None:
+        requested_path = str(payload.get("storage_sqlite_path") or "").strip()
+        if requested_path == str(config.storage_sqlite_path):
+            payload.pop("storage_sqlite_path", None)
+    if not any(key in payload for key in storage_keys):
+        return payload
+    current_backend, current_path = config.effective_account_storage_target()
+    next_data = dict(config.data)
+    next_data.update(payload)
+    next_backend, next_path = config.effective_account_storage_target(next_data)
+    if (next_backend, str(next_path)) != (current_backend, str(current_path)):
+        active_overrides = config.active_storage_override_env_vars()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    "storage settings are controlled by environment overrides: "
+                    + ", ".join(active_overrides)
+                )
+            },
+        )
+    return payload
+
+
 class StoredReferenceImagePayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -818,7 +853,10 @@ def create_app() -> FastAPI:
         require_admin_session(request, authorization)
         previous_config = dict(config.data)
         try:
-            updated_config = config.update(body.model_dump(mode="python"))
+            incoming = _sanitize_storage_settings_update(
+                body.model_dump(mode="python", exclude_unset=True),
+            )
+            updated_config = config.update(incoming)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         try:

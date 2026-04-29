@@ -213,6 +213,55 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_public_storage_settings_follow_env_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            sqlite_path = base_dir / "env.sqlite3"
+            config_file = base_dir / "config.json"
+            config_file.write_text(
+                json.dumps(
+                    {
+                        "auth-key": "plain-secret",
+                        "storage_backend": "sqlite",
+                        "storage_sqlite_path": str(base_dir / "configured.sqlite3"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            old_env_backend = module.os.environ.get("CHATGPT2API_STORAGE_BACKEND")
+            old_env_sqlite = module.os.environ.get("CHATGPT2API_STORAGE_SQLITE_PATH")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                module.os.environ["CHATGPT2API_STORAGE_BACKEND"] = "json"
+                module.os.environ["CHATGPT2API_STORAGE_SQLITE_PATH"] = str(sqlite_path)
+                store = module.ConfigStore(config_file)
+
+                public = store.get()
+
+                self.assertEqual("json", public["storage_backend"])
+                self.assertEqual(str(sqlite_path), public["storage_sqlite_path"])
+                self.assertTrue(public["storage_env_override_active"])
+                self.assertEqual(
+                    ["CHATGPT2API_STORAGE_BACKEND", "CHATGPT2API_STORAGE_SQLITE_PATH"],
+                    store.active_storage_override_env_vars(),
+                )
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+                if old_env_backend is None:
+                    module.os.environ.pop("CHATGPT2API_STORAGE_BACKEND", None)
+                else:
+                    module.os.environ["CHATGPT2API_STORAGE_BACKEND"] = old_env_backend
+                if old_env_sqlite is None:
+                    module.os.environ.pop("CHATGPT2API_STORAGE_SQLITE_PATH", None)
+                else:
+                    module.os.environ["CHATGPT2API_STORAGE_SQLITE_PATH"] = old_env_sqlite
+
     def test_config_store_hashes_and_hides_admin_auth_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)

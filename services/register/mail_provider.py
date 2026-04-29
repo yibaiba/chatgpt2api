@@ -266,7 +266,7 @@ class MoEmailProvider(BaseMailProvider):
             self.expiry_time = max(0, int(entry.get("expiry_time") or 0))
         except (TypeError, ValueError):
             self.expiry_time = 0
-        self.session = Session(impersonate="edge101", verify=False)
+        self.session = Session(impersonate="edge101", verify=True)
         self.session.headers.update(
             {
                 "User-Agent": conf["user_agent"],

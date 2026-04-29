@@ -154,6 +154,14 @@ class ConfigStore:
     def _normalize_storage_sqlite_path(value: object) -> str:
         return str(value or "").strip()
 
+    @staticmethod
+    def _path_from_storage_sqlite_value(value: object) -> Path:
+        raw_path = ConfigStore._normalize_storage_sqlite_path(value) or str(DATA_DIR / "accounts.sqlite3")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = (BASE_DIR / path).resolve()
+        return path
+
     def _build_public_data(self, data: dict[str, object]) -> dict[str, object]:
         public_data = dict(data)
         public_data.pop("auth-key", None)
@@ -169,21 +177,54 @@ class ConfigStore:
             fallback=False,
         )
         public_data["sensitive_words"] = self._normalize_sensitive_words(public_data.get("sensitive_words"))
-        public_data["storage_backend"] = self._normalize_storage_backend(public_data.get("storage_backend"))
-        public_data["storage_sqlite_path"] = str(self._resolve_storage_sqlite_path(public_data))
+        public_data["storage_backend"] = self.storage_backend
+        public_data["storage_sqlite_path"] = str(self.storage_sqlite_path)
+        public_data["storage_env_override_active"] = self.has_storage_env_override()
         return public_data
 
     def _resolve_storage_sqlite_path(self, data: dict[str, object] | None = None) -> Path:
         source = self.data if data is None else data
-        raw_path = str(
+        return self._path_from_storage_sqlite_value(
             os.getenv("CHATGPT2API_STORAGE_SQLITE_PATH")
-            or source.get("storage_sqlite_path")
-            or (DATA_DIR / "accounts.sqlite3")
-        ).strip()
-        path = Path(raw_path).expanduser()
-        if not path.is_absolute():
-            path = (BASE_DIR / path).resolve()
-        return path
+            or source.get("storage_sqlite_path"),
+        )
+
+    def storage_backend_env_override(self) -> str | None:
+        raw_backend = str(os.getenv("CHATGPT2API_STORAGE_BACKEND") or "").strip()
+        if not raw_backend:
+            return None
+        return self._normalize_storage_backend(raw_backend)
+
+    def storage_sqlite_path_env_override(self) -> Path | None:
+        raw_path = str(os.getenv("CHATGPT2API_STORAGE_SQLITE_PATH") or "").strip()
+        if not raw_path:
+            return None
+        return self._path_from_storage_sqlite_value(raw_path)
+
+    def active_storage_override_env_vars(self) -> list[str]:
+        names: list[str] = []
+        if self.storage_backend_env_override() is not None:
+            names.append("CHATGPT2API_STORAGE_BACKEND")
+        if self.storage_sqlite_path_env_override() is not None:
+            names.append("CHATGPT2API_STORAGE_SQLITE_PATH")
+        return names
+
+    def has_storage_env_override(self) -> bool:
+        return bool(self.active_storage_override_env_vars())
+
+    def resolved_storage_backend(self, data: dict[str, object] | None = None) -> str:
+        override = self.storage_backend_env_override()
+        if override is not None:
+            return override
+        source = self.data if data is None else data
+        return self._normalize_storage_backend(source.get("storage_backend") or "json")
+
+    def resolved_storage_sqlite_path(self, data: dict[str, object] | None = None) -> Path:
+        return self._resolve_storage_sqlite_path(data)
+
+    def effective_account_storage_target(self, data: dict[str, object] | None = None) -> tuple[str, Path]:
+        backend = self.resolved_storage_backend(data)
+        return backend, (self.accounts_file if backend == "json" else self.resolved_storage_sqlite_path(data))
 
     @property
     def auth_key(self) -> str:
@@ -277,15 +318,11 @@ class ConfigStore:
 
     @property
     def storage_backend(self) -> str:
-        return self._normalize_storage_backend(
-            os.getenv("CHATGPT2API_STORAGE_BACKEND")
-            or self.data.get("storage_backend")
-            or "json"
-        )
+        return self.resolved_storage_backend()
 
     @property
     def storage_sqlite_path(self) -> Path:
-        return self._resolve_storage_sqlite_path()
+        return self.resolved_storage_sqlite_path()
 
     def get(self) -> dict[str, object]:
         return self._build_public_data(self.data)

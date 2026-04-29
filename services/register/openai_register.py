@@ -418,12 +418,8 @@ class PlatformRegistrar:
         headers.update(_make_trace_headers())
         return headers
 
-    def _platform_authorize(self, email: str) -> None:
-        self._step("开始 platform authorize")
-        self.session.cookies.set("oai-did", self.device_id, domain=".auth.openai.com")
-        self.session.cookies.set("oai-did", self.device_id, domain="auth.openai.com")
-        _, code_challenge = _generate_pkce()
-        params = {
+    def _build_platform_authorize_params(self, email: str, code_challenge: str) -> dict[str, str]:
+        return {
             "issuer": AUTH_BASE,
             "client_id": PLATFORM_OAUTH_CLIENT_ID,
             "audience": PLATFORM_OAUTH_AUDIENCE,
@@ -441,12 +437,28 @@ class PlatformRegistrar:
             "code_challenge_method": "S256",
             "auth0Client": PLATFORM_AUTH0_CLIENT,
         }
-        response, error = request_with_local_retry(self.session, "get", f"{AUTH_BASE}/api/accounts/authorize?{urlencode(params)}", headers=self._navigate_headers(f"{PLATFORM_BASE}/"), allow_redirects=True)
+
+    def _request_platform_authorize(self, email: str, code_challenge: str, error_prefix: str) -> None:
+        params = self._build_platform_authorize_params(email, code_challenge)
+        response, error = request_with_local_retry(
+            self.session,
+            "get",
+            f"{AUTH_BASE}/api/accounts/authorize?{urlencode(params)}",
+            headers=self._navigate_headers(f"{PLATFORM_BASE}/"),
+            allow_redirects=True,
+        )
         if response is None or response.status_code != 200:
             raise RuntimeError(
                 error
-                or f"platform_authorize_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
+                or f"{error_prefix}_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
             )
+
+    def _platform_authorize(self, email: str) -> None:
+        self._step("开始 platform authorize")
+        self.session.cookies.set("oai-did", self.device_id, domain=".auth.openai.com")
+        self.session.cookies.set("oai-did", self.device_id, domain="auth.openai.com")
+        _, code_challenge = _generate_pkce()
+        self._request_platform_authorize(email, code_challenge, "platform_authorize")
 
     def _register_user(self, email: str, password: str) -> None:
         headers = self._json_headers(f"{AUTH_BASE}/create-account/password")
@@ -492,27 +504,7 @@ class PlatformRegistrar:
 
     def _login_and_exchange_tokens(self, email: str, password: str, mailbox: dict[str, Any]) -> dict[str, str]:
         code_verifier, code_challenge = _generate_pkce()
-        params = {
-            "issuer": AUTH_BASE,
-            "client_id": PLATFORM_OAUTH_CLIENT_ID,
-            "audience": PLATFORM_OAUTH_AUDIENCE,
-            "redirect_uri": PLATFORM_OAUTH_REDIRECT_URI,
-            "device_id": self.device_id,
-            "screen_hint": "login_or_signup",
-            "max_age": "0",
-            "login_hint": email,
-            "scope": "openid profile email offline_access",
-            "response_type": "code",
-            "response_mode": "query",
-            "state": secrets.token_urlsafe(32),
-            "nonce": secrets.token_urlsafe(32),
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
-            "auth0Client": PLATFORM_AUTH0_CLIENT,
-        }
-        response, error = request_with_local_retry(self.session, "get", f"{AUTH_BASE}/api/accounts/authorize?{urlencode(params)}", headers=self._navigate_headers(f"{PLATFORM_BASE}/"), allow_redirects=True)
-        if response is None:
-            raise RuntimeError(error or "platform_login_authorize_failed")
+        self._request_platform_authorize(email, code_challenge, "platform_login_authorize")
         headers = self._json_headers(f"{AUTH_BASE}/log-in/password")
         headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
         response, error = request_with_local_retry(self.session, "post", f"{AUTH_BASE}/api/accounts/password/verify", json={"password": password}, headers=headers, allow_redirects=False)

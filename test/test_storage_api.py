@@ -94,6 +94,7 @@ class StorageApiTests(unittest.TestCase):
         self.assertEqual(["json", "sqlite"], payload["available_backends"])
         self.assertTrue(payload["path"].endswith("accounts.json"))
         self.assertTrue(payload["writable"])
+        self.assertFalse(payload["env_override_active"])
 
     def test_non_admin_cannot_fetch_storage_info(self) -> None:
         response = self.client.get("/api/storage/info", headers={"Authorization": "Bearer user-auth"})
@@ -153,6 +154,79 @@ class StorageApiTests(unittest.TestCase):
         self.assertEqual("failed to apply storage settings: boom", response.json()["detail"]["error"])
         self.assertEqual("json", self.fake_config.storage_backend)
         self.assertTrue(self.fake_config.accounts_file.name.endswith("accounts.json"))
+
+    def test_admin_save_settings_rejects_runtime_storage_switch_when_env_path_override_is_active(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CHATGPT2API_STORAGE_SQLITE_PATH": str(Path(self.temp_dir.name) / "env.sqlite3"),
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/settings",
+                headers={"Authorization": "Bearer test-auth"},
+                json={"storage_backend": "sqlite"},
+            )
+
+        self.assertEqual(400, response.status_code)
+        self.assertIn(
+            "storage settings are controlled by environment overrides",
+            response.json()["detail"]["error"],
+        )
+        self.assertEqual([], self.fake_account_service.rebind_paths)
+        self.assertEqual("json", self.fake_config.storage_backend)
+
+    def test_admin_save_settings_ignores_effective_storage_fields_when_env_override_is_active(self) -> None:
+        env_sqlite_path = Path(self.temp_dir.name) / "env.sqlite3"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CHATGPT2API_STORAGE_BACKEND": "json",
+                "CHATGPT2API_STORAGE_SQLITE_PATH": str(env_sqlite_path),
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/settings",
+                headers={"Authorization": "Bearer test-auth"},
+                json={
+                    "storage_backend": "json",
+                    "storage_sqlite_path": str(env_sqlite_path),
+                    "refresh_account_interval_minute": 9,
+                },
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(9, response.json()["config"]["refresh_account_interval_minute"])
+        self.assertEqual(
+            [config_module.DATA_DIR / "accounts.json"],
+            self.fake_account_service.rebind_paths,
+        )
+        self.assertEqual(9, self.fake_config.refresh_account_interval_minute)
+        self.assertEqual("json", self.fake_config.storage_backend)
+        self.assertEqual("json", self.fake_config.data["storage_backend"])
+        self.assertNotIn("storage_sqlite_path", self.fake_config.data)
+
+    def test_admin_save_settings_allows_future_sqlite_path_when_only_backend_override_is_active(self) -> None:
+        future_sqlite_path = Path(self.temp_dir.name) / "future.sqlite3"
+        with mock.patch.dict(
+            os.environ,
+            {"CHATGPT2API_STORAGE_BACKEND": "json"},
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/settings",
+                headers={"Authorization": "Bearer test-auth"},
+                json={"storage_sqlite_path": str(future_sqlite_path)},
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(str(future_sqlite_path), self.fake_config.data["storage_sqlite_path"])
+        self.assertEqual(
+            [config_module.DATA_DIR / "accounts.json"],
+            self.fake_account_service.rebind_paths,
+        )
 
 
 if __name__ == "__main__":

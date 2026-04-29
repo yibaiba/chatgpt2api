@@ -371,6 +371,54 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r"validate_otp_http_400: expired otp"):
                 self.registrar._validate_otp("123456")
 
+    def test_login_authorize_failure_stops_before_password_verify(self) -> None:
+        response = _FakeResponse(
+            429,
+            {"error": {"code": "rate_limited", "message": "too many attempts"}},
+        )
+        request_mock = mock.Mock(return_value=(response, None))
+
+        with mock.patch(
+            "services.register.openai_register.request_with_local_retry",
+            request_mock,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"platform_login_authorize_http_429: rate_limited - too many attempts",
+            ):
+                self.registrar._login_and_exchange_tokens(
+                    "demo@example.com",
+                    "Password1!",
+                    {"provider": "tempmail_lol", "address": "demo@example.com"},
+                )
+
+        self.assertEqual(1, request_mock.call_count)
+
+
+class MailProviderSecurityTests(unittest.TestCase):
+    def test_moemail_provider_enables_tls_verification(self) -> None:
+        session = mock.Mock()
+        session.headers = mock.Mock()
+        with mock.patch("services.register.mail_provider.Session", return_value=session) as session_class:
+            provider = mail_provider.MoEmailProvider(
+                {
+                    "type": "moemail",
+                    "api_base": "https://mail.example.com",
+                    "api_key": "demo-key",
+                    "domains": ["alpha.example"],
+                },
+                {
+                    "request_timeout": 30,
+                    "wait_timeout": 30,
+                    "wait_interval": 2,
+                    "user_agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                session_class.assert_called_once_with(impersonate="edge101", verify=True)
+            finally:
+                provider.close()
+
 
 if __name__ == "__main__":
     unittest.main()

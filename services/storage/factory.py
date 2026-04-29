@@ -77,6 +77,9 @@ def get_account_storage_info(config_store: "ConfigStore | None" = None) -> dict[
         "path": str(path),
         "writable": _is_parent_writable(path),
     }
+    has_override = getattr(active_config, "has_storage_env_override", None)
+    if callable(has_override):
+        info["env_override_active"] = bool(has_override())
     if backend not in SUPPORTED_ACCOUNT_STORAGE_BACKENDS:
         info["error"] = f"unsupported account storage backend: {backend}"
     return info
