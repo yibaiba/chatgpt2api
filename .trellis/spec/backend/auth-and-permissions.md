@@ -203,3 +203,22 @@ async def get_accounts(authorization: str | None = Header(default=None)):
     require_admin_session(authorization)
     return {"items": account_service.list_accounts()}
 ```
+
+### Convention: Session cookie signing must use a stable secret
+
+**What**: `config.session_signing_secret` must be deterministic for the lifetime of the configured admin auth source. If `CHATGPT2API_SESSION_SECRET` is absent and the admin auth key comes from `CHATGPT2API_AUTH_KEY`, derive the cookie-signing secret deterministically from that env value instead of re-hashing it with a fresh random salt on each access.
+
+**Why**: Login and later `/auth/session` cookie reads both depend on the same signing secret. Recomputing it with a random salt causes valid cookies to fail verification between requests even though the admin auth key itself has not changed.
+
+**Example**:
+```python
+@property
+def session_signing_secret(self) -> str:
+    env_session_secret = str(os.getenv("CHATGPT2API_SESSION_SECRET") or "").strip()
+    if env_session_secret:
+        return env_session_secret
+    env_auth_key = self.auth_key
+    if env_auth_key:
+        return derive_session_secret(env_auth_key)
+    return self.auth_key_hash
+```

@@ -1095,7 +1095,7 @@ function buildAutoImagePromptGalleryItems(
     const prompt = resolveUpstreamImagePrompt(entry);
     const sourceUrl = normalizeImagePromptGalleryUrl(String(entry.url || ""));
     const previewImageUrl = getUpstreamPreviewImageUrl(entry.media);
-    if (!prompt || !sourceUrl || !previewImageUrl || !shouldIncludeUpstreamImagePrompt(prompt, entry)) {
+    if (!prompt || !sourceUrl || !previewImageUrl || !shouldIncludeUpstreamImagePrompt(prompt)) {
       continue;
     }
     if (hasExistingImagePromptGalleryMatch(entry, baseItems) || hasExistingImagePromptGalleryMatch(entry, items)) {
@@ -1291,7 +1291,7 @@ function hasExistingImagePromptGalleryMatch(
       continue;
     }
 
-    const authorMatched = creator && creator === normalizeImagePromptGalleryCreator(item.creator);
+    const authorMatched = Boolean(creator && creator === normalizeImagePromptGalleryCreator(item.creator));
     if (scoreImagePromptMatch(prompt, itemPrompt, authorMatched) >= 0.82) {
       return true;
     }
@@ -1324,7 +1324,7 @@ function findBestUpstreamPreviewMatch(item: ImagePromptGalleryItem, entries: Ups
       continue;
     }
 
-    const entryUrl = normalizeImagePromptGalleryUrl(entry.url);
+    const entryUrl = normalizeImagePromptGalleryUrl(String(entry.url || ""));
     if (sourceUrl && entryUrl && sourceUrl === entryUrl) {
       return mediaUrl;
     }
@@ -1334,7 +1334,7 @@ function findBestUpstreamPreviewMatch(item: ImagePromptGalleryItem, entries: Ups
       continue;
     }
 
-    const authorMatched = creator && creator === normalizeImagePromptGalleryCreator(entry.author || "");
+    const authorMatched = Boolean(creator && creator === normalizeImagePromptGalleryCreator(entry.author || ""));
     const score = scoreImagePromptMatch(prompt, entryPrompt, authorMatched);
     if (score > bestScore) {
       bestScore = score;

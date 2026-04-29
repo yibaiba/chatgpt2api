@@ -1,4 +1,4 @@
-import axios, {AxiosError, type AxiosRequestConfig} from "axios";
+import axios, {AxiosError, AxiosHeaders, type AxiosRequestConfig, type InternalAxiosRequestConfig} from "axios";
 
 import webConfig from "@/constants/common-env";
 import {clearStoredAuthKey} from "@/store/auth";
@@ -11,14 +11,10 @@ const request = axios.create({
     baseURL: webConfig.apiUrl.replace(/\/$/, ""),
 });
 
-request.interceptors.request.use(async (config) => {
-    const nextConfig = {...config};
-    const headers = {...(nextConfig.headers || {})} as Record<string, string>;
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-expect-error
-    nextConfig.headers = headers;
-    nextConfig.withCredentials = true;
-    return nextConfig;
+request.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+    config.headers = AxiosHeaders.from(config.headers);
+    config.withCredentials = true;
+    return config;
 });
 
 request.interceptors.response.use(

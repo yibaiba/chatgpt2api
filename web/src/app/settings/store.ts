@@ -470,6 +470,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           name: formName.trim(),
           base_url: formBaseUrl.trim(),
           secret_key: formSecretKey.trim(),
+          auto_sync_enabled: false,
         });
         set({ pools: data.pools, dialogOpen: false });
         toast.success("连接已添加");

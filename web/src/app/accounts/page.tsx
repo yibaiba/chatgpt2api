@@ -269,10 +269,13 @@ export default function AccountsPage() {
 
     const syncFiltersFromLocation = () => {
       const params = new URLSearchParams(window.location.search);
+      const type = params.get("type");
+      const status = params.get("status");
+      const focus = params.get("focus");
       setQuery(params.get("q") ?? "");
-      setTypeFilter(isAccountTypeFilter(params.get("type")) ? params.get("type") : "all");
-      setStatusFilter(isAccountStatusFilter(params.get("status")) ? params.get("status") : "all");
-      setFocusFilter(isAccountFocusFilter(params.get("focus")) ? params.get("focus") : "all");
+      setTypeFilter(isAccountTypeFilter(type) ? type : "all");
+      setStatusFilter(isAccountStatusFilter(status) ? status : "all");
+      setFocusFilter(isAccountFocusFilter(focus) ? focus : "all");
       setPage(1);
     };
 

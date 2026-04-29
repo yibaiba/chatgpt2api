@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from services import api as api_module
 from services import config as config_module
+from services.storage.json_storage import JsonAccountStore
+from services.storage.sqlite_storage import SqliteAccountStore
 
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
@@ -48,6 +50,7 @@ class _FakeAuthService:
 class _FakeAccountService:
     def __init__(self) -> None:
         self.rebind_paths: list[Path] = []
+        self.rebind_accounts: list[list[dict]] = []
         self.raise_error: Exception | None = None
 
     def rebind_store(self, store) -> list[dict]:
@@ -56,13 +59,19 @@ class _FakeAccountService:
         path = getattr(store, "path", None)
         if isinstance(path, Path):
             self.rebind_paths.append(path)
-        return []
+        items = store.load_accounts()
+        self.rebind_accounts.append(items)
+        return items
 
 
 class StorageApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
+        self._old_data_dir = config_module.DATA_DIR
+        config_module.DATA_DIR = Path(self.temp_dir.name) / "data"
+        config_module.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(self._restore_config_data_dir)
         self.config_file = Path(self.temp_dir.name) / "config.json"
         self.config_file.write_text('{"auth-key":"test-auth"}\n', encoding="utf-8")
         self.fake_config = config_module.ConfigStore(self.config_file)
@@ -85,6 +94,9 @@ class StorageApiTests(unittest.TestCase):
         for patcher in reversed(self.patches):
             patcher.stop()
 
+    def _restore_config_data_dir(self) -> None:
+        config_module.DATA_DIR = self._old_data_dir
+
     def test_admin_can_fetch_storage_info(self) -> None:
         response = self.client.get("/api/storage/info", headers={"Authorization": "Bearer test-auth"})
 
@@ -104,6 +116,8 @@ class StorageApiTests(unittest.TestCase):
 
     def test_admin_save_settings_rebinds_runtime_storage_backend(self) -> None:
         sqlite_path = Path(self.temp_dir.name) / "runtime.sqlite3"
+        payload = [{"access_token": "token-1", "status": "正常", "quota": 3}]
+        JsonAccountStore(self.fake_config.accounts_file).save_accounts(payload)
 
         response = self.client.post(
             "/api/settings",
@@ -119,6 +133,11 @@ class StorageApiTests(unittest.TestCase):
         self.assertEqual("sqlite", payload["storage_backend"])
         self.assertEqual(str(sqlite_path), payload["storage_sqlite_path"])
         self.assertEqual([sqlite_path], self.fake_account_service.rebind_paths)
+        self.assertEqual([[{"access_token": "token-1", "status": "正常", "quota": 3}]], self.fake_account_service.rebind_accounts)
+        self.assertEqual(
+            [{"access_token": "token-1", "status": "正常", "quota": 3}],
+            SqliteAccountStore(sqlite_path).load_accounts(),
+        )
 
         info_response = self.client.get("/api/storage/info", headers={"Authorization": "Bearer test-auth"})
         self.assertEqual(200, info_response.status_code)
@@ -139,6 +158,10 @@ class StorageApiTests(unittest.TestCase):
 
     def test_admin_save_settings_rolls_back_when_runtime_rebind_fails(self) -> None:
         sqlite_path = Path(self.temp_dir.name) / "runtime.sqlite3"
+        payload = [{"access_token": "token-1", "status": "正常", "quota": 3}]
+        destination_backup = [{"access_token": "token-2", "status": "限流", "quota": 1}]
+        JsonAccountStore(self.fake_config.accounts_file).save_accounts(payload)
+        SqliteAccountStore(sqlite_path).save_accounts(destination_backup)
         self.fake_account_service.raise_error = RuntimeError("boom")
 
         response = self.client.post(
@@ -154,6 +177,7 @@ class StorageApiTests(unittest.TestCase):
         self.assertEqual("failed to apply storage settings: boom", response.json()["detail"]["error"])
         self.assertEqual("json", self.fake_config.storage_backend)
         self.assertTrue(self.fake_config.accounts_file.name.endswith("accounts.json"))
+        self.assertEqual(destination_backup, SqliteAccountStore(sqlite_path).load_accounts())
 
     def test_admin_save_settings_rejects_runtime_storage_switch_when_env_path_override_is_active(self) -> None:
         with mock.patch.dict(
@@ -227,6 +251,39 @@ class StorageApiTests(unittest.TestCase):
             [config_module.DATA_DIR / "accounts.json"],
             self.fake_account_service.rebind_paths,
         )
+
+    def test_apply_account_storage_change_surfaces_destination_rollback_failure(self) -> None:
+        previous_store = mock.Mock()
+        next_store = mock.Mock()
+        next_store.load_accounts.return_value = [{"access_token": "token-2"}]
+        next_store.save_accounts.side_effect = RuntimeError("restore failed")
+
+        with mock.patch.object(
+            api_module,
+            "config",
+            mock.Mock(
+                data={"storage_backend": "sqlite"},
+                effective_account_storage_target=mock.Mock(
+                    side_effect=[
+                        ("json", Path(self.temp_dir.name) / "accounts.json"),
+                        ("sqlite", Path(self.temp_dir.name) / "accounts.sqlite3"),
+                    ]
+                ),
+            ),
+        ), mock.patch.object(
+            api_module,
+            "_build_account_store_for_target",
+            side_effect=[next_store, previous_store],
+        ), mock.patch.object(
+            api_module,
+            "migrate_accounts",
+            side_effect=RuntimeError("migrate failed"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "destination rollback failed after storage migration error: restore failed",
+            ):
+                api_module._apply_account_storage_change({"storage_backend": "json"})
 
 
 if __name__ == "__main__":

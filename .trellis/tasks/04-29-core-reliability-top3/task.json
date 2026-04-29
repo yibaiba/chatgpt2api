@@ -1,0 +1,30 @@
+{
+  "id": "core-reliability-top3",
+  "name": "core-reliability-top3",
+  "title": "brainstorm: 核心可靠性优化 1-3",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "yibaiba",
+  "assignee": "yibaiba",
+  "createdAt": "2026-04-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "04-29-session-secret-stability",
+    "04-29-frontend-type-gate",
+    "04-29-storage-switch-migration"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

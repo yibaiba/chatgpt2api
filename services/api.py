@@ -24,7 +24,8 @@ from services.image_history_service import image_history_service
 from services.log_service import LOG_LEVEL_ALL, LOG_SOURCE_ALL, log_service
 from services.proxy_service import test_proxy
 from services.register_service import register_service
-from services.storage.factory import build_account_store, get_account_storage_info
+from services.storage.factory import build_account_store, build_account_store_for_backend, get_account_storage_info
+from services.storage.migrate import migrate_accounts
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -230,6 +231,35 @@ def _sanitize_storage_settings_update(body: dict[str, object]) -> dict[str, obje
             },
         )
     return payload
+
+
+def _build_account_store_for_target(target: tuple[str, Path]):
+    backend, path = target
+    return build_account_store_for_backend(backend, path=path)
+
+
+def _apply_account_storage_change(previous_config: dict[str, object]) -> list[dict]:
+    previous_target = config.effective_account_storage_target(previous_config)
+    next_target = config.effective_account_storage_target(config.data)
+    next_store = _build_account_store_for_target(next_target)
+    if next_target == previous_target:
+        return account_service.rebind_store(next_store)
+    previous_store = _build_account_store_for_target(previous_target)
+    destination_backup = next_store.load_accounts()
+    try:
+        migrate_accounts(previous_store, next_store)
+        return account_service.rebind_store(next_store)
+    except Exception as exc:
+        restore_error: Exception | None = None
+        try:
+            next_store.save_accounts(destination_backup)
+        except Exception as restore_exc:
+            restore_error = restore_exc
+        if restore_error is not None:
+            raise RuntimeError(
+                f"destination rollback failed after storage migration error: {restore_error}"
+            ) from exc
+        raise
 
 
 class StoredReferenceImagePayload(BaseModel):
@@ -860,7 +890,7 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         try:
-            account_service.rebind_store(build_account_store(config))
+            _apply_account_storage_change(previous_config)
         except Exception as exc:
             if dict(config.data) != previous_config:
                 config.data = previous_config

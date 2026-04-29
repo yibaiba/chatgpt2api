@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from services.auth_security import hash_auth_secret, verify_auth_secret
+from services.auth_security import derive_session_secret, hash_auth_secret, verify_auth_secret
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
@@ -243,7 +243,13 @@ class ConfigStore:
 
     @property
     def session_signing_secret(self) -> str:
-        return str(os.getenv("CHATGPT2API_SESSION_SECRET") or self.auth_key_hash or "").strip()
+        env_session_secret = str(os.getenv("CHATGPT2API_SESSION_SECRET") or "").strip()
+        if env_session_secret:
+            return env_session_secret
+        env_auth_key = self.auth_key
+        if env_auth_key:
+            return derive_session_secret(env_auth_key)
+        return self.auth_key_hash
 
     def verify_admin_auth_key(self, auth_key: str) -> bool:
         candidate = str(auth_key or "").strip()

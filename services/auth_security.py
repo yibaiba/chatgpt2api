@@ -9,6 +9,7 @@ import os
 AUTH_HASH_PREFIX = "pbkdf2_sha256"
 AUTH_HASH_ITERATIONS = 260_000
 AUTH_HASH_SALT_BYTES = 16
+SESSION_SECRET_DERIVE_PREFIX = "chatgpt2api-session"
 
 
 def _clean_secret(value: object) -> str:
@@ -51,6 +52,13 @@ def verify_auth_secret(secret: str, stored_value: object) -> bool:
     except (TypeError, ValueError):
         return False
     return hmac.compare_digest(expected, digest_hex)
+
+
+def derive_session_secret(secret: str) -> str:
+    normalized = _clean_secret(secret)
+    if not normalized:
+        raise ValueError("session secret seed is required")
+    return hashlib.sha256(f"{SESSION_SECRET_DERIVE_PREFIX}:{normalized}".encode("utf-8")).hexdigest()
 
 
 def build_signed_token(payload: dict[str, object], secret: str) -> str:

@@ -213,6 +213,36 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_derives_stable_session_secret_from_env_auth_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text("{}", encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            old_env_session_secret = module.os.environ.get("CHATGPT2API_SESSION_SECRET")
+            try:
+                module.os.environ["CHATGPT2API_AUTH_KEY"] = "env-admin-secret"
+                module.os.environ.pop("CHATGPT2API_SESSION_SECRET", None)
+                store = module.ConfigStore(config_file)
+
+                first = store.session_signing_secret
+                second = store.session_signing_secret
+
+                self.assertEqual(first, second)
+                self.assertNotEqual("env-admin-secret", first)
+                self.assertTrue(first)
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+                if old_env_session_secret is None:
+                    module.os.environ.pop("CHATGPT2API_SESSION_SECRET", None)
+                else:
+                    module.os.environ["CHATGPT2API_SESSION_SECRET"] = old_env_session_secret
+
     def test_config_store_public_storage_settings_follow_env_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)
