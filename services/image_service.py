@@ -37,7 +37,9 @@ _BUILD_INFO_TTL = 900  # 15 分钟
 DEFAULT_MODEL = "auto"
 MAX_POW_ATTEMPTS = 500000
 IMAGE_DOWNLOAD_RETRY_STATUSES = (408, 409, 425, 429, 500, 502, 503, 504)
+IMAGE_DOWNLOAD_TIMEOUT_SECONDS = 180
 IMAGE_UPSTREAM_CONNECTION_ERROR_MARKERS = (
+    "curl: (28)",
     "curl: (35)",
     "tls connect error",
     "openssl_internal",
@@ -1184,8 +1186,16 @@ def _format_download_failure(response) -> str:
 
 def _fetch_image_bytes(session: Session, download_url: str) -> bytes:
     last_response = None
+    last_error: Exception | None = None
     for attempt in range(3):
-        response = session.get(download_url, timeout=60)
+        try:
+            response = session.get(download_url, timeout=IMAGE_DOWNLOAD_TIMEOUT_SECONDS)
+        except Exception as exc:
+            last_error = exc
+            if attempt == 2:
+                break
+            time.sleep(attempt + 1)
+            continue
         last_response = response
         if response.ok and response.content:
             return response.content
@@ -1195,6 +1205,10 @@ def _fetch_image_bytes(session: Session, download_url: str) -> bytes:
         if not should_retry or attempt == 2:
             break
         time.sleep(attempt + 1)
+    if last_response is not None:
+        raise ImageGenerationError(_format_download_failure(last_response))
+    if last_error is not None:
+        raise ImageGenerationError(image_stream_error_message(last_error)) from last_error
     raise ImageGenerationError(_format_download_failure(last_response))
 
 

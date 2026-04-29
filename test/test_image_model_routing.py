@@ -113,6 +113,27 @@ class ImageModelRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ImageGenerationError, r"download image failed: HTTP 403: expired"):
             _download_as_base64(session, "https://example.com/image.png")
 
+    def test_download_as_base64_retries_timeout_exception(self) -> None:
+        session = mock.Mock()
+        session.get.side_effect = [
+            Exception("Failed to perform, curl: (28) Operation timed out after 60002 milliseconds with 1703751 bytes received."),
+            self._download_response(200, content=b"image-bytes"),
+        ]
+
+        b64_json = _download_as_base64(session, "https://example.com/image.png")
+
+        self.assertEqual("aW1hZ2UtYnl0ZXM=", b64_json)
+        self.assertEqual(2, session.get.call_count)
+
+    def test_download_as_base64_reports_timeout_as_connection_failure(self) -> None:
+        session = mock.Mock()
+        session.get.side_effect = Exception(
+            "Failed to perform, curl: (28) Operation timed out after 60002 milliseconds with 1703751 bytes received."
+        )
+
+        with self.assertRaisesRegex(ImageGenerationError, r"upstream image connection failed, please retry later"):
+            _download_as_base64(session, "https://example.com/image.png")
+
     def test_regular_picture_payload_without_images_uses_text_message(self) -> None:
         body = _build_regular_picture_v2_body("draw a cat", "parent", "gpt-5-3")
 

@@ -90,14 +90,20 @@ class AccountCapabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(Path(tmp_dir) / "accounts.json")
             service.add_accounts(["token-normal", "token-abnormal", "token-limited", "token-disabled"])
-            service.update_account("token-normal", {"status": "正常"})
-            service.update_account("token-abnormal", {"status": "异常"})
-            service.update_account("token-limited", {"status": "限流"})
-            service.update_account("token-disabled", {"status": "禁用"})
+            with mock.patch.object(
+                type(config),
+                "auto_remove_rate_limited_accounts",
+                new_callable=mock.PropertyMock,
+                return_value=False,
+            ):
+                service.update_account("token-normal", {"status": "正常"})
+                service.update_account("token-abnormal", {"status": "异常"})
+                service.update_account("token-limited", {"status": "限流"})
+                service.update_account("token-disabled", {"status": "禁用"})
 
-            result = service.delete_accounts_by_status(
-                ["token-normal", "token-abnormal", "token-limited", "token-disabled"]
-            )
+                result = service.delete_accounts_by_status(
+                    ["token-normal", "token-abnormal", "token-limited", "token-disabled"]
+                )
 
             self.assertEqual(2, result["removed"])
             self.assertCountEqual(["token-abnormal", "token-disabled"], result["removed_tokens"])
