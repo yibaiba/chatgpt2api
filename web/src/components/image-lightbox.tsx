@@ -66,6 +66,34 @@ export function ImageLightbox({
   onIndexChange,
 }: ImageLightboxProps) {
   const current = images[currentIndex];
+
+  if (!current) return null;
+
+  return (
+    <ImageLightboxContent
+      key={`${open ? "open" : "closed"}:${current.id}`}
+      images={images}
+      current={current}
+      currentIndex={currentIndex}
+      open={open}
+      onOpenChange={onOpenChange}
+      onIndexChange={onIndexChange}
+    />
+  );
+}
+
+type ImageLightboxContentProps = ImageLightboxProps & {
+  current: LightboxImage;
+};
+
+function ImageLightboxContent({
+  images,
+  current,
+  currentIndex,
+  open,
+  onOpenChange,
+  onIndexChange,
+}: ImageLightboxContentProps) {
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < images.length - 1;
   const frameRef = useRef<HTMLDivElement>(null);
@@ -142,16 +170,7 @@ export function ImageLightbox({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, goPrev, goNext, resetTransform, zoomIn, zoomOut]);
 
-  useEffect(() => {
-    if (!open) {
-      resetTransform();
-      return;
-    }
-    resetTransform();
-  }, [open, current?.id, resetTransform]);
-
   const handleDownload = useCallback(() => {
-    if (!current) return;
     const link = document.createElement("a");
     link.href = current.src;
     link.download = `image-${current.id}.png`;
@@ -220,8 +239,6 @@ export function ImageLightbox({
     }
     setIsDragging(false);
   }, []);
-
-  if (!current) return null;
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>

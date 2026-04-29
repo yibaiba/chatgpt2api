@@ -36,6 +36,8 @@ export default function ImageManagerPage() {
     try {
       const nextItems = await listImageConversations();
       setItems(nextItems);
+      const validIds = new Set(nextItems.map((item) => item.id));
+      setSelectedIds((current) => new Set(Array.from(current).filter((id) => validIds.has(id))));
     } catch (error) {
       if (!silent) {
         toast.error(error instanceof Error ? error.message : "加载图片历史失败");
@@ -110,11 +112,6 @@ export default function ImageManagerPage() {
   const allFilteredSelected = filteredItems.length > 0 && selectedFilteredCount === filteredItems.length;
   const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
 
-  useEffect(() => {
-    const validIds = new Set(items.map((item) => item.id));
-    setSelectedIds((current) => new Set(Array.from(current).filter((id) => validIds.has(id))));
-  }, [items]);
-
   const handleDelete = useCallback(async () => {
     if (!deleteConfirm) return;
     try {
@@ -129,9 +126,7 @@ export default function ImageManagerPage() {
         const deletedIds = new Set(deleteConfirm.conversationIds);
         setItems((current) => current.filter((item) => !deletedIds.has(item.id)));
         setSelectedIds((current) => new Set(Array.from(current).filter((id) => !deletedIds.has(id))));
-        if (selectedConversation && deletedIds.has(selectedConversation.id)) {
-          setSelectedConversation(null);
-        }
+        setSelectedConversation((current) => (current && deletedIds.has(current.id) ? null : current));
         toast.success(`已删除 ${deleteConfirm.count} 条会话`);
       } else {
         await deleteImageConversation(deleteConfirm.conversationId);
@@ -141,9 +136,7 @@ export default function ImageManagerPage() {
           next.delete(deleteConfirm.conversationId);
           return next;
         });
-        if (selectedConversation?.id === deleteConfirm.conversationId) {
-          setSelectedConversation(null);
-        }
+        setSelectedConversation((current) => (current?.id === deleteConfirm.conversationId ? null : current));
         toast.success("已删除会话");
       }
     } catch (error) {
@@ -151,21 +144,8 @@ export default function ImageManagerPage() {
     } finally {
       setDeleteConfirm(null);
     }
-  }, [deleteConfirm, selectedConversation?.id]);
+  }, [deleteConfirm]);
 
-  if (isLoading) {
-    return (
-      <div className="flex min-h-[40vh] items-center justify-center">
-        <LoaderCircle className="size-5 animate-spin text-stone-400" />
-      </div>
-    );
-  }
-
-  if (!session || session.role !== "admin") {
-    return null;
-  }
-
-  const historyDisabled = session.image_history_persistence_mode !== "server";
   const toggleSelection = useCallback((conversationId: string, checked: boolean) => {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -190,6 +170,19 @@ export default function ImageManagerPage() {
       return next;
     });
   }, [filteredItems]);
+  const historyDisabled = session?.image_history_persistence_mode !== "server";
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <LoaderCircle className="size-5 animate-spin text-stone-400" />
+      </div>
+    );
+  }
+
+  if (!session || session.role !== "admin") {
+    return null;
+  }
 
   return (
     <div className="space-y-5">
