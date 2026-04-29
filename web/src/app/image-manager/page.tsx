@@ -13,7 +13,7 @@ import { ImageManagerTable } from "@/app/image-manager/table";
 import { useImageManagerFilters } from "@/app/image-manager/use-image-manager-filters";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { syncStoredAuthSession } from "@/lib/auth-session";
+import { syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 import { type AuthSession } from "@/lib/auth-types";
 import { clearImageConversations, deleteImageConversation, listImageConversations, type ImageConversation, type ImageConversationMode } from "@/store/image-conversations";
 
@@ -51,7 +51,7 @@ export default function ImageManagerPage() {
     let cancelled = false;
     const init = async () => {
       try {
-        const nextSession = await syncStoredAuthSession();
+        const nextSession = await syncStoredAuthSessionWithFallback();
         if (cancelled) return;
         if (nextSession.role !== "admin") {
           toast.error("只有管理员可以访问图片管理");
@@ -64,8 +64,10 @@ export default function ImageManagerPage() {
         } else {
           setIsLoading(false);
         }
-      } catch {
-        if (!cancelled) router.replace("/login");
+      } catch (error) {
+        if (cancelled) return;
+        setIsLoading(false);
+        toast.error(error instanceof Error ? error.message : "校验登录状态失败，请稍后重试");
       }
     };
     void init();

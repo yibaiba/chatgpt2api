@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { fetchSystemLogs, type SystemLog, type SystemLogLevel, type SystemLogSource } from "@/lib/api";
-import { syncStoredAuthSession } from "@/lib/auth-session";
+import { syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 
 const SOURCE_LABELS: Record<SystemLogSource, string> = {
   all: "全部来源",
@@ -96,7 +96,7 @@ export default function LogsPage() {
     let cancelled = false;
     const init = async () => {
       try {
-        const session = await syncStoredAuthSession();
+        const session = await syncStoredAuthSessionWithFallback();
         if (cancelled) {
           return;
         }
@@ -106,10 +106,12 @@ export default function LogsPage() {
           return;
         }
         await loadLogs();
-      } catch {
-        if (!cancelled) {
-          router.replace("/login");
+      } catch (error) {
+        if (cancelled) {
+          return;
         }
+        setIsLoading(false);
+        toast.error(error instanceof Error ? error.message : "校验登录状态失败，请稍后重试");
       }
     };
     void init();

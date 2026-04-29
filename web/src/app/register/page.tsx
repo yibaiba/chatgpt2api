@@ -13,7 +13,7 @@ import {
   updateRegisterConfig,
   type RegisterConfig,
 } from "@/lib/api";
-import { syncStoredAuthSession } from "@/lib/auth-session";
+import { syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 
 import { RegisterCard } from "./components/register-card";
 
@@ -94,7 +94,7 @@ export default function RegisterPage() {
     let cancelled = false;
     const init = async () => {
       try {
-        const session = await syncStoredAuthSession();
+        const session = await syncStoredAuthSessionWithFallback();
         if (cancelled) {
           return;
         }
@@ -105,10 +105,12 @@ export default function RegisterPage() {
         }
         setIsAccessReady(true);
         await loadRegister();
-      } catch {
-        if (!cancelled) {
-          router.replace("/login");
+      } catch (error) {
+        if (cancelled) {
+          return;
         }
+        setIsLoading(false);
+        toast.error(error instanceof Error ? error.message : "校验登录状态失败，请稍后重试");
       }
     };
     void init();

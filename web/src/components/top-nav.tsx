@@ -39,9 +39,12 @@ export function TopNav() {
   }, [pathname]);
 
   const handleLogout = async () => {
-    await logout();
-    await clearStoredAuthKey();
-    router.replace("/login");
+    try {
+      await logout();
+    } finally {
+      await clearStoredAuthKey();
+      router.replace("/login");
+    }
   };
 
   if (pathname === "/login") {
