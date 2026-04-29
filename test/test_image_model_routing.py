@@ -20,6 +20,7 @@ from services.image_service import (
     _run_legacy_regular_edit_mode,
     _resolve_upstream_edit_model,
     _resolve_upstream_model,
+    _send_regular_edit_conversation,
     edit_image_result,
     generate_image_result,
 )
@@ -462,6 +463,59 @@ class ImageModelRoutingTests(unittest.TestCase):
             ],
             edit_image_result_mock.call_args_list,
         )
+
+    def test_regular_edit_stream_wraps_tls_errors_as_image_generation_error(self) -> None:
+        with mock.patch(
+            "services.image_service._retry",
+            side_effect=RuntimeError("curl: (35) TLS connect error: error:0A000438:SSL routines::tlsv1 alert internal error"),
+        ):
+            with self.assertRaisesRegex(
+                ImageGenerationError,
+                "upstream image connection failed, please retry later",
+            ):
+                _send_regular_edit_conversation(
+                    session=mock.Mock(),
+                    access_token="token",
+                    device_id="device",
+                    chat_token="chat-token",
+                    proof_token=None,
+                    parent_message_id="parent",
+                    prompt="make it brighter",
+                    model="gpt-5-3",
+                    images=[],
+                    conduit_token="conduit-token",
+                )
+
+    def test_edit_result_normalizes_tls_error_text_from_upstream(self) -> None:
+        session = mock.Mock()
+
+        with (
+            mock.patch("services.image_service._new_session", return_value=(session, "fp")),
+            mock.patch("services.image_service._bootstrap", return_value="device"),
+            mock.patch("services.image_service._upload_image", return_value="file_input"),
+            mock.patch("services.image_service._get_image_dimensions", return_value=(1024, 1024)),
+            mock.patch("services.image_service._chat_requirements", return_value=("chat-token", {})),
+            mock.patch("services.image_service._conversation_init", return_value="conversation_initial"),
+            mock.patch("services.image_service._run_regular_edit_mode", return_value={"conversation_id": "conversation_regular"}),
+            mock.patch(
+                "services.image_service._collect_edit_output",
+                return_value=(
+                    "conversation_regular",
+                    [],
+                    "curl: (35) TLS connect error: error:0A000438:SSL routines::tlsv1 alert internal error",
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ImageGenerationError,
+                "upstream image connection failed, please retry later",
+            ):
+                edit_image_result(
+                    access_token="token",
+                    prompt="make it brighter",
+                    images=[(b"image-data", "reference.png", "image/png")],
+                    model="gpt-image-2",
+                )
 
     def test_create_image_completion_passes_multiple_reference_images(self) -> None:
         service = ChatGPTService(mock.Mock())

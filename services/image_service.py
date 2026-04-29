@@ -37,6 +37,11 @@ _BUILD_INFO_TTL = 900  # 15 分钟
 DEFAULT_MODEL = "auto"
 MAX_POW_ATTEMPTS = 500000
 IMAGE_DOWNLOAD_RETRY_STATUSES = (408, 409, 425, 429, 500, 502, 503, 504)
+IMAGE_UPSTREAM_CONNECTION_ERROR_MARKERS = (
+    "curl: (35)",
+    "tls connect error",
+    "openssl_internal",
+)
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -423,6 +428,14 @@ def is_token_invalid_error(message: str) -> bool:
     )
 
 
+def image_stream_error_message(message: object) -> str:
+    text = str(message or "").strip()
+    lower = text.lower()
+    if any(marker in lower for marker in IMAGE_UPSTREAM_CONNECTION_ERROR_MARKERS):
+        return "upstream image connection failed, please retry later"
+    return text or "image generation failed"
+
+
 def is_retryable_image_output_error(message: str) -> bool:
     text = str(message or "").strip().lower()
     return text in {
@@ -590,7 +603,7 @@ def _send_edit_conversation(
     }
     if conversation_id:
         body["conversation_id"] = conversation_id
-    response = _retry(
+    return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/conversation",
             headers=headers,
@@ -599,10 +612,8 @@ def _send_edit_conversation(
             timeout=180,
         ),
         retries=3,
+        fallback_error="conversation failed",
     )
-    if not response.ok:
-        raise ImageGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
-    return response
 
 
 def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[list[dict], list[dict]]:
@@ -629,6 +640,21 @@ def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[
         for image in images
     ]
     return image_parts, attachments
+
+
+def _request_image_stream(request_fn, *, retries: int, fallback_error: str):
+    try:
+        response = _retry(request_fn, retries=retries)
+    except Exception as exc:
+        raise ImageGenerationError(image_stream_error_message(exc)) from exc
+    if not response.ok:
+        error_text = str(response.text[:400] or "").strip()
+        if not error_text:
+            error_text = f"{fallback_error}: {getattr(response, 'status_code', 'unknown')}"
+        raise ImageGenerationError(
+            image_stream_error_message(error_text),
+        )
+    return response
 
 
 def _build_regular_picture_v2_body(
@@ -720,7 +746,7 @@ def _send_regular_generation_conversation(
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
     body = _build_regular_picture_v2_body(prompt, parent_message_id, model)
-    response = _retry(
+    return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/f/conversation",
             headers=headers,
@@ -729,10 +755,8 @@ def _send_regular_generation_conversation(
             timeout=180,
         ),
         retries=2,
+        fallback_error="f/conversation failed",
     )
-    if not response.ok:
-        raise ImageGenerationError(response.text[:400] or f"f/conversation failed: {response.status_code}")
-    return response
 
 
 def _send_regular_edit_conversation(
@@ -768,7 +792,7 @@ def _send_regular_edit_conversation(
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
     body = _build_regular_picture_v2_body(prompt, parent_message_id, model, images)
-    response = _retry(
+    return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/f/conversation",
             headers=headers,
@@ -777,10 +801,8 @@ def _send_regular_edit_conversation(
             timeout=180,
         ),
         retries=2,
+        fallback_error="f/conversation failed",
     )
-    if not response.ok:
-        raise ImageGenerationError(response.text[:400] or f"f/conversation failed: {response.status_code}")
-    return response
 
 
 def _send_conversation(
@@ -854,7 +876,7 @@ def _send_conversation(
     }
     if conversation_id:
         body["conversation_id"] = conversation_id
-    response = _retry(
+    return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/conversation",
             headers=headers,
@@ -863,10 +885,8 @@ def _send_conversation(
             timeout=180,
         ),
         retries=3,
+        fallback_error="conversation failed",
     )
-    if not response.ok:
-        raise ImageGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
-    return response
 
 
 def _send_thinking_conversation(
@@ -942,7 +962,7 @@ def _send_thinking_conversation(
         },
     }
     # f/conversation 首次请求不传 conversation_id，让服务端自己创建
-    response = _retry(
+    return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/f/conversation",
             headers=headers,
@@ -951,10 +971,8 @@ def _send_thinking_conversation(
             timeout=180,
         ),
         retries=2,
+        fallback_error="f/conversation failed",
     )
-    if not response.ok:
-        raise ImageGenerationError(response.text[:400] or f"f/conversation failed: {response.status_code}")
-    return response
 
 
 def _parse_sse(response) -> dict:
@@ -1553,7 +1571,7 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
             file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)
         if not file_ids:
             if response_text:
-                raise ImageGenerationError(response_text)
+                raise ImageGenerationError(image_stream_error_message(response_text))
             raise ImageGenerationError("no image returned from upstream")
         first_file_id = str(file_ids[0])
         download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
@@ -1716,7 +1734,7 @@ def edit_image_result(
         )
         if not file_ids:
             if response_text:
-                raise ImageGenerationError(response_text)
+                raise ImageGenerationError(image_stream_error_message(response_text))
             raise ImageGenerationError("no image returned from upstream")
         first_file_id = str(file_ids[0])
         download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)

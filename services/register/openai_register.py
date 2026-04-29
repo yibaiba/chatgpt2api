@@ -79,6 +79,25 @@ def _response_json(response: object) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _response_detail_suffix(response: object | None) -> str:
+    data = _response_json(response) if response is not None else {}
+    if not data:
+        return ""
+    return f", detail={json.dumps(data, ensure_ascii=False)}"
+
+
+def _response_error_summary(response: object | None) -> str:
+    data = _response_json(response) if response is not None else {}
+    error_data = data.get("error")
+    if isinstance(error_data, dict):
+        code = str(error_data.get("code") or "").strip()
+        message = str(error_data.get("message") or "").strip()
+        parts = [part for part in (code, message) if part]
+        if parts:
+            return f": {' - '.join(parts)}"
+    return _response_detail_suffix(response)
+
+
 def _make_trace_headers() -> dict[str, str]:
     trace_id = str(random.getrandbits(64))
     parent_id = str(random.getrandbits(64))
@@ -418,14 +437,23 @@ class PlatformRegistrar:
         }
         response, error = request_with_local_retry(self.session, "get", f"{AUTH_BASE}/api/accounts/authorize?{urlencode(params)}", headers=self._navigate_headers(f"{PLATFORM_BASE}/"), allow_redirects=True)
         if response is None or response.status_code != 200:
-            raise RuntimeError(error or f"platform_authorize_http_{getattr(response, 'status_code', 'unknown')}")
+            raise RuntimeError(
+                error
+                or f"platform_authorize_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
+            )
 
     def _register_user(self, email: str, password: str) -> None:
         headers = self._json_headers(f"{AUTH_BASE}/create-account/password")
         headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "username_password_create")
         response, error = request_with_local_retry(self.session, "post", f"{AUTH_BASE}/api/accounts/user/register", json={"username": email, "password": password}, headers=headers)
         if response is None or response.status_code != 200:
-            raise RuntimeError(error or f"user_register_http_{getattr(response, 'status_code', 'unknown')}")
+            data = _response_json(response) if response is not None else {}
+            if data.get("message") == "Failed to create account. Please try again.":
+                self._step("注册失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名", "warning")
+            raise RuntimeError(
+                error
+                or f"user_register_http_{getattr(response, 'status_code', 'unknown')}{_response_detail_suffix(response)}"
+            )
 
     def _send_otp(self) -> None:
         response, error = request_with_local_retry(self.session, "get", f"{AUTH_BASE}/api/accounts/email-otp/send", headers=self._navigate_headers(f"{AUTH_BASE}/create-account/password"), allow_redirects=True)
@@ -442,7 +470,13 @@ class PlatformRegistrar:
         headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "oauth_create_account")
         response, error = request_with_local_retry(self.session, "post", f"{AUTH_BASE}/api/accounts/create_account", json={"name": name, "birthdate": birthdate}, headers=headers)
         if response is None or response.status_code not in (200, 302):
-            raise RuntimeError(error or f"create_account_http_{getattr(response, 'status_code', 'unknown')}")
+            data = _response_json(response) if response is not None else {}
+            if data.get("message") == "Failed to create account. Please try again.":
+                self._step("创建账号失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名", "warning")
+            raise RuntimeError(
+                error
+                or f"create_account_http_{getattr(response, 'status_code', 'unknown')}{_response_detail_suffix(response)}"
+            )
 
     def _login_and_exchange_tokens(self, email: str, password: str, mailbox: dict[str, Any]) -> dict[str, str]:
         code_verifier, code_challenge = _generate_pkce()

@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from services.register.openai_register import PlatformRegistrar
 from services.register_service import RegisterService
 
 
@@ -114,6 +116,93 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertEqual(["token-1"], accounts_service.added_tokens)
             self.assertEqual(["token-1"], accounts_service.refreshed_tokens)
             self.assertTrue(any("模拟注册成功" in item["text"] for item in finished["logs"]))
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload: dict | None = None) -> None:
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class OpenAIRegisterErrorReportingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.session = mock.Mock()
+        self.log = mock.Mock()
+        self.create_session = mock.patch(
+            "services.register.openai_register.create_session",
+            return_value=self.session,
+        )
+        self.create_session.start()
+        self.addCleanup(self.create_session.stop)
+        self.build_sentinel_token = mock.patch(
+            "services.register.openai_register.build_sentinel_token",
+            return_value="sentinel-token",
+        )
+        self.build_sentinel_token.start()
+        self.addCleanup(self.build_sentinel_token.stop)
+        self.registrar = PlatformRegistrar("", {"providers": []}, self.log)
+
+    def tearDown(self) -> None:
+        self.registrar.close()
+
+    def test_platform_authorize_includes_error_code_and_message(self) -> None:
+        response = _FakeResponse(
+            429,
+            {"error": {"code": "rate_limited", "message": "too many attempts"}},
+        )
+
+        with mock.patch(
+            "services.register.openai_register.request_with_local_retry",
+            return_value=(response, None),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"platform_authorize_http_429: rate_limited - too many attempts",
+            ):
+                self.registrar._platform_authorize("demo@example.com")
+
+    def test_register_user_includes_response_detail_and_warning(self) -> None:
+        response = _FakeResponse(
+            400,
+            {"message": "Failed to create account. Please try again.", "trace_id": "trace-1"},
+        )
+
+        with mock.patch(
+            "services.register.openai_register.request_with_local_retry",
+            return_value=(response, None),
+        ):
+            with self.assertRaises(RuntimeError) as context:
+                self.registrar._register_user("demo@example.com", "Password1!")
+
+        self.assertIn("user_register_http_400", str(context.exception))
+        self.assertIn('"trace_id": "trace-1"', str(context.exception))
+        self.log.assert_any_call(
+            "注册失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名",
+            "warning",
+        )
+
+    def test_create_account_includes_response_detail_and_warning(self) -> None:
+        response = _FakeResponse(
+            400,
+            {"message": "Failed to create account. Please try again.", "trace_id": "trace-2"},
+        )
+
+        with mock.patch(
+            "services.register.openai_register.request_with_local_retry",
+            return_value=(response, None),
+        ):
+            with self.assertRaises(RuntimeError) as context:
+                self.registrar._create_account("Demo User", "2000-01-01")
+
+        self.assertIn("create_account_http_400", str(context.exception))
+        self.assertIn('"trace_id": "trace-2"', str(context.exception))
+        self.log.assert_any_call(
+            "创建账号失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名",
+            "warning",
+        )
 
 
 if __name__ == "__main__":
