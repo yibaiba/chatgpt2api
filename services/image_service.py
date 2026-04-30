@@ -25,8 +25,8 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/147.0.0.0 Safari/537.36"
 )
-OAI_CLIENT_BUILD_NUMBER = "6128297"
-OAI_CLIENT_VERSION = "prod-81e0c5cdf6140e8c5db714d613337f4aeab94029"
+OAI_CLIENT_BUILD_NUMBER = "6263762"
+OAI_CLIENT_VERSION = "prod-bb85d27e6e8ee4f71f4c78dbdd215e997ff394d6"
 
 # 动态提取的 build info，随首页 HTML 刷新，默认使用上方硬编码值兜底
 _cached_build_number: str = OAI_CLIENT_BUILD_NUMBER
@@ -116,6 +116,7 @@ def _new_session(access_token: str) -> tuple[Session, dict]:
     ))
     session.headers.update(
         {
+            "Authorization": f"Bearer {access_token}",
             "user-agent": fp.get("user-agent") or USER_AGENT,
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7",
             "origin": BASE_URL,
@@ -518,6 +519,7 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
                 "use_case": "multimodal",
                 "index_for_retrieval": False,
                 "file_name": file_name,
+                "entry_surface": "chat_composer",
             },
             timeout=30,
         ),
@@ -622,7 +624,7 @@ def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[
     image_parts = [
         {
             "content_type": "image_asset_pointer",
-            "asset_pointer": f"file-service://{image.file_id}",
+            "asset_pointer": f"sediment://{image.file_id}",
             "size_bytes": len(image.data),
             "width": image.width,
             "height": image.height,
@@ -700,7 +702,7 @@ def _build_regular_picture_v2_body(
         "system_hints": ["picture_v2"],
         "supports_buffering": True,
         "supported_encodings": ["v1"],
-        "client_prepare_state": "sent",
+        "client_prepare_state": "success",
         "paragen_cot_summary_display_override": "allow",
         "force_parallel_switch": "auto",
         "client_contextual_info": {
@@ -949,7 +951,7 @@ def _send_thinking_conversation(
         "system_hints": ["reason"],
         "supports_buffering": True,
         "supported_encodings": ["v1"],
-        "client_prepare_state": "sent",
+        "client_prepare_state": "success",
         "paragen_cot_summary_display_override": "allow",
         "force_parallel_switch": "auto",
         "client_contextual_info": {
@@ -1159,10 +1161,11 @@ def _collect_edit_output(
 def _fetch_download_url(session: Session, access_token: str, device_id: str, conversation_id: str, file_id: str) -> str:
     is_sediment = file_id.startswith("sed:")
     raw_id = file_id[4:] if is_sediment else file_id
-    if is_sediment:
-        endpoint = f"{BASE_URL}/backend-api/conversation/{conversation_id}/attachment/{raw_id}/download"
-    else:
-        endpoint = f"{BASE_URL}/backend-api/files/{raw_id}/download"
+    # All generated/edited output files use /files/download/ regardless of sed: prefix
+    # (HAR confirms: both sediment:// and file-service:// outputs use /files/download/{id}?conversation_id=...)
+    endpoint = f"{BASE_URL}/backend-api/files/download/{raw_id}"
+    if conversation_id:
+        endpoint += f"?conversation_id={conversation_id}&inline=false"
     response = session.get(
         endpoint,
         headers={
