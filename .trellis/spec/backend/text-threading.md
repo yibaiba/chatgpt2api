@@ -24,6 +24,11 @@
 - Backend transport:
   - `TextBackend.complete(prompt, model="auto", *, conversation_id="", parent_message_id="", allow_conversation_fallback=True) -> dict`
   - `TextBackend.stream(prompt, model="auto", *, conversation_id="", parent_message_id="", allow_conversation_fallback=True) -> Iterator[dict]`
+  - Current ChatGPT web text transport:
+    - obtain `chat_token + proofofwork` from the existing single-step `sentinel/chat-requirements` flow
+    - call `/backend-api/f/conversation/prepare` to get `conduit_token`
+    - send text via `/backend-api/f/conversation` with `openai-sentinel-chat-requirements-token`, optional `openai-sentinel-proof-token`, and `x-conduit-token`
+    - do **not** require `sentinel/chat-requirements prepare/finalize` or turnstile solving for the current server-side text path
 
 ### 3. Contracts
 
