@@ -181,6 +181,10 @@ class TextBackend:
         normalized_model = str(model or "auto").strip() or "auto"
         return normalized_prompt, normalized_model
 
+    @staticmethod
+    def _should_retry_with_auto(message: str, model: str) -> bool:
+        return str(model or "").strip() != "auto" and is_conversation_forbidden_error(message)
+
     def _open_conversation(
         self,
         prompt: str,
@@ -215,6 +219,7 @@ class TextBackend:
             active_parent_message_id = raw_parent_message_id or str(uuid.uuid4())
             if not active_conversation_id:
                 active_conversation_id = _conversation_init(session, self.access_token, device_id)
+            active_model = normalized_model
             try:
                 response = _send_text_conversation(
                     session,
@@ -224,11 +229,31 @@ class TextBackend:
                     proof_token,
                     active_parent_message_id,
                     normalized_prompt,
-                    normalized_model,
+                    active_model,
                     conversation_id=active_conversation_id,
                 )
             except TextBackendError as exc:
-                if active_conversation_id and is_conversation_forbidden_error(str(exc)):
+                recovered = False
+                if self._should_retry_with_auto(str(exc), active_model):
+                    try:
+                        response = _send_text_conversation(
+                            session,
+                            self.access_token,
+                            device_id,
+                            chat_token,
+                            proof_token,
+                            active_parent_message_id,
+                            normalized_prompt,
+                            "auto",
+                            conversation_id=active_conversation_id,
+                        )
+                        active_model = "auto"
+                        recovered = True
+                    except TextBackendError as retry_exc:
+                        exc = retry_exc
+                if recovered:
+                    pass
+                elif active_conversation_id and is_conversation_forbidden_error(str(exc)):
                     if conversation_id and not allow_conversation_fallback:
                         raise TextConversationExpiredError("thread conversation expired") from exc
                     if not allow_conversation_fallback:
@@ -241,13 +266,13 @@ class TextBackend:
                         proof_token,
                         active_parent_message_id,
                         normalized_prompt,
-                        normalized_model,
+                        active_model,
                         conversation_id="",
                     )
                     active_conversation_id = ""
                 else:
                     raise
-            return session, response, active_conversation_id, normalized_model
+            return session, response, active_conversation_id, active_model
         except Exception:
             session.close()
             raise

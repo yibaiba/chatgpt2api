@@ -624,7 +624,7 @@ def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[
     image_parts = [
         {
             "content_type": "image_asset_pointer",
-            "asset_pointer": f"sediment://{image.file_id}",
+            "asset_pointer": f"file-service://{image.file_id}",
             "size_bytes": len(image.data),
             "width": image.width,
             "height": image.height,
