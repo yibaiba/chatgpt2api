@@ -16,6 +16,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 |-------|-------------|--------|
 | [Auth and Permissions](./auth-and-permissions.md) | Role-based auth, admin-only routes, and normal-user image quota contracts | Filled |
 | [Image History](./image-history.md) | Server-side image conversation persistence with per-user visibility and admin global access | Filled |
+| [Text Threading](./text-threading.md) | Server-managed threaded text conversations, moderation, and upstream state reuse | Filled |
 | [Network and Proxy](./network-and-proxy.md) | Global backend proxy config, admin API, and outbound session wiring | Filled |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |

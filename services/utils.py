@@ -23,6 +23,7 @@ IMAGE_MODELS = set(SUPPORTED_IMAGE_MODELS)
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ASPECT_RATIO_PREFIX_RE = re.compile(r"^\s*Make the aspect ratio\s+\S+\s*,\s*", re.IGNORECASE)
 BLOCKED_PROMPT_ERROR_PREFIX = "prompt contains blocked word"
+BLOCKED_RESPONSE_ERROR_PREFIX = "response contains blocked word"
 
 
 def anonymize_token(token: object) -> str:
@@ -195,15 +196,48 @@ def find_sensitive_word(text: object, sensitive_words: object) -> str | None:
     return None
 
 
-def ensure_prompt_not_blocked(prompt: object, *, enabled: bool, sensitive_words: object) -> None:
+def find_sensitive_word_match(text: object, sensitive_words: object) -> tuple[str, int, int] | None:
+    normalized_text = str(text or "")
+    if not normalized_text or not isinstance(sensitive_words, (list, tuple, set)):
+        return None
+    best_match: tuple[str, int, int] | None = None
+    for item in sensitive_words:
+        word = str(item or "").strip()
+        if not word:
+            continue
+        match = re.search(re.escape(word), normalized_text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        start, end = match.span()
+        if best_match is None or start < best_match[1]:
+            best_match = (word, start, end)
+    return best_match
+
+
+def ensure_text_not_blocked(
+    text: object,
+    *,
+    enabled: bool,
+    sensitive_words: object,
+    error_prefix: str = BLOCKED_PROMPT_ERROR_PREFIX,
+) -> None:
     if not enabled:
         return
-    blocked_word = find_sensitive_word(prompt, sensitive_words)
+    blocked_word = find_sensitive_word(text, sensitive_words)
     if not blocked_word:
         return
     raise HTTPException(
         status_code=400,
-        detail={"error": f"{BLOCKED_PROMPT_ERROR_PREFIX}: {blocked_word}"},
+        detail={"error": f"{error_prefix}: {blocked_word}"},
+    )
+
+
+def ensure_prompt_not_blocked(prompt: object, *, enabled: bool, sensitive_words: object) -> None:
+    ensure_text_not_blocked(
+        prompt,
+        enabled=enabled,
+        sensitive_words=sensitive_words,
+        error_prefix=BLOCKED_PROMPT_ERROR_PREFIX,
     )
 
 

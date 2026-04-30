@@ -26,6 +26,10 @@ class TextBackendError(Exception):
     pass
 
 
+class TextConversationExpiredError(TextBackendError):
+    pass
+
+
 def _close_response(response) -> None:
     close = getattr(response, "close", None)
     if callable(close):
@@ -123,6 +127,8 @@ def _send_text_conversation(
 def _iter_text_sse_events(response) -> Iterator[dict[str, object]]:
     conversation_id = ""
     latest_text = ""
+    latest_message_id = ""
+    last_emitted_message_id = ""
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -145,16 +151,22 @@ def _iter_text_sse_events(response) -> Iterator[dict[str, object]]:
         if isinstance(data, dict):
             conversation_id = str(data.get("conversation_id") or conversation_id)
         message = obj.get("message") or {}
+        if isinstance(message, dict):
+            latest_message_id = str(message.get("id") or latest_message_id)
         content = message.get("content") or {}
         if content.get("content_type") != "text":
             continue
         parts = content.get("parts") or []
         next_text = str(parts[0] or "").strip() if parts else ""
-        if not next_text or next_text == latest_text:
+        if not next_text:
+            continue
+        if next_text == latest_text and latest_message_id == last_emitted_message_id:
             continue
         latest_text = next_text
+        last_emitted_message_id = latest_message_id
         yield {
             "conversation_id": conversation_id,
+            "parent_message_id": latest_message_id,
             "text": latest_text,
         }
 
@@ -169,7 +181,15 @@ class TextBackend:
         normalized_model = str(model or "auto").strip() or "auto"
         return normalized_prompt, normalized_model
 
-    def _open_conversation(self, prompt: str, model: str):
+    def _open_conversation(
+        self,
+        prompt: str,
+        model: str,
+        *,
+        conversation_id: str = "",
+        parent_message_id: str = "",
+        allow_conversation_fallback: bool = True,
+    ):
         normalized_prompt, normalized_model = self._normalize_request(prompt, model)
         if not self.access_token:
             raise TextBackendError("token is required")
@@ -188,8 +208,13 @@ class TextBackend:
                     user_agent=USER_AGENT,
                     proof_config=_pow_config(USER_AGENT),
                 )
-            parent_message_id = str(uuid.uuid4())
-            conversation_id = _conversation_init(session, self.access_token, device_id)
+            active_conversation_id = str(conversation_id or "").strip()
+            raw_parent_message_id = str(parent_message_id or "").strip()
+            if conversation_id and not raw_parent_message_id:
+                raise TextBackendError("parent_message_id is required")
+            active_parent_message_id = raw_parent_message_id or str(uuid.uuid4())
+            if not active_conversation_id:
+                active_conversation_id = _conversation_init(session, self.access_token, device_id)
             try:
                 response = _send_text_conversation(
                     session,
@@ -197,33 +222,52 @@ class TextBackend:
                     device_id,
                     chat_token,
                     proof_token,
-                    parent_message_id,
+                    active_parent_message_id,
                     normalized_prompt,
                     normalized_model,
-                    conversation_id=conversation_id,
+                    conversation_id=active_conversation_id,
                 )
             except TextBackendError as exc:
-                if conversation_id and is_conversation_forbidden_error(str(exc)):
+                if active_conversation_id and is_conversation_forbidden_error(str(exc)):
+                    if conversation_id and not allow_conversation_fallback:
+                        raise TextConversationExpiredError("thread conversation expired") from exc
+                    if not allow_conversation_fallback:
+                        raise
                     response = _send_text_conversation(
                         session,
                         self.access_token,
                         device_id,
                         chat_token,
                         proof_token,
-                        parent_message_id,
+                        active_parent_message_id,
                         normalized_prompt,
                         normalized_model,
                         conversation_id="",
                     )
+                    active_conversation_id = ""
                 else:
                     raise
-            return session, response, conversation_id, normalized_model
+            return session, response, active_conversation_id, normalized_model
         except Exception:
             session.close()
             raise
 
-    def complete(self, prompt: str, model: str = "auto") -> dict[str, object]:
-        session, response, conversation_id, normalized_model = self._open_conversation(prompt, model)
+    def complete(
+        self,
+        prompt: str,
+        model: str = "auto",
+        *,
+        conversation_id: str = "",
+        parent_message_id: str = "",
+        allow_conversation_fallback: bool = True,
+    ) -> dict[str, object]:
+        session, response, conversation_id, normalized_model = self._open_conversation(
+            prompt,
+            model,
+            conversation_id=conversation_id,
+            parent_message_id=parent_message_id,
+            allow_conversation_fallback=allow_conversation_fallback,
+        )
         try:
             latest_event: dict[str, object] | None = None
             for event in _iter_text_sse_events(response):
@@ -236,27 +280,45 @@ class TextBackend:
                 "model": normalized_model,
                 "text": text,
                 "conversation_id": str((latest_event or {}).get("conversation_id") or conversation_id),
+                "parent_message_id": str((latest_event or {}).get("parent_message_id") or ""),
             }
         finally:
             _close_response(response)
             session.close()
 
-    def stream(self, prompt: str, model: str = "auto") -> Iterator[dict[str, object]]:
-        session, response, conversation_id, normalized_model = self._open_conversation(prompt, model)
+    def stream(
+        self,
+        prompt: str,
+        model: str = "auto",
+        *,
+        conversation_id: str = "",
+        parent_message_id: str = "",
+        allow_conversation_fallback: bool = True,
+    ) -> Iterator[dict[str, object]]:
+        session, response, conversation_id, normalized_model = self._open_conversation(
+            prompt,
+            model,
+            conversation_id=conversation_id,
+            parent_message_id=parent_message_id,
+            allow_conversation_fallback=allow_conversation_fallback,
+        )
         created = time.time_ns() // 1_000_000_000
 
         def generate() -> Iterator[dict[str, object]]:
             has_text = False
             latest_conversation_id = conversation_id
+            latest_parent_message_id = ""
             try:
                 for event in _iter_text_sse_events(response):
                     latest_conversation_id = str(event.get("conversation_id") or latest_conversation_id)
+                    latest_parent_message_id = str(event.get("parent_message_id") or latest_parent_message_id)
                     has_text = True
                     yield {
                         "created": created,
                         "model": normalized_model,
                         "text": str(event.get("text") or ""),
                         "conversation_id": latest_conversation_id,
+                        "parent_message_id": latest_parent_message_id,
                     }
                 if not has_text:
                     raise TextBackendError("no text returned from upstream")

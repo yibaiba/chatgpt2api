@@ -99,6 +99,8 @@ class ChatCompletionRequest(BaseModel):
     stream: bool | None = None
     modalities: list[str] | None = None
     messages: list[dict[str, object]] | None = None
+    thread_id: str | None = None
+    threaded: bool | None = None
 
 
 class ResponseCreateRequest(BaseModel):
@@ -110,6 +112,8 @@ class ResponseCreateRequest(BaseModel):
     tools: list[dict[str, object]] | None = None
     tool_choice: object | None = None
     stream: bool | None = None
+    thread_id: str | None = None
+    threaded: bool | None = None
 
 
 class AnthropicMessageRequest(BaseModel):
@@ -119,6 +123,8 @@ class AnthropicMessageRequest(BaseModel):
     messages: list[dict[str, object]] | None = None
     system: object | None = None
     stream: bool | None = None
+    thread_id: str | None = None
+    threaded: bool | None = None
 
 
 class CPAPoolCreateRequest(BaseModel):
@@ -1345,10 +1351,10 @@ def create_app() -> FastAPI:
         if not is_image_chat_request(payload):
             if bool(payload.get("stream")):
                 return StreamingResponse(
-                    chatgpt_service.create_text_completion_stream(payload),
+                    chatgpt_service.create_text_completion_stream(payload, identity),
                     media_type="text/event-stream",
                 )
-            return await run_in_threadpool(chatgpt_service.create_text_completion, payload)
+            return await run_in_threadpool(chatgpt_service.create_text_completion, payload, identity)
         ensure_prompt_not_blocked(
             extract_chat_prompt(payload),
             enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
@@ -1375,7 +1381,7 @@ def create_app() -> FastAPI:
         identity = require_session(request, authorization)
         payload = body.model_dump(mode="python")
         if not has_response_image_generation_tool(payload):
-            return await run_in_threadpool(chatgpt_service.create_text_response, payload)
+            return await run_in_threadpool(chatgpt_service.create_text_response, payload, identity)
         ensure_prompt_not_blocked(
             extract_response_prompt(payload.get("input")),
             enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
@@ -1406,14 +1412,14 @@ def create_app() -> FastAPI:
     ):
         _ = anthropic_version
         auth_header = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
-        require_session(request, auth_header)
+        identity = require_session(request, auth_header)
         payload = body.model_dump(mode="python")
         if bool(payload.get("stream")):
             return StreamingResponse(
-                chatgpt_service.stream_message(payload),
+                chatgpt_service.stream_message(payload, identity),
                 media_type="text/event-stream",
             )
-        return await run_in_threadpool(chatgpt_service.create_message, payload)
+        return await run_in_threadpool(chatgpt_service.create_message, payload, identity)
 
     # ── CPA multi-pool endpoints ────────────────────────────────────
 

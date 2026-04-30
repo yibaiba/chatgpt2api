@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from services import api as api_module
 from services import chatgpt_service as chatgpt_service_module
+from services.text_thread_service import TextThreadService
 
 
 class _FakeThread:
@@ -21,31 +22,40 @@ class _FakeTextBackend:
     calls: list[dict[str, object]] = []
     stream_calls: list[dict[str, object]] = []
     complete_text = "backend reply"
+    complete_conversation_id = "conv-initial"
+    complete_parent_message_id = "msg-initial"
     stream_texts = ["hello", "hello world"]
 
     def __init__(self, access_token: str):
         self.access_token = access_token
 
-    def complete(self, prompt: str, model: str = "auto") -> dict[str, object]:
+    def complete(self, prompt: str, model: str = "auto", **kwargs: object) -> dict[str, object]:
         type(self).calls.append(
             {
                 "access_token": self.access_token,
                 "prompt": prompt,
                 "model": model,
+                "conversation_id": kwargs.get("conversation_id", ""),
+                "parent_message_id": kwargs.get("parent_message_id", ""),
+                "allow_conversation_fallback": kwargs.get("allow_conversation_fallback", True),
             }
         )
         return {
             "created": 123,
             "model": model,
             "text": type(self).complete_text,
+            "conversation_id": kwargs.get("conversation_id") or type(self).complete_conversation_id,
+            "parent_message_id": type(self).complete_parent_message_id,
         }
 
-    def stream(self, prompt: str, model: str = "auto"):
+    def stream(self, prompt: str, model: str = "auto", **kwargs: object):
         type(self).stream_calls.append(
             {
                 "access_token": self.access_token,
                 "prompt": prompt,
                 "model": model,
+                "conversation_id": kwargs.get("conversation_id", ""),
+                "parent_message_id": kwargs.get("parent_message_id", ""),
             }
         )
         for text in type(self).stream_texts:
@@ -53,6 +63,8 @@ class _FakeTextBackend:
                 "created": 123,
                 "model": model,
                 "text": text,
+                "conversation_id": kwargs.get("conversation_id") or type(self).complete_conversation_id,
+                "parent_message_id": type(self).complete_parent_message_id,
             }
 
 
@@ -111,6 +123,8 @@ class TextApiTests(unittest.TestCase):
         _FakeTextBackend.calls = []
         _FakeTextBackend.stream_calls = []
         _FakeTextBackend.complete_text = "backend reply"
+        _FakeTextBackend.complete_conversation_id = "conv-initial"
+        _FakeTextBackend.complete_parent_message_id = "msg-initial"
         _FakeTextBackend.stream_texts = ["hello", "hello world"]
         self.auth_header = {"Authorization": "Bearer test-auth"}
         self.auth_service = _FakeAuthService()
@@ -118,6 +132,8 @@ class TextApiTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.fake_config = _FakeConfig(Path(self.temp_dir.name) / "images")
+        self.thread_service = TextThreadService(Path(self.temp_dir.name) / "text_threads.json")
+        self.admin_identity = {"id": "admin", "role": "admin", "name": "管理员"}
         self.patches = [
             mock.patch.object(api_module, "auth_service", self.auth_service),
             mock.patch.object(api_module, "account_service", self.account_service),
@@ -126,6 +142,7 @@ class TextApiTests(unittest.TestCase):
             mock.patch.object(api_module, "start_remote_account_sync_watcher", lambda _stop_event: _FakeThread()),
             mock.patch.object(chatgpt_service_module, "config", self.fake_config),
             mock.patch.object(chatgpt_service_module, "TextBackend", _FakeTextBackend),
+            mock.patch.object(chatgpt_service_module, "text_thread_service", self.thread_service),
         ]
         for patcher in self.patches:
             patcher.start()
@@ -281,6 +298,193 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual("prompt contains blocked word: nsfw", response.json()["detail"]["error"])
         self.assertEqual([], _FakeTextBackend.calls)
 
+    def test_threaded_chat_completions_create_and_reuse_thread(self) -> None:
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "start thread"}],
+                "threaded": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        thread_id = payload["thread_id"]
+        self.assertTrue(thread_id)
+        stored_thread = self.thread_service.get_thread(self.admin_identity, thread_id)
+        self.assertIsNotNone(stored_thread)
+        self.assertEqual("conv-initial", stored_thread["conversation_id"])
+        self.assertEqual("msg-initial", stored_thread["parent_message_id"])
+        self.assertEqual("", _FakeTextBackend.calls[-1]["conversation_id"])
+        self.assertEqual("", _FakeTextBackend.calls[-1]["parent_message_id"])
+
+        _FakeTextBackend.complete_text = "thread reply 2"
+        _FakeTextBackend.complete_parent_message_id = "msg-second"
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "continue thread"}],
+                "thread_id": thread_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(thread_id, payload["thread_id"])
+        self.assertEqual("thread reply 2", payload["choices"][0]["message"]["content"])
+        self.assertEqual("conv-initial", _FakeTextBackend.calls[-1]["conversation_id"])
+        self.assertEqual("msg-initial", _FakeTextBackend.calls[-1]["parent_message_id"])
+        stored_thread = self.thread_service.get_thread(self.admin_identity, thread_id)
+        self.assertEqual("msg-second", stored_thread["parent_message_id"])
+
+    def test_threaded_chat_completions_reject_unknown_thread(self) -> None:
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "continue thread"}],
+                "thread_id": "missing-thread",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual("thread not found", response.json()["detail"]["error"])
+        self.assertEqual([], _FakeTextBackend.calls)
+
+    def test_threaded_chat_completions_block_sensitive_output_and_keep_thread_state_in_sync(self) -> None:
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "start thread"}],
+                "threaded": True,
+            },
+        )
+        thread_id = response.json()["thread_id"]
+
+        self.fake_config.sensitive_word_filter_enabled = True
+        self.fake_config.sensitive_words = ["nsfw"]
+        _FakeTextBackend.complete_text = "contains NSFW output"
+        _FakeTextBackend.complete_parent_message_id = "msg-blocked"
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "continue thread"}],
+                "thread_id": thread_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual("response contains blocked word: nsfw", response.json()["detail"]["error"])
+        stored_thread = self.thread_service.get_thread(self.admin_identity, thread_id)
+        self.assertEqual("msg-blocked", stored_thread["parent_message_id"])
+        self.assertEqual("response contains blocked word: nsfw", stored_thread["last_error"])
+
+    def test_threaded_chat_completions_stream_create_and_reuse_thread(self) -> None:
+        with self.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "hello"}],
+                "threaded": True,
+                "stream": True,
+            },
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            lines = [line for line in response.iter_lines() if line]
+
+        payloads = [json.loads(line[6:]) for line in lines if line.startswith("data: {")]
+        thread_id = next(str(payload.get("thread_id") or "") for payload in payloads if payload.get("thread_id"))
+        self.assertTrue(thread_id)
+        streamed_text = "".join(
+            payload["choices"][0]["delta"].get("content", "")
+            for payload in payloads
+            if isinstance(payload, dict)
+        )
+        self.assertEqual(streamed_text, "hello world")
+        self.assertEqual(payloads[-1]["choices"][0]["finish_reason"], "stop")
+        stored_thread = self.thread_service.get_thread(self.admin_identity, thread_id)
+        self.assertIsNotNone(stored_thread)
+        self.assertEqual("conv-initial", stored_thread["conversation_id"])
+        self.assertEqual("msg-initial", stored_thread["parent_message_id"])
+        self.assertEqual("", _FakeTextBackend.stream_calls[-1]["conversation_id"])
+        self.assertEqual("", _FakeTextBackend.stream_calls[-1]["parent_message_id"])
+
+        _FakeTextBackend.stream_texts = ["again", "again reply"]
+        _FakeTextBackend.complete_parent_message_id = "msg-stream-second"
+        with self.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "continue"}],
+                "thread_id": thread_id,
+                "stream": True,
+            },
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            lines = [line for line in response.iter_lines() if line]
+
+        payloads = [json.loads(line[6:]) for line in lines if line.startswith("data: {")]
+        streamed_text = "".join(
+            payload["choices"][0]["delta"].get("content", "")
+            for payload in payloads
+            if isinstance(payload, dict)
+        )
+        self.assertEqual(streamed_text, "again reply")
+        self.assertEqual("conv-initial", _FakeTextBackend.stream_calls[-1]["conversation_id"])
+        self.assertEqual("msg-initial", _FakeTextBackend.stream_calls[-1]["parent_message_id"])
+        stored_thread = self.thread_service.get_thread(self.admin_identity, thread_id)
+        self.assertEqual("msg-stream-second", stored_thread["parent_message_id"])
+
+    def test_threaded_chat_completions_stream_content_filter_truncates_unsafe_suffix(self) -> None:
+        self.fake_config.sensitive_word_filter_enabled = True
+        self.fake_config.sensitive_words = ["nsfw"]
+        _FakeTextBackend.stream_texts = ["safe", "safe ns", "safe nsfw content"]
+        _FakeTextBackend.complete_parent_message_id = "msg-stream-blocked"
+
+        with self.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "hello"}],
+                "threaded": True,
+                "stream": True,
+            },
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            lines = [line for line in response.iter_lines() if line]
+
+        payloads = [json.loads(line[6:]) for line in lines if line.startswith("data: {")]
+        streamed_text = "".join(
+            payload["choices"][0]["delta"].get("content", "")
+            for payload in payloads
+            if isinstance(payload, dict)
+        )
+        self.assertEqual(streamed_text, "safe ")
+        self.assertEqual(payloads[-1]["choices"][0]["finish_reason"], "content_filter")
+        self.assertEqual(payloads[-1]["moderation_error"], "response contains blocked word: nsfw")
+        self.assertNotIn("nsfw", streamed_text.casefold())
+        thread_id = next(str(payload.get("thread_id") or "") for payload in payloads if payload.get("thread_id"))
+        self.assertTrue(thread_id)
+        stored_thread = self.thread_service.get_thread(self.admin_identity, thread_id)
+        self.assertEqual("msg-stream-blocked", stored_thread["parent_message_id"])
+        self.assertEqual("response contains blocked word: nsfw", stored_thread["last_error"])
+
     def test_anthropic_messages_use_text_backend_without_image_quota(self) -> None:
         response = self.client.post(
             "/v1/messages",
@@ -323,6 +527,26 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual("prompt contains blocked word: violence", response.json()["detail"]["error"])
         self.assertEqual([], _FakeTextBackend.calls)
+
+    def test_threaded_anthropic_messages_return_thread_id(self) -> None:
+        response = self.client.post(
+            "/v1/messages",
+            headers={
+                "x-api-key": "test-auth",
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-sonnet-4",
+                "messages": [{"role": "user", "content": "hello anthropic"}],
+                "threaded": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["thread_id"])
+        stored_thread = self.thread_service.get_thread(self.admin_identity, payload["thread_id"])
+        self.assertIsNotNone(stored_thread)
 
     def test_anthropic_messages_stream_use_text_backend_without_image_quota(self) -> None:
         with self.client.stream(

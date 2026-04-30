@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import webConfig from "@/constants/common-env";
 import { getCachedOrSyncAuthSession } from "@/lib/auth-session";
 import { logout } from "@/lib/api";
+import { clearPromptReviewStorage } from "@/lib/prompt-review-storage";
 import type { AuthSession } from "@/lib/auth-types";
 import { clearStoredAuthKey } from "@/store/auth";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ export function TopNav() {
     try {
       await logout();
     } finally {
+      clearPromptReviewStorage();
       await clearStoredAuthKey();
       router.replace("/login");
     }
@@ -55,6 +57,7 @@ export function TopNav() {
     session?.role === "admin"
       ? [
           { href: "/image", label: "画图" },
+          { href: "/prompt-review", label: "审查" },
           { href: "/image-manager", label: "图片管理" },
           { href: "/accounts", label: "号池管理" },
           { href: "/register", label: "注册" },

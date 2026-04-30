@@ -1,6 +1,7 @@
 import axios, {AxiosError, AxiosHeaders, type AxiosRequestConfig, type InternalAxiosRequestConfig} from "axios";
 
 import webConfig from "@/constants/common-env";
+import {clearPromptReviewStorage} from "@/lib/prompt-review-storage";
 import {clearStoredAuthKey} from "@/store/auth";
 
 type RequestConfig = AxiosRequestConfig & {
@@ -25,6 +26,7 @@ request.interceptors.response.use(
         if (status === 401 && shouldRedirect && typeof window !== "undefined") {
             // Avoid redirect loop — only redirect if not already on /login
             if (!window.location.pathname.startsWith("/login")) {
+                clearPromptReviewStorage();
                 await clearStoredAuthKey();
                 window.location.replace("/login");
                 // Return a never-resolving promise to prevent further error handling

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { History, KeyRound, Link2, LoaderCircle, Save, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -160,6 +161,9 @@ export function ConfigCard() {
             <p className="text-xs text-stone-500">
               按子串匹配，忽略大小写；建议只填写明确需要拦截的关键词，避免误伤正常 prompt。
             </p>
+            <Button asChild variant="outline" className="h-10 rounded-xl border-stone-200 bg-white text-stone-700">
+              <Link href="/prompt-review">打开 Prompt 审查工作台</Link>
+            </Button>
           </div>
 
           <div className="space-y-2 md:col-span-2">

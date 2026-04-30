@@ -17,8 +17,10 @@ from services.image_service import (
     is_retryable_image_output_error,
     is_token_invalid_error,
 )
-from services.text_backend import TextBackend, TextBackendError
+from services.text_backend import TextBackend, TextBackendError, TextConversationExpiredError
+from services.text_thread_service import text_thread_service
 from services.utils import (
+    BLOCKED_RESPONSE_ERROR_PREFIX,
     build_chat_image_completion,
     ensure_prompt_not_blocked,
     extract_assistant_history_messages,
@@ -30,6 +32,8 @@ from services.utils import (
     extract_response_prompt,
     has_response_image_generation_tool,
     is_image_chat_request,
+    find_sensitive_word,
+    find_sensitive_word_match,
     parse_image_count,
     strip_assistant_history_prefix,
     SUPPORTED_API_MODELS,
@@ -248,13 +252,14 @@ class ChatGPTService:
         role: str | None = None,
         content: str | None = None,
         finish_reason: str | None = None,
+        extra: dict[str, object] | None = None,
     ) -> dict[str, object]:
         delta: dict[str, object] = {}
         if role:
             delta["role"] = role
         if content:
             delta["content"] = content
-        return {
+        payload = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
@@ -267,6 +272,56 @@ class ChatGPTService:
                 }
             ],
         }
+        if isinstance(extra, dict):
+            payload.update(extra)
+        return payload
+
+    @staticmethod
+    def _stream_sensitive_words() -> list[str]:
+        if not bool(getattr(config, "sensitive_word_filter_enabled", False)):
+            return []
+        return [str(item or "").strip() for item in getattr(config, "sensitive_words", []) if str(item or "").strip()]
+
+    def _save_thread_state(
+        self,
+        *,
+        identity: dict[str, object],
+        thread_id: str,
+        conversation_id: str,
+        parent_message_id: str,
+        model: str,
+        last_error: str | None = None,
+    ) -> str:
+        if not conversation_id or not parent_message_id:
+            raise HTTPException(status_code=502, detail={"error": "thread state missing from upstream"})
+        if thread_id:
+            saved_thread = text_thread_service.update_thread(
+                identity,
+                thread_id,
+                conversation_id=conversation_id,
+                parent_message_id=parent_message_id,
+                model=model,
+                last_error=last_error,
+            )
+            if saved_thread is None:
+                raise self._thread_error("thread not found", status_code=404)
+            return str(saved_thread.get("id") or "")
+        saved_thread = text_thread_service.create_thread(
+            identity,
+            conversation_id=conversation_id,
+            parent_message_id=parent_message_id,
+            model=model,
+            last_error=last_error,
+        )
+        return str(saved_thread.get("id") or "")
+
+    @staticmethod
+    def _extract_thread_id_from_openai_chunks(chunks: list[dict[str, object]]) -> str | None:
+        for chunk in chunks:
+            thread_id = str(chunk.get("thread_id") or "").strip()
+            if thread_id:
+                return thread_id
+        return None
 
     @staticmethod
     def _encode_sse_data(payload: dict[str, object] | str) -> str:
@@ -313,7 +368,270 @@ class ChatGPTService:
             sensitive_words=getattr(config, "sensitive_words", []),
         )
 
-    def create_text_completion(self, body: dict[str, object]) -> dict[str, object]:
+    @staticmethod
+    def _thread_request(body: dict[str, object]) -> tuple[bool, str]:
+        thread_id = str(body.get("thread_id") or "").strip()
+        threaded = bool(body.get("threaded")) or bool(thread_id)
+        return threaded, thread_id
+
+    @staticmethod
+    def _thread_error(message: str, *, status_code: int) -> HTTPException:
+        return HTTPException(status_code=status_code, detail={"error": message})
+
+    @staticmethod
+    def _thread_state_from_result(backend_result: dict[str, object]) -> tuple[str, str]:
+        conversation_id = str(backend_result.get("conversation_id") or "").strip()
+        parent_message_id = str(backend_result.get("parent_message_id") or "").strip()
+        if not conversation_id or not parent_message_id:
+            raise HTTPException(status_code=502, detail={"error": "thread state missing from upstream"})
+        return conversation_id, parent_message_id
+
+    @staticmethod
+    def _apply_thread_id(payload: dict[str, object], thread_id: str | None) -> dict[str, object]:
+        if thread_id:
+            payload["thread_id"] = thread_id
+        return payload
+
+    @staticmethod
+    def _is_output_blocked(text: str) -> str | None:
+        if not bool(getattr(config, "sensitive_word_filter_enabled", False)):
+            return None
+        return find_sensitive_word(text, getattr(config, "sensitive_words", []))
+
+    def _complete_text_request(
+        self,
+        *,
+        identity: dict[str, object],
+        body: dict[str, object],
+        prompt: str,
+        model: str,
+        history_source: object,
+    ) -> tuple[dict[str, object], str | None]:
+        self._enforce_sensitive_word_filter(prompt)
+
+        threaded, thread_id = self._thread_request(body)
+        existing_thread: dict[str, object] | None = None
+        backend_kwargs: dict[str, object] = {}
+        if threaded:
+            if thread_id:
+                existing_thread = text_thread_service.get_thread(identity, thread_id)
+                if existing_thread is None:
+                    raise self._thread_error("thread not found", status_code=404)
+                backend_kwargs = {
+                    "conversation_id": str(existing_thread.get("conversation_id") or ""),
+                    "parent_message_id": str(existing_thread.get("parent_message_id") or ""),
+                    "allow_conversation_fallback": False,
+                }
+        try:
+            backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model, **backend_kwargs)
+        except TextConversationExpiredError as exc:
+            raise self._thread_error(str(exc), status_code=409) from exc
+        except TextBackendError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
+        backend_result = dict(backend_result)
+        backend_result["text"] = self._strip_history_from_text(str(backend_result.get("text") or ""), history_source)
+        if not threaded:
+            return backend_result, None
+
+        conversation_id, parent_message_id = self._thread_state_from_result(backend_result)
+        blocked_word = self._is_output_blocked(str(backend_result.get("text") or ""))
+        if blocked_word:
+            error_message = f"{BLOCKED_RESPONSE_ERROR_PREFIX}: {blocked_word}"
+            if existing_thread is not None:
+                self._save_thread_state(
+                    identity=identity,
+                    thread_id=str(existing_thread.get("id") or ""),
+                    conversation_id=conversation_id,
+                    parent_message_id=parent_message_id,
+                    model=model,
+                    last_error=error_message,
+                )
+            raise self._thread_error(error_message, status_code=400)
+
+        return (
+            backend_result,
+            self._save_thread_state(
+                identity=identity,
+                thread_id=str(existing_thread.get("id") or "") if existing_thread is not None else "",
+                conversation_id=conversation_id,
+                parent_message_id=parent_message_id,
+                model=model,
+            ),
+        )
+
+    def _create_text_completion_stream(
+        self,
+        *,
+        body: dict[str, object],
+        identity: dict[str, object],
+        prompt: str,
+        model: str,
+    ) -> Iterator[str]:
+        self._enforce_sensitive_word_filter(prompt)
+        threaded, active_thread_id = self._thread_request(body)
+        backend_kwargs: dict[str, object] = {}
+        if active_thread_id:
+            existing_thread = text_thread_service.get_thread(identity, active_thread_id)
+            if existing_thread is None:
+                raise self._thread_error("thread not found", status_code=404)
+            backend_kwargs = {
+                "conversation_id": str(existing_thread.get("conversation_id") or ""),
+                "parent_message_id": str(existing_thread.get("parent_message_id") or ""),
+                "allow_conversation_fallback": False,
+            }
+        try:
+            backend_stream = TextBackend(self._get_text_access_token()).stream(prompt, model, **backend_kwargs)
+        except TextConversationExpiredError as exc:
+            raise self._thread_error(str(exc), status_code=409) from exc
+        except TextBackendError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
+        completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+        created = int(time.time())
+        history_messages = extract_assistant_history_messages(body.get("messages"))
+        sensitive_words = self._stream_sensitive_words() if threaded else []
+        hold_back_chars = max((len(word) for word in sensitive_words), default=1) - 1
+
+        def generate() -> Iterator[str]:
+            nonlocal active_thread_id
+            consumed_count = 0
+            sent_role = False
+            role_chunk_sent_thread_id = False
+            streamed_text = ""
+            final_text = ""
+            latest_conversation_id = str(backend_kwargs.get("conversation_id") or "")
+            latest_parent_message_id = str(backend_kwargs.get("parent_message_id") or "")
+
+            def ensure_thread_id() -> None:
+                nonlocal active_thread_id
+                if not threaded or active_thread_id or not latest_conversation_id or not latest_parent_message_id:
+                    return
+                active_thread_id = self._save_thread_state(
+                    identity=identity,
+                    thread_id="",
+                    conversation_id=latest_conversation_id,
+                    parent_message_id=latest_parent_message_id,
+                    model=model,
+                )
+
+            def emit_role_chunk() -> Iterator[str]:
+                nonlocal sent_role, role_chunk_sent_thread_id
+                if sent_role:
+                    return
+                sent_role = True
+                extra: dict[str, object] = {}
+                if active_thread_id:
+                    extra["thread_id"] = active_thread_id
+                    role_chunk_sent_thread_id = True
+                yield self._encode_sse_data(
+                    self._build_text_completion_chunk(
+                        completion_id,
+                        created,
+                        model,
+                        role="assistant",
+                        extra=extra or None,
+                    )
+                )
+
+            for event in backend_stream:
+                latest_conversation_id = str(event.get("conversation_id") or latest_conversation_id)
+                latest_parent_message_id = str(event.get("parent_message_id") or latest_parent_message_id)
+                normalized_text, consumed_count = self._normalize_stream_snapshot(
+                    str(event.get("text") or ""),
+                    history_messages,
+                    consumed_count,
+                )
+                final_text = normalized_text
+                ensure_thread_id()
+                blocked_match = find_sensitive_word_match(normalized_text, sensitive_words)
+                if blocked_match:
+                    blocked_word, start_index, _end_index = blocked_match
+                    safe_limit = max(len(streamed_text), start_index)
+                    safe_text = normalized_text[:safe_limit]
+                    if safe_text and safe_text != streamed_text:
+                        yield from emit_role_chunk()
+                        delta = safe_text[len(streamed_text):] if safe_text.startswith(streamed_text) else safe_text
+                        streamed_text = safe_text
+                        if delta:
+                            yield self._encode_sse_data(
+                                self._build_text_completion_chunk(completion_id, created, model, content=delta)
+                            )
+                    error_message = f"{BLOCKED_RESPONSE_ERROR_PREFIX}: {blocked_word}"
+                    if threaded and active_thread_id:
+                        active_thread_id = self._save_thread_state(
+                            identity=identity,
+                            thread_id=active_thread_id,
+                            conversation_id=latest_conversation_id,
+                            parent_message_id=latest_parent_message_id,
+                            model=model,
+                            last_error=error_message,
+                        )
+                    finish_extra: dict[str, object] = {"moderation_error": error_message}
+                    if active_thread_id and not role_chunk_sent_thread_id:
+                        finish_extra["thread_id"] = active_thread_id
+                    yield self._encode_sse_data(
+                        self._build_text_completion_chunk(
+                            completion_id,
+                            created,
+                            model,
+                            finish_reason="content_filter",
+                            extra=finish_extra,
+                        )
+                    )
+                    yield self._encode_sse_data("[DONE]")
+                    return
+
+                flush_limit = len(normalized_text)
+                if hold_back_chars > 0:
+                    flush_limit = max(0, len(normalized_text) - hold_back_chars)
+                if flush_limit <= len(streamed_text):
+                    continue
+                next_safe_text = normalized_text[:flush_limit]
+                if not next_safe_text:
+                    continue
+                yield from emit_role_chunk()
+                delta = next_safe_text[len(streamed_text):] if next_safe_text.startswith(streamed_text) else next_safe_text
+                streamed_text = next_safe_text
+                if delta:
+                    yield self._encode_sse_data(
+                        self._build_text_completion_chunk(completion_id, created, model, content=delta)
+                    )
+
+            ensure_thread_id()
+            if final_text and final_text != streamed_text:
+                yield from emit_role_chunk()
+                delta = final_text[len(streamed_text):] if final_text.startswith(streamed_text) else final_text
+                streamed_text = final_text
+                if delta:
+                    yield self._encode_sse_data(
+                        self._build_text_completion_chunk(completion_id, created, model, content=delta)
+                    )
+            if threaded and active_thread_id:
+                active_thread_id = self._save_thread_state(
+                    identity=identity,
+                    thread_id=active_thread_id,
+                    conversation_id=latest_conversation_id,
+                    parent_message_id=latest_parent_message_id,
+                    model=model,
+                )
+            finish_extra: dict[str, object] = {}
+            if active_thread_id and not role_chunk_sent_thread_id:
+                finish_extra["thread_id"] = active_thread_id
+            yield self._encode_sse_data(
+                self._build_text_completion_chunk(
+                    completion_id,
+                    created,
+                    model,
+                    finish_reason="stop",
+                    extra=finish_extra or None,
+                )
+            )
+            yield self._encode_sse_data("[DONE]")
+
+        return generate()
+
+    def create_text_completion(self, body: dict[str, object], identity: dict[str, object]) -> dict[str, object]:
         if bool(body.get("stream")):
             raise HTTPException(status_code=400, detail={"error": "stream is not supported for text completions"})
 
@@ -321,58 +639,24 @@ class ChatGPTService:
         prompt = self._build_chat_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages or prompt is required"})
-        self._enforce_sensitive_word_filter(prompt)
 
-        try:
-            backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model)
-        except TextBackendError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
-        backend_result = dict(backend_result)
-        backend_result["text"] = self._strip_history_from_text(str(backend_result.get("text") or ""), body.get("messages"))
-        return self._build_text_completion_response(model, backend_result)
+        backend_result, thread_id = self._complete_text_request(
+            identity=identity,
+            body=body,
+            prompt=prompt,
+            model=model,
+            history_source=body.get("messages"),
+        )
+        return self._apply_thread_id(self._build_text_completion_response(model, backend_result), thread_id)
 
-    def create_text_completion_stream(self, body: dict[str, object]) -> Iterator[str]:
+    def create_text_completion_stream(self, body: dict[str, object], identity: dict[str, object]) -> Iterator[str]:
         model = str(body.get("model") or "auto").strip() or "auto"
         prompt = self._build_chat_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages or prompt is required"})
-        self._enforce_sensitive_word_filter(prompt)
+        return self._create_text_completion_stream(body=body, identity=identity, prompt=prompt, model=model)
 
-        try:
-            backend_stream = TextBackend(self._get_text_access_token()).stream(prompt, model)
-        except TextBackendError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
-
-        completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-        created = int(time.time())
-        normalized_snapshots = self._normalized_stream_snapshots(backend_stream, body.get("messages"))
-
-        def generate() -> Iterator[str]:
-            current_text = ""
-            sent_role = False
-            for next_text in normalized_snapshots:
-                if not next_text or next_text == current_text:
-                    continue
-                if not sent_role:
-                    sent_role = True
-                    yield self._encode_sse_data(
-                        self._build_text_completion_chunk(completion_id, created, model, role="assistant")
-                    )
-                delta = next_text[len(current_text):] if next_text.startswith(current_text) else next_text
-                current_text = next_text
-                if not delta:
-                    continue
-                yield self._encode_sse_data(
-                    self._build_text_completion_chunk(completion_id, created, model, content=delta)
-                )
-            yield self._encode_sse_data(
-                self._build_text_completion_chunk(completion_id, created, model, finish_reason="stop")
-            )
-            yield self._encode_sse_data("[DONE]")
-
-        return generate()
-
-    def create_text_response(self, body: dict[str, object]) -> dict[str, object]:
+    def create_text_response(self, body: dict[str, object], identity: dict[str, object]) -> dict[str, object]:
         if bool(body.get("stream")):
             raise HTTPException(status_code=400, detail={"error": "stream is not supported"})
 
@@ -380,32 +664,33 @@ class ChatGPTService:
         prompt = self._build_response_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "input text is required"})
-        self._enforce_sensitive_word_filter(prompt)
+        backend_result, thread_id = self._complete_text_request(
+            identity=identity,
+            body=body,
+            prompt=prompt,
+            model=model,
+            history_source=body.get("input"),
+        )
+        return self._apply_thread_id(self._build_text_response_payload(model, backend_result), thread_id)
 
-        try:
-            backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model)
-        except TextBackendError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
-        backend_result = dict(backend_result)
-        backend_result["text"] = self._strip_history_from_text(str(backend_result.get("text") or ""), body.get("input"))
-        return self._build_text_response_payload(model, backend_result)
-
-    def create_message(self, body: dict[str, object]) -> dict[str, object]:
+    def create_message(self, body: dict[str, object], identity: dict[str, object]) -> dict[str, object]:
         model = str(body.get("model") or "auto").strip() or "auto"
         prompt = self._build_message_text_prompt(body)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "messages are required"})
-        self._enforce_sensitive_word_filter(prompt)
+        backend_result, thread_id = self._complete_text_request(
+            identity=identity,
+            body=body,
+            prompt=prompt,
+            model=model,
+            history_source=body.get("messages"),
+        )
+        return self._apply_thread_id(self._build_message_response(model, backend_result, tools=body.get("tools")), thread_id)
 
-        try:
-            backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model)
-        except TextBackendError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
-        backend_result = dict(backend_result)
-        backend_result["text"] = self._strip_history_from_text(str(backend_result.get("text") or ""), body.get("messages"))
-        return self._build_message_response(model, backend_result, tools=body.get("tools"))
-
-    def stream_message(self, body: dict[str, object]) -> Iterator[str]:
+    def stream_message(self, body: dict[str, object], identity: dict[str, object]) -> Iterator[str]:
+        _ = identity
+        if self._thread_request(body)[0]:
+            raise HTTPException(status_code=400, detail={"error": "threaded conversations are not supported for stream requests"})
         model = str(body.get("model") or "auto").strip() or "auto"
         prompt = self._build_message_text_prompt(body)
         if not prompt:
