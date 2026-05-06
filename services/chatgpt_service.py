@@ -65,9 +65,11 @@ class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
 
-    def _get_text_access_token(self) -> str:
+    def _list_text_access_tokens(self, excluded_tokens: set[str] | None = None) -> list[str]:
+        excluded = {str(token or "").strip() for token in (excluded_tokens or set()) if str(token or "").strip()}
         preferred_tokens: list[str] = []
         fallback_tokens: list[str] = []
+        seen_tokens: set[str] = set()
         try:
             accounts = self.account_service.list_accounts()
         except Exception:
@@ -78,8 +80,9 @@ class ChatGPTService:
                 if not isinstance(account, dict):
                     continue
                 access_token = str(account.get("access_token") or "").strip()
-                if not access_token:
+                if not access_token or access_token in excluded or access_token in seen_tokens:
                     continue
+                seen_tokens.add(access_token)
                 status = str(account.get("status") or "").strip()
                 if status in {"禁用", "异常"}:
                     continue
@@ -87,17 +90,75 @@ class ChatGPTService:
                     fallback_tokens.append(access_token)
                 else:
                     preferred_tokens.append(access_token)
-        token = (preferred_tokens or fallback_tokens or [""])[0]
+        return preferred_tokens or fallback_tokens
+
+    def _get_text_access_token(self, excluded_tokens: set[str] | None = None) -> str:
+        token = (self._list_text_access_tokens(excluded_tokens) or [""])[0]
         if token:
             return token
         try:
             tokens = self.account_service.list_tokens()
         except Exception:
             tokens = []
-        token = str(tokens[0] if tokens else "").strip()
-        if token:
+        excluded = {str(item or "").strip() for item in (excluded_tokens or set()) if str(item or "").strip()}
+        seen: set[str] = set()
+        for raw_token in tokens:
+            token = str(raw_token or "").strip()
+            if not token or token in excluded or token in seen:
+                continue
+            seen.add(token)
             return token
         raise HTTPException(status_code=502, detail={"error": "no available access token"})
+
+    def _mark_text_token_invalid(self, access_token: str) -> None:
+        token = str(access_token or "").strip()
+        if not token:
+            return
+        try:
+            updated = self.account_service.update_account(
+                token,
+                {
+                    "status": "异常",
+                    "quota": 0,
+                },
+            )
+        except Exception as exc:
+            print(f"[text-backend] mark invalid token={token[:12]}... failed: {exc}")
+            return
+        if updated is None and hasattr(self.account_service, "remove_token"):
+            try:
+                removed = bool(self.account_service.remove_token(token))
+            except Exception as exc:
+                print(f"[text-backend] remove invalid token={token[:12]}... failed: {exc}")
+                return
+            if removed:
+                print(f"[text-backend] removed invalid token={token[:12]}...")
+
+    def _call_text_backend(
+        self,
+        method: str,
+        prompt: str,
+        model: str,
+        **backend_kwargs: object,
+    ) -> object:
+        attempted_tokens: set[str] = set()
+        while True:
+            access_token = self._get_text_access_token(excluded_tokens=attempted_tokens)
+            attempted_tokens.add(access_token)
+            try:
+                backend = TextBackend(access_token)
+                return getattr(backend, method)(prompt, model, **backend_kwargs)
+            except TextConversationExpiredError:
+                raise
+            except (TextBackendError, ImageGenerationError) as exc:
+                message = str(exc)
+                if is_token_invalid_error(message):
+                    self._mark_text_token_invalid(access_token)
+                    print(f"[text-backend] skip invalid token={access_token[:12]}... error={message}")
+                    continue
+                if isinstance(exc, TextBackendError):
+                    raise
+                raise TextBackendError(message) from exc
 
     @staticmethod
     def _collect_role_text(messages: object, roles: set[str]) -> str:
@@ -423,7 +484,7 @@ class ChatGPTService:
                     "allow_conversation_fallback": False,
                 }
         try:
-            backend_result = TextBackend(self._get_text_access_token()).complete(prompt, model, **backend_kwargs)
+            backend_result = self._call_text_backend("complete", prompt, model, **backend_kwargs)
         except TextConversationExpiredError as exc:
             raise self._thread_error(str(exc), status_code=409) from exc
         except TextBackendError as exc:
@@ -481,7 +542,7 @@ class ChatGPTService:
                 "allow_conversation_fallback": False,
             }
         try:
-            backend_stream = TextBackend(self._get_text_access_token()).stream(prompt, model, **backend_kwargs)
+            backend_stream = self._call_text_backend("stream", prompt, model, **backend_kwargs)
         except TextConversationExpiredError as exc:
             raise self._thread_error(str(exc), status_code=409) from exc
         except TextBackendError as exc:
@@ -698,7 +759,7 @@ class ChatGPTService:
         self._enforce_sensitive_word_filter(prompt)
 
         try:
-            backend_stream = TextBackend(self._get_text_access_token()).stream(prompt, model)
+            backend_stream = self._call_text_backend("stream", prompt, model)
         except TextBackendError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 

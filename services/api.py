@@ -585,19 +585,25 @@ def resolve_cors_origins() -> list[str]:
     return sorted(origins)
 
 
+def refresh_all_accounts_once() -> int:
+    access_tokens = account_service.list_tokens()
+    if not access_tokens:
+        return 0
+    print(f"[account-refresh-watcher] refreshing {len(access_tokens)} accounts")
+    account_service.refresh_accounts(access_tokens)
+    return len(access_tokens)
+
+
 def start_limited_account_watcher(stop_event: Event) -> Thread:
     def worker() -> None:
         while not stop_event.is_set():
             try:
-                limited_tokens = account_service.list_limited_tokens()
-                if limited_tokens:
-                    print(f"[account-limited-watcher] checking {len(limited_tokens)} limited accounts")
-                    account_service.refresh_accounts(limited_tokens)
+                refresh_all_accounts_once()
             except Exception as exc:
-                print(f"[account-limited-watcher] fail {exc}")
+                print(f"[account-refresh-watcher] fail {exc}")
             stop_event.wait(config.refresh_account_interval_minute * 60)
 
-    thread = Thread(target=worker, name="limited-account-watcher", daemon=True)
+    thread = Thread(target=worker, name="account-refresh-watcher", daemon=True)
     thread.start()
     return thread
 

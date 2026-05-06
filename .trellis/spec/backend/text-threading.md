@@ -29,6 +29,7 @@
     - call `/backend-api/f/conversation/prepare` to get `conduit_token`
     - send text via `/backend-api/f/conversation` with `openai-sentinel-chat-requirements-token`, optional `openai-sentinel-proof-token`, and `x-conduit-token`
     - do **not** require `sentinel/chat-requirements prepare/finalize` or turnstile solving for the current server-side text path
+    - if the selected token is already invalidated upstream, the text service must mark it unusable for runtime selection and retry the next candidate instead of leaking an uncaught 500
 
 ### 3. Contracts
 
@@ -91,6 +92,8 @@
 | `thread_id` does not exist or is not owned by caller | 404 | `thread not found` |
 | Upstream refuses a reused conversation | 409 | `thread conversation expired` |
 | Threaded request gets no upstream `conversation_id` or `parent_message_id` | 502 | `thread state missing from upstream` |
+| Selected text token is already invalidated upstream and another candidate exists | 200 / normal stream | mark the bad token unusable and retry the next text token |
+| Selected text token is already invalidated upstream and no candidate remains | 502 | `no available access token` |
 | Input contains a blocked word | 400 | `prompt contains blocked word: <word>` |
 | Threaded output contains a blocked word | 400 | `response contains blocked word: <word>` |
 | Threaded chat stream output contains a blocked word | 200 stream | final chunk uses `finish_reason="content_filter"` and `moderation_error` |
@@ -100,6 +103,7 @@
 - Good:
   - `POST /v1/chat/completions` with `threaded=true` returns a normal chat completion payload plus `thread_id`, and the server persists upstream state.
   - `POST /v1/chat/completions` with `threaded=true` and `stream=true` returns SSE chunks, includes `thread_id`, and keeps the upstream thread state reusable.
+  - a stale or invalidated first token is skipped automatically when another usable text token is available.
 - Base:
   - a later request with the returned `thread_id` reuses the stored `conversation_id + parent_message_id` and returns the same `thread_id`.
 - Bad:
@@ -107,14 +111,17 @@
   - a reused thread hits blocked output and the server returns `400` without advancing stored upstream state.
   - a threaded chat stream leaks the entire blocked word before finishing with `content_filter`.
   - a threaded request with `stream=true` silently falls back to stateless stream behavior.
+  - an invalidated text token escapes as an uncaught `ImageGenerationError` / 500 before the service tries the next candidate.
 
 ### 6. Tests Required
 - API integration:
   - threaded chat completion creates a thread, returns `thread_id`, and persists upstream ids
   - reusing `thread_id` sends stored `conversation_id + parent_message_id` back into `TextBackend.complete()`
   - unknown `thread_id` returns `404 thread not found`
+  - text chat completion retries the next token when the first token is already invalidated upstream
   - threaded output moderation returns `400 response contains blocked word: <word>` and still updates persisted `parent_message_id`
   - threaded chat completion stream returns `thread_id`, reuses stored thread state, and updates `parent_message_id` on completion
+  - text chat completion stream retries the next token when the first token is already invalidated upstream
   - threaded chat completion stream stops with `finish_reason="content_filter"` without leaking the full blocked word
   - threaded `/v1/messages` stream requests still return the explicit unsupported error
   - at least one non-OpenAI text surface (currently `/v1/messages`) also returns `thread_id` on threaded success

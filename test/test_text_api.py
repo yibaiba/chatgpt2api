@@ -25,6 +25,8 @@ class _FakeTextBackend:
     complete_conversation_id = "conv-initial"
     complete_parent_message_id = "msg-initial"
     stream_texts = ["hello", "hello world"]
+    invalid_complete_tokens: set[str] = set()
+    invalid_stream_tokens: set[str] = set()
 
     def __init__(self, access_token: str):
         self.access_token = access_token
@@ -40,6 +42,8 @@ class _FakeTextBackend:
                 "allow_conversation_fallback": kwargs.get("allow_conversation_fallback", True),
             }
         )
+        if self.access_token in type(self).invalid_complete_tokens:
+            raise chatgpt_service_module.TextBackendError("authentication token has been invalidated")
         return {
             "created": 123,
             "model": model,
@@ -58,14 +62,20 @@ class _FakeTextBackend:
                 "parent_message_id": kwargs.get("parent_message_id", ""),
             }
         )
-        for text in type(self).stream_texts:
-            yield {
-                "created": 123,
-                "model": model,
-                "text": text,
-                "conversation_id": kwargs.get("conversation_id") or type(self).complete_conversation_id,
-                "parent_message_id": type(self).complete_parent_message_id,
-            }
+        if self.access_token in type(self).invalid_stream_tokens:
+            raise chatgpt_service_module.TextBackendError("authentication token has been invalidated")
+
+        def generate():
+            for text in type(self).stream_texts:
+                yield {
+                    "created": 123,
+                    "model": model,
+                    "text": text,
+                    "conversation_id": kwargs.get("conversation_id") or type(self).complete_conversation_id,
+                    "parent_message_id": type(self).complete_parent_message_id,
+                }
+
+        return generate()
 
 
 class _FakeConfig:
@@ -105,8 +115,8 @@ class _FakeAuthService:
 
 
 class _FakeAccountService:
-    def list_accounts(self) -> list[dict[str, object]]:
-        return [
+    def __init__(self) -> None:
+        self.accounts: list[dict[str, object]] = [
             {
                 "access_token": "plus-token",
                 "type": "Plus",
@@ -114,8 +124,25 @@ class _FakeAccountService:
             }
         ]
 
+    def list_accounts(self) -> list[dict[str, object]]:
+        return [dict(item) for item in self.accounts]
+
     def list_tokens(self) -> list[str]:
-        return ["plus-token"]
+        return [str(item.get("access_token") or "") for item in self.accounts if str(item.get("access_token") or "").strip()]
+
+    def update_account(self, access_token: str, updates: dict[str, object]) -> dict[str, object] | None:
+        for index, account in enumerate(self.accounts):
+            if account.get("access_token") != access_token:
+                continue
+            next_account = {**account, **updates}
+            self.accounts[index] = next_account
+            return dict(next_account)
+        return None
+
+    def remove_token(self, access_token: str) -> bool:
+        before = len(self.accounts)
+        self.accounts = [item for item in self.accounts if item.get("access_token") != access_token]
+        return len(self.accounts) != before
 
 
 class TextApiTests(unittest.TestCase):
@@ -126,6 +153,8 @@ class TextApiTests(unittest.TestCase):
         _FakeTextBackend.complete_conversation_id = "conv-initial"
         _FakeTextBackend.complete_parent_message_id = "msg-initial"
         _FakeTextBackend.stream_texts = ["hello", "hello world"]
+        _FakeTextBackend.invalid_complete_tokens = set()
+        _FakeTextBackend.invalid_stream_tokens = set()
         self.auth_header = {"Authorization": "Bearer test-auth"}
         self.auth_service = _FakeAuthService()
         self.account_service = _FakeAccountService()
@@ -171,6 +200,29 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
 
+    def test_non_image_chat_completions_retry_next_token_when_first_token_invalidated(self) -> None:
+        self.account_service.accounts = [
+            {"access_token": "bad-plus-token", "type": "Plus", "status": "正常"},
+            {"access_token": "good-free-token", "type": "Free", "status": "正常"},
+        ]
+        _FakeTextBackend.invalid_complete_tokens = {"bad-plus-token"}
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "hello text path"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [call["access_token"] for call in _FakeTextBackend.calls[-2:]],
+            ["bad-plus-token", "good-free-token"],
+        )
+        self.assertEqual(self.account_service.accounts[0]["status"], "异常")
+
     def test_non_image_chat_completions_stream_use_text_backend_without_image_quota(self) -> None:
         with self.client.stream(
             "POST",
@@ -209,6 +261,33 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(_FakeTextBackend.stream_calls[-1]["access_token"], "plus-token")
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
+
+    def test_non_image_chat_completions_stream_retry_next_token_when_first_token_invalidated(self) -> None:
+        self.account_service.accounts = [
+            {"access_token": "bad-plus-token", "type": "Plus", "status": "正常"},
+            {"access_token": "good-free-token", "type": "Free", "status": "正常"},
+        ]
+        _FakeTextBackend.invalid_stream_tokens = {"bad-plus-token"}
+
+        with self.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "hello text path"}],
+                "stream": True,
+            },
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            lines = [line for line in response.iter_lines() if line]
+
+        self.assertTrue(any(line == "data: [DONE]" for line in lines))
+        self.assertEqual(
+            [call["access_token"] for call in _FakeTextBackend.stream_calls[-2:]],
+            ["bad-plus-token", "good-free-token"],
+        )
+        self.assertEqual(self.account_service.accounts[0]["status"], "异常")
 
     def test_non_image_chat_completions_strip_repeated_assistant_history_from_backend_text(self) -> None:
         _FakeTextBackend.complete_text = "history replyhistory replynew answer"
