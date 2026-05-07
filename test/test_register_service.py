@@ -8,9 +8,11 @@ from pathlib import Path
 from unittest import mock
 
 import services.register_service as register_service_module
+import services.system_settings as system_settings_module
 from services.register import mail_provider
 from services.register.openai_register import PlatformRegistrar
 from services.register_service import RegisterService
+from services.system_settings import SystemSettingsService, normalize_proxy_entry
 
 
 class _FakeAccountsService:
@@ -469,6 +471,12 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
         )
         self.build_sentinel_token.start()
         self.addCleanup(self.build_sentinel_token.stop)
+        self.get_next_proxy_entry = mock.patch(
+            "services.register.openai_register.system_settings_service.get_next_proxy_entry",
+            return_value=None,
+        )
+        self.get_next_proxy_entry.start()
+        self.addCleanup(self.get_next_proxy_entry.stop)
         self.registrar = PlatformRegistrar("", {"providers": []}, self.log)
 
     def tearDown(self) -> None:
@@ -666,6 +674,52 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
         self.assertEqual(4, request_mock.call_count)
         exchange_mock.assert_called_once()
         self.log.assert_any_call("登录授权步骤失效，刷新授权后重试一次", "warning")
+
+    def test_registrar_uses_proxy_pool_when_register_proxy_is_empty(self) -> None:
+        session = mock.Mock()
+        session.headers = {}
+        proxy_entry = {
+            "id": "proxy-v6",
+            "proxy_url": "socks5h://user:pass@[2001:db8::1]:1080",
+        }
+        with (
+            mock.patch("services.register.openai_register.create_session", return_value=session) as create_session_mock,
+            mock.patch(
+                "services.register.openai_register.system_settings_service.get_next_proxy_entry",
+                return_value=proxy_entry,
+            ),
+        ):
+            registrar = PlatformRegistrar("", {"providers": []}, self.log)
+            try:
+                self.assertEqual(proxy_entry["proxy_url"], registrar.proxy)
+                create_session_mock.assert_called_once_with("socks5h://user:pass@[2001:db8::1]:1080")
+                self.log.assert_any_call(
+                    "未单独指定注册代理，已使用 proxy_pool：socks5h://user:***@[2001:db8::1]:1080",
+                    "info",
+                )
+            finally:
+                registrar.close()
+
+
+class ProxyPoolSelectionTests(unittest.TestCase):
+    def test_proxy_pool_prefers_ipv6_entries(self) -> None:
+        with mock.patch.object(system_settings_module.SystemSettingsService, "_load_proxy_pool", return_value=[]):
+            service = SystemSettingsService()
+
+        service._proxy_pool = [
+            normalize_proxy_entry({"id": "v4", "proxy_url": "socks5h://127.0.0.1:1080"}),
+            normalize_proxy_entry({"id": "v6-a", "proxy_url": "socks5h://[2001:db8::1]:1080"}),
+            normalize_proxy_entry({"id": "v6-b", "proxy_url": "socks5h://[2001:db8::2]:1080"}),
+        ]
+        service._proxy_pool = [item for item in service._proxy_pool if item is not None]
+        service._round_robin_index = 0
+
+        picked = [service.get_next_proxy_entry()["id"] for _ in range(4)]
+        self.assertEqual(["v6-a", "v6-b", "v6-a", "v6-b"], picked)
+
+    def test_mask_proxy_url_preserves_ipv6_brackets(self) -> None:
+        masked = system_settings_module.mask_proxy_url("socks5h://user:pass@[2001:db8::1]:1080")
+        self.assertEqual("socks5h://user:***@[2001:db8::1]:1080", masked)
 
 
 class MailProviderSecurityTests(unittest.TestCase):

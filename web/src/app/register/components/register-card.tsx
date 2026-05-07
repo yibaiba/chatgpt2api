@@ -239,6 +239,9 @@ export function RegisterCard({
                 className="h-11 rounded-xl border-stone-200 bg-white"
                 disabled={config.enabled}
               />
+              <p className="text-xs text-stone-500">
+                留空时自动复用设置页里的 `proxy_pool`；若池中存在 IPv6 代理，会优先走 IPv6。手动填写时则优先使用这里的单独代理。
+              </p>
             </div>
 
             <div className="space-y-2">

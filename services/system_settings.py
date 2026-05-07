@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ipaddress import ip_address
 import json
 import uuid
 from datetime import datetime, timezone
@@ -45,7 +46,10 @@ def mask_proxy_url(proxy_url: str) -> str:
     parsed = urlparse(normalized)
     if parsed.password:
         username = f"{parsed.username}:" if parsed.username else ""
-        netloc = f"{username}***@{parsed.hostname or ''}"
+        hostname = str(parsed.hostname or "")
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        netloc = f"{username}***@{hostname}"
         if parsed.port:
             netloc = f"{netloc}:{parsed.port}"
         return parsed._replace(netloc=netloc).geturl()
@@ -139,6 +143,18 @@ def build_session_proxies(proxy_url: str) -> dict[str, str]:
         "http": normalized,
         "https": normalized,
     }
+
+
+def get_proxy_ip_family(proxy_url: str) -> str | None:
+    normalized = normalize_proxy_url(proxy_url)
+    hostname = str(urlparse(normalized).hostname or "").strip()
+    if not hostname:
+        return None
+    try:
+        address = ip_address(hostname)
+    except ValueError:
+        return None
+    return "ipv6" if address.version == 6 else "ipv4"
 
 
 def validate_proxy_url(proxy_url: str) -> dict[str, object]:
@@ -326,9 +342,11 @@ class SystemSettingsService:
         with self._lock:
             if not self._proxy_pool:
                 return None
-            index = self._round_robin_index % len(self._proxy_pool)
-            self._round_robin_index = (index + 1) % len(self._proxy_pool)
-            return dict(self._proxy_pool[index])
+            preferred_pool = [item for item in self._proxy_pool if get_proxy_ip_family(str(item.get("proxy_url") or "")) == "ipv6"]
+            selection_pool = preferred_pool or self._proxy_pool
+            index = self._round_robin_index % len(selection_pool)
+            self._round_robin_index = (index + 1) % len(selection_pool)
+            return dict(selection_pool[index])
 
     def apply_next_proxy(self, session: Session) -> Session:
         entry = self.get_next_proxy_entry()

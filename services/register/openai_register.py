@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from curl_cffi.requests import Session
 
+from services.system_settings import mask_proxy_url, system_settings_service
+
 from . import mail_provider
 
 AUTH_BASE = "https://auth.openai.com"
@@ -300,6 +302,17 @@ def create_session(proxy: str = "") -> Session:
     return session
 
 
+def resolve_register_proxy(proxy: str = "", log: Callable[[str, str], None] | None = None) -> str:
+    explicit_proxy = str(proxy or "").strip()
+    if explicit_proxy:
+        return explicit_proxy
+    entry = system_settings_service.get_next_proxy_entry()
+    proxy_url = str((entry or {}).get("proxy_url") or "").strip()
+    if proxy_url and log is not None:
+        log(f"未单独指定注册代理，已使用 proxy_pool：{mask_proxy_url(proxy_url)}", "info")
+    return proxy_url
+
+
 def request_with_local_retry(session: Session, method: str, url: str, retry_attempts: int = 3, **kwargs: Any):
     last_error = ""
     for _ in range(max(1, retry_attempts)):
@@ -428,7 +441,7 @@ def exchange_platform_tokens(proxy: str, session: Session, device_id: str, code_
 
 class PlatformRegistrar:
     def __init__(self, proxy: str, mail_config: dict[str, Any], log: Callable[[str, str], None]):
-        self.proxy = str(proxy or "").strip()
+        self.proxy = resolve_register_proxy(proxy, log)
         self.mail_config = mail_config
         self.log = log
         self.session = create_session(self.proxy)

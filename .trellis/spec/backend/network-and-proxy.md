@@ -8,6 +8,7 @@ Current covered call sites:
 
 - `services/image_service.py` image generation and image edit traffic
 - `services/account_service.py` account refresh traffic to `chatgpt.com`
+- `services/register/openai_register.py` registration traffic when the register-specific `proxy` field is empty
 
 Current excluded call sites:
 
@@ -46,9 +47,12 @@ Rules:
 ## Runtime Selection Contract
 
 - Strategy is fixed to `round_robin`
-- Every new outbound `Session` for covered call sites selects the next proxy entry in insertion order
+- Every new outbound `Session` for covered call sites selects the next proxy entry using IPv6-first round robin:
+  - If the pool contains one or more literal IPv6 proxy hosts, only those entries participate in selection
+  - If the pool has no IPv6 entries, selection falls back to the full pool
 - Selection is global across the covered call sites; it is not per-endpoint, per-user, or per-account
 - Existing open sessions keep the proxy they started with; only new sessions participate in round-robin rotation
+- Register traffic resolves one proxy entry per registration attempt and reuses that same proxy for the follow-up token exchange session
 
 ## Validation Contract
 
