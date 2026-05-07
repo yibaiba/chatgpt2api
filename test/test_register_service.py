@@ -415,6 +415,30 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
 
         self.assertEqual(1, request_mock.call_count)
 
+    def test_password_verify_failure_includes_response_detail(self) -> None:
+        authorize_response = _FakeResponse(200, {})
+        verify_response = _FakeResponse(
+            400,
+            {"error": {"code": "invalid_request", "message": "password challenge expired"}},
+        )
+        request_mock = mock.Mock(side_effect=[(authorize_response, None), (verify_response, None)])
+
+        with mock.patch(
+            "services.register.openai_register.request_with_local_retry",
+            request_mock,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"password_verify_http_400: invalid_request - password challenge expired",
+            ):
+                self.registrar._login_and_exchange_tokens(
+                    "demo@example.com",
+                    "Password1!",
+                    {"provider": "tempmail_lol", "address": "demo@example.com"},
+                )
+
+        self.assertEqual(2, request_mock.call_count)
+
 
 class MailProviderSecurityTests(unittest.TestCase):
     def test_moemail_provider_enables_tls_verification(self) -> None:

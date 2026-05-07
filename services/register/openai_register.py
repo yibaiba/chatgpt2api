@@ -509,7 +509,10 @@ class PlatformRegistrar:
         headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
         response, error = request_with_local_retry(self.session, "post", f"{AUTH_BASE}/api/accounts/password/verify", json={"password": password}, headers=headers, allow_redirects=False)
         if response is None or response.status_code != 200:
-            raise RuntimeError(error or f"password_verify_http_{getattr(response, 'status_code', 'unknown')}")
+            raise RuntimeError(
+                error
+                or f"password_verify_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
+            )
         payload = _response_json(response)
         continue_url = str(payload.get("continue_url") or "").strip()
         page_type = str(((payload.get("page") or {}).get("type")) or "")
