@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -167,6 +169,60 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertEqual(["token-1"], accounts_service.added_tokens)
             self.assertEqual(["token-1"], accounts_service.refreshed_tokens)
             self.assertTrue(any("模拟注册成功" in item["text"] for item in finished["logs"]))
+
+    def test_service_auto_restores_enabled_runner_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store_file = Path(tmp_dir) / "register.json"
+            accounts_service = _FakeAccountsService()
+            release_executor = threading.Event()
+            entered_executor = threading.Event()
+
+            def blocking_executor(_config, _log):
+                entered_executor.set()
+                release_executor.wait(timeout=1)
+                return {"email": "demo@example.com", "access_token": "token-resumed"}
+
+            initial = RegisterService(store_file, accounts_service=accounts_service, executor=lambda _config, _log: {})
+            initial.update(
+                {
+                    "mode": "total",
+                    "total": 3,
+                    "threads": 1,
+                    "mail": {
+                        "providers": [
+                            {
+                                "type": "tempmail_lol",
+                                "enabled": True,
+                            }
+                        ]
+                    },
+                }
+            )
+            initial._config["enabled"] = True
+            initial._config["stats"]["job_id"] = "resume-job"
+            initial._config["stats"]["done"] = 2
+            initial._config["stats"]["success"] = 1
+            initial._config["stats"]["fail"] = 1
+            initial._save_locked()
+
+            resumed = RegisterService(store_file, accounts_service=accounts_service, executor=blocking_executor)
+            try:
+                for _ in range(50):
+                    if entered_executor.is_set():
+                        break
+                    time.sleep(0.02)
+                else:
+                    self.fail("register runner did not auto-resume")
+
+                snapshot = resumed.get()
+                self.assertTrue(snapshot["enabled"])
+                self.assertEqual("resume-job", snapshot["stats"]["job_id"])
+                self.assertGreaterEqual(snapshot["stats"]["done"], 2)
+                self.assertTrue(any("自动恢复" in item["text"] for item in snapshot["logs"]))
+            finally:
+                release_executor.set()
+                if resumed._runner is not None:
+                    resumed._runner.join(timeout=1)
 
     def test_start_accepts_moemail_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -419,7 +475,7 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
         authorize_response = _FakeResponse(200, {})
         verify_response = _FakeResponse(
             400,
-            {"error": {"code": "invalid_request", "message": "password challenge expired"}},
+            {"error": {"code": "invalid_request", "message": "password rejected"}},
         )
         request_mock = mock.Mock(side_effect=[(authorize_response, None), (verify_response, None)])
 
@@ -429,7 +485,7 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
-                r"password_verify_http_400: invalid_request - password challenge expired",
+                r"password_verify_http_400: invalid_request - password rejected",
             ):
                 self.registrar._login_and_exchange_tokens(
                     "demo@example.com",
@@ -438,6 +494,46 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
                 )
 
         self.assertEqual(2, request_mock.call_count)
+
+    def test_password_verify_retries_once_when_challenge_expired(self) -> None:
+        authorize_response = _FakeResponse(200, {})
+        expired_response = _FakeResponse(
+            400,
+            {"error": {"code": "registration_login_challenge_expired", "message": "password challenge expired"}},
+        )
+        success_response = _FakeResponse(
+            200,
+            {"continue_url": "https://platform.openai.com/auth/callback?code=demo"},
+        )
+        request_mock = mock.Mock(
+            side_effect=[
+                (authorize_response, None),
+                (expired_response, None),
+                (authorize_response, None),
+                (success_response, None),
+            ]
+        )
+
+        with (
+            mock.patch(
+                "services.register.openai_register.request_with_local_retry",
+                request_mock,
+            ),
+            mock.patch(
+                "services.register.openai_register.exchange_platform_tokens",
+                return_value={"access_token": "access", "refresh_token": "refresh", "id_token": "id"},
+            ) as exchange_mock,
+        ):
+            tokens = self.registrar._login_and_exchange_tokens(
+                "demo@example.com",
+                "Password1!",
+                {"provider": "tempmail_lol", "address": "demo@example.com"},
+            )
+
+        self.assertEqual("access", tokens["access_token"])
+        self.assertEqual(4, request_mock.call_count)
+        exchange_mock.assert_called_once()
+        self.log.assert_any_call("登录密码挑战已过期，刷新授权后重试一次", "warning")
 
 
 class MailProviderSecurityTests(unittest.TestCase):

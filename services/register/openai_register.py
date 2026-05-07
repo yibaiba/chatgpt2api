@@ -104,6 +104,28 @@ def _otp_failure_detail(response: object | None, fallback: str) -> str:
     return f"{fallback}: {message}" if message else fallback
 
 
+def _is_password_verify_challenge_expired(response: object | None) -> bool:
+    data = _response_json(response) if response is not None else {}
+    error_data = data.get("error") if isinstance(data.get("error"), dict) else {}
+    text = " ".join(
+        str(part or "").strip().lower()
+        for part in (
+            error_data.get("code"),
+            error_data.get("message"),
+            data.get("message"),
+        )
+        if str(part or "").strip()
+    )
+    return any(
+        marker in text
+        for marker in (
+            "challenge expired",
+            "challenge_expired",
+            "registration_login_challenge_expired",
+        )
+    )
+
+
 def _make_trace_headers() -> dict[str, str]:
     trace_id = str(random.getrandbits(64))
     parent_id = str(random.getrandbits(64))
@@ -503,15 +525,31 @@ class PlatformRegistrar:
             )
 
     def _login_and_exchange_tokens(self, email: str, password: str, mailbox: dict[str, Any]) -> dict[str, str]:
-        code_verifier, code_challenge = _generate_pkce()
-        self._request_platform_authorize(email, code_challenge, "platform_login_authorize")
-        headers = self._json_headers(f"{AUTH_BASE}/log-in/password")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
-        response, error = request_with_local_retry(self.session, "post", f"{AUTH_BASE}/api/accounts/password/verify", json={"password": password}, headers=headers, allow_redirects=False)
+        response = None
+        code_verifier = ""
+        for attempt in range(2):
+            code_verifier, code_challenge = _generate_pkce()
+            self._request_platform_authorize(email, code_challenge, "platform_login_authorize")
+            headers = self._json_headers(f"{AUTH_BASE}/log-in/password")
+            headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
+            response, error = request_with_local_retry(
+                self.session,
+                "post",
+                f"{AUTH_BASE}/api/accounts/password/verify",
+                json={"password": password},
+                headers=headers,
+                allow_redirects=False,
+            )
+            if response is not None and response.status_code == 200:
+                break
+            failure = error or f"password_verify_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
+            if attempt == 0 and response is not None and response.status_code == 400 and _is_password_verify_challenge_expired(response):
+                self._step("登录密码挑战已过期，刷新授权后重试一次", "warning")
+                continue
+            raise RuntimeError(failure)
         if response is None or response.status_code != 200:
             raise RuntimeError(
-                error
-                or f"password_verify_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
+                f"password_verify_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
             )
         payload = _response_json(response)
         continue_url = str(payload.get("continue_url") or "").strip()

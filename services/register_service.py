@@ -207,6 +207,7 @@ class RegisterService:
         self._runner: threading.Thread | None = None
         self._stop_event: threading.Event | None = None
         self._config = self._load()
+        self._restore_runner_if_enabled()
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -260,6 +261,53 @@ class RegisterService:
     def _snapshot_locked(self) -> dict[str, Any]:
         return _deep_copy(self._config)
 
+    def _launch_runner_locked(self, *, reset_state: bool, log_message: str) -> None:
+        self._config["enabled"] = True
+        if reset_state:
+            self._config["stats"] = {
+                **_default_stats(self._config["threads"]),
+                "job_id": uuid.uuid4().hex[:12],
+                "started_at": _now_text(),
+            }
+            self._config["logs"] = []
+        else:
+            stats = self._config["stats"]
+            if not _clean_text(stats.get("job_id")):
+                stats["job_id"] = uuid.uuid4().hex[:12]
+            if not _clean_text(stats.get("started_at")):
+                stats["started_at"] = _now_text()
+            stats["running"] = 0
+            stats["finished_at"] = ""
+        self._append_log_locked(log_message, "warning")
+        self._refresh_stats_locked()
+        stop_event = threading.Event()
+        self._stop_event = stop_event
+        self._runner = threading.Thread(
+            target=self._run,
+            args=(stop_event,),
+            daemon=True,
+            name="register-runner",
+        )
+        self._save_locked()
+        self._runner.start()
+
+    def _restore_runner_if_enabled(self) -> None:
+        with self._lock:
+            if not self._config.get("enabled"):
+                return
+            try:
+                validate_mail_config(self._config["mail"])
+            except RuntimeError as exc:
+                self._config["enabled"] = False
+                self._append_log_locked(f"注册 runner 自动恢复失败: {exc}", "warning")
+                self._refresh_stats_locked()
+                self._save_locked()
+                return
+            self._launch_runner_locked(
+                reset_state=False,
+                log_message="检测到上次注册 runner 未正常结束，服务启动后已自动恢复。",
+            )
+
     def _executor_log(self, index: int, text: str, level: str = "info") -> None:
         with self._lock:
             self._append_log_locked(f"[任务{index}] {_clean_text(text)}", level)
@@ -301,25 +349,10 @@ class RegisterService:
                 validate_mail_config(self._config["mail"])
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
-            self._config["enabled"] = True
-            self._config["stats"] = {
-                **_default_stats(self._config["threads"]),
-                "job_id": uuid.uuid4().hex[:12],
-                "started_at": _now_text(),
-            }
-            self._config["logs"] = []
-            self._append_log_locked("注册 runner 已启动；当前阶段已接入 tempmail_lol / moemail 真实注册执行链路。", "warning")
-            self._refresh_stats_locked()
-            stop_event = threading.Event()
-            self._stop_event = stop_event
-            self._runner = threading.Thread(
-                target=self._run,
-                args=(stop_event,),
-                daemon=True,
-                name="register-runner",
+            self._launch_runner_locked(
+                reset_state=True,
+                log_message="注册 runner 已启动；当前阶段已接入 tempmail_lol / moemail 真实注册执行链路。",
             )
-            self._save_locked()
-            self._runner.start()
             return self._snapshot_locked()
 
     def stop(self) -> dict[str, Any]:
@@ -346,10 +379,15 @@ class RegisterService:
             return self._snapshot_locked()
 
     def _run(self, stop_event: threading.Event) -> None:
-        submitted = 0
-        done = 0
-        success = 0
-        fail = 0
+        with self._lock:
+            stats = self._config["stats"]
+            done = max(0, int(stats.get("done") or 0))
+            success = max(0, int(stats.get("success") or 0))
+            fail = max(0, int(stats.get("fail") or 0))
+            submitted = done
+            self._config["stats"]["running"] = 0
+            self._refresh_stats_locked()
+            self._save_locked()
         with ThreadPoolExecutor(max_workers=max(1, int(self._config["threads"]))) as executor:
             futures: dict[object, int] = {}
             while True:
