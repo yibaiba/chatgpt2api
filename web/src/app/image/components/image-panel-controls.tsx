@@ -81,7 +81,7 @@ export function ImagePanelControls({
   });
   const currentModelDescription =
     mode === "edit"
-      ? "图生图统一走上游 picture_v2 编辑链，可在官网 gpt-image-2 与 官网 api 独立额度间切换，不提供思考模式。"
+      ? ""
       : getImageModelDescription(model);
   const supportsCodexNativeOptions = isCodexImageModel(model);
   const sizeBehaviorDescription =
