@@ -81,6 +81,7 @@ class _FakeTextBackend:
 class _FakeConfig:
     def __init__(self, images_dir: Path) -> None:
         self.base_url = ""
+        self.global_system_prompt = ""
         self.images_dir = images_dir
         self.refresh_account_interval_minute = 60
         self.remote_account_sync_interval_minute = 60
@@ -200,6 +201,27 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
 
+    def test_non_image_chat_completions_prefix_global_system_prompt(self) -> None:
+        self.fake_config.global_system_prompt = "global guardrail"
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [
+                    {"role": "system", "content": "request rule"},
+                    {"role": "user", "content": "hello text path"},
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            "global guardrail\n\nrequest rule\n\nhello text path",
+            _FakeTextBackend.calls[-1]["prompt"],
+        )
+
     def test_non_image_chat_completions_retry_next_token_when_first_token_invalidated(self) -> None:
         self.account_service.accounts = [
             {"access_token": "bad-plus-token", "type": "Plus", "status": "正常"},
@@ -222,6 +244,24 @@ class TextApiTests(unittest.TestCase):
             ["bad-plus-token", "good-free-token"],
         )
         self.assertEqual(self.account_service.accounts[0]["status"], "异常")
+
+    def test_non_image_chat_completions_allow_rate_limited_token_for_text_path(self) -> None:
+        self.account_service.accounts = [
+            {"access_token": "limited-plus-token", "type": "Plus", "status": "限流"},
+            {"access_token": "good-free-token", "type": "Free", "status": "正常"},
+        ]
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-4.1",
+                "messages": [{"role": "user", "content": "hello text path"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(_FakeTextBackend.calls[-1]["access_token"], "limited-plus-token")
 
     def test_non_image_chat_completions_stream_use_text_backend_without_image_quota(self) -> None:
         with self.client.stream(
@@ -359,6 +399,30 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(_FakeTextBackend.calls[-1]["prompt"], "hello response path")
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
+
+    def test_non_image_responses_prefix_global_system_prompt(self) -> None:
+        self.fake_config.global_system_prompt = "global guardrail"
+
+        response = self.client.post(
+            "/v1/responses",
+            headers=self.auth_header,
+            json={
+                "model": "gpt-5",
+                "instructions": "response rule",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hello response path"}],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            "global guardrail\n\nresponse rule\n\nhello response path",
+            _FakeTextBackend.calls[-1]["prompt"],
+        )
 
     def test_non_image_chat_completions_block_sensitive_words_before_backend_call(self) -> None:
         self.fake_config.sensitive_word_filter_enabled = True
@@ -586,6 +650,28 @@ class TextApiTests(unittest.TestCase):
         self.assertEqual(_FakeTextBackend.calls[-1]["prompt"], "be concise\n\nhello anthropic")
         self.assertEqual(self.auth_service.reserved, [])
         self.assertEqual(self.auth_service.settled, [])
+
+    def test_anthropic_messages_prefix_global_system_prompt(self) -> None:
+        self.fake_config.global_system_prompt = "global guardrail"
+
+        response = self.client.post(
+            "/v1/messages",
+            headers={
+                "x-api-key": "test-auth",
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-sonnet-4",
+                "system": "be concise",
+                "messages": [{"role": "user", "content": "hello anthropic"}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            "global guardrail\n\nbe concise\n\nhello anthropic",
+            _FakeTextBackend.calls[-1]["prompt"],
+        )
 
     def test_anthropic_messages_block_sensitive_words_before_backend_call(self) -> None:
         self.fake_config.sensitive_word_filter_enabled = True

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from threading import Event, Thread
 from unittest import mock
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
@@ -153,6 +154,70 @@ class AccountCapabilityTests(unittest.TestCase):
                     selected = service.get_codex_image_access_token()
 
             self.assertEqual("plus-token", selected)
+
+    def test_get_available_access_token_waits_for_released_image_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["token-1"])
+            service.update_account("token-1", {"status": "正常", "quota": 2, "image_quota_unknown": False})
+
+            with mock.patch.object(
+                type(config),
+                "image_account_concurrency",
+                new_callable=mock.PropertyMock,
+                return_value=1,
+            ):
+                with mock.patch.object(service, "refresh_account_state", side_effect=lambda token: service.get_account(token)):
+                    first_token = service.get_available_access_token()
+                    done = Event()
+                    selected_tokens: list[str] = []
+
+                    def pick_next_token() -> None:
+                        selected_tokens.append(service.get_available_access_token())
+                        done.set()
+
+                    worker = Thread(target=pick_next_token)
+                    worker.start()
+                    self.assertFalse(done.wait(0.2))
+
+                    service.mark_image_result(first_token, success=False)
+
+                    self.assertTrue(done.wait(2.0))
+                    worker.join(timeout=2.0)
+
+            self.assertEqual(["token-1"], selected_tokens)
+
+    def test_get_codex_image_access_token_waits_for_released_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["plus-token"])
+            service.update_account("plus-token", {"type": "Plus", "status": "正常", "quota": 0})
+
+            with mock.patch.object(
+                type(config),
+                "image_account_concurrency",
+                new_callable=mock.PropertyMock,
+                return_value=1,
+            ):
+                with mock.patch.object(service, "refresh_account_state", side_effect=lambda token: service.get_account(token)):
+                    first_token = service.get_codex_image_access_token()
+                    done = Event()
+                    selected_tokens: list[str] = []
+
+                    def pick_next_token() -> None:
+                        selected_tokens.append(service.get_codex_image_access_token())
+                        done.set()
+
+                    worker = Thread(target=pick_next_token)
+                    worker.start()
+                    self.assertFalse(done.wait(0.2))
+
+                    service.mark_codex_image_result(first_token, success=False)
+
+                    self.assertTrue(done.wait(2.0))
+                    worker.join(timeout=2.0)
+
+            self.assertEqual(["plus-token"], selected_tokens)
 
     def test_delete_accounts_by_status_only_removes_matching_abnormal_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

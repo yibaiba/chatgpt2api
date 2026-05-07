@@ -249,11 +249,13 @@ type AuthSessionResponse = {
 export type SettingsConfig = {
   proxy: string;
   base_url?: string;
+  global_system_prompt?: string;
   "auth-key"?: string;
   auth_key_configured?: boolean;
   refresh_account_interval_minute?: number | string;
   refresh_account_batch_size?: number | string;
   remote_account_sync_interval_minute?: number | string;
+  image_account_concurrency?: number | string;
   auto_remove_rate_limited_accounts?: boolean;
   sensitive_word_filter_enabled?: boolean;
   sensitive_words?: string[];

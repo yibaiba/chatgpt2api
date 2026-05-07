@@ -1,6 +1,7 @@
 {
   "refresh_account_interval_minute": 60,
   "refresh_account_batch_size": 3,
+  "image_account_concurrency": 1,
   "image_history_persistence_mode": "browser",
   "proxy_pool": [],
   "remote_account_sync_interval_minute": 60,
@@ -9,6 +10,7 @@
   "base_url": "",
   "sensitive_word_filter_enabled": true,
   "sensitive_words": [],
+  "global_system_prompt": "",
   "storage_backend": "json",
   "storage_sqlite_path": "/Users/yibai/Code/PycharmProjects/chatgpt2api/data/accounts.sqlite3",
   "storage_env_override_active": false,

@@ -2,6 +2,32 @@
 
 import type { ImageConversation, ImageConversationMode, ImageTurnStatus } from "@/store/image-conversations";
 
+export type ConversationImageAsset = {
+  id: string;
+  src: string;
+  fileName: string;
+};
+
+function sanitizeFileStem(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return normalized || "image";
+}
+
+function imageExtensionFromMimeType(mimeType: string | undefined): string {
+  if (mimeType === "image/jpeg") {
+    return "jpg";
+  }
+  if (mimeType === "image/webp") {
+    return "webp";
+  }
+  return "png";
+}
+
 export function getConversationStatus(conversation: ImageConversation): ImageTurnStatus {
   const lastTurn = conversation.turns[conversation.turns.length - 1];
   return lastTurn?.status ?? "success";
@@ -27,12 +53,14 @@ export function getConversationImageCount(conversation: ImageConversation) {
 }
 
 export function getConversationImages(conversation: ImageConversation) {
+  const fileStem = sanitizeFileStem(conversation.title);
   return conversation.turns.flatMap((turn) =>
     turn.images
       .filter((image) => image.status === "success" && image.b64_json)
       .map((image) => ({
         id: image.id,
         src: `data:${image.mime_type || "image/png"};base64,${image.b64_json}`,
+        fileName: `${fileStem}-${image.id}.${imageExtensionFromMimeType(image.mime_type)}`,
       })),
   );
 }

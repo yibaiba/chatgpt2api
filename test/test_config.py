@@ -110,6 +110,33 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_normalizes_image_account_concurrency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(
+                json.dumps({"auth-key": "plain-secret", "image_account_concurrency": 0}),
+                encoding="utf-8",
+            )
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+
+                self.assertEqual(1, store.image_account_concurrency)
+
+                data = store.update({"image_account_concurrency": "5"})
+
+                self.assertEqual(5, data["image_account_concurrency"])
+                self.assertEqual(5, store.image_account_concurrency)
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
     def test_config_store_preserves_existing_auth_hash_when_blank_auth_key_is_submitted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)
@@ -157,6 +184,28 @@ class ConfigLoadingTests(unittest.TestCase):
                 self.assertTrue(data["sensitive_word_filter_enabled"])
                 self.assertEqual(["NSFW", "Violence"], data["sensitive_words"])
                 self.assertEqual(["NSFW", "Violence"], store.sensitive_words)
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
+    def test_config_store_normalizes_global_system_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+
+                data = store.update({"global_system_prompt": "  keep users safe  "})
+
+                self.assertEqual("keep users safe", data["global_system_prompt"])
+                self.assertEqual("keep users safe", store.global_system_prompt)
             finally:
                 if old_env_auth_key is None:
                     module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)

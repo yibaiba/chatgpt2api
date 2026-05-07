@@ -172,11 +172,13 @@ class ConfigStore:
             public_data.get("auto_remove_rate_limited_accounts"),
             fallback=False,
         )
+        public_data["image_account_concurrency"] = self.image_account_concurrency
         public_data["sensitive_word_filter_enabled"] = self._normalize_bool(
             public_data.get("sensitive_word_filter_enabled"),
             fallback=False,
         )
         public_data["sensitive_words"] = self._normalize_sensitive_words(public_data.get("sensitive_words"))
+        public_data["global_system_prompt"] = self.global_system_prompt
         public_data["storage_backend"] = self.storage_backend
         public_data["storage_sqlite_path"] = str(self.storage_sqlite_path)
         public_data["storage_env_override_active"] = self.has_storage_env_override()
@@ -293,6 +295,15 @@ class ConfigStore:
         )
 
     @property
+    def image_account_concurrency(self) -> int:
+        return self._normalize_clamped_int(
+            self.data.get("image_account_concurrency"),
+            fallback=1,
+            min_value=1,
+            max_value=100,
+        )
+
+    @property
     def auto_remove_rate_limited_accounts(self) -> bool:
         return self._normalize_bool(self.data.get("auto_remove_rate_limited_accounts"), fallback=False)
 
@@ -303,6 +314,10 @@ class ConfigStore:
     @property
     def sensitive_words(self) -> list[str]:
         return self._normalize_sensitive_words(self.data.get("sensitive_words"))
+
+    @property
+    def global_system_prompt(self) -> str:
+        return str(self.data.get("global_system_prompt") or "").strip()
 
     @property
     def images_dir(self) -> Path:
@@ -371,6 +386,12 @@ class ConfigStore:
             min_value=1,
             max_value=10 ** 9,
         )
+        next_data["image_account_concurrency"] = self._normalize_clamped_int(
+            next_data.get("image_account_concurrency"),
+            fallback=1,
+            min_value=1,
+            max_value=100,
+        )
         next_data["auto_remove_rate_limited_accounts"] = self._normalize_bool(
             next_data.get("auto_remove_rate_limited_accounts"),
             fallback=False,
@@ -380,6 +401,7 @@ class ConfigStore:
             fallback=False,
         )
         next_data["sensitive_words"] = self._normalize_sensitive_words(next_data.get("sensitive_words"))
+        next_data["global_system_prompt"] = str(next_data.get("global_system_prompt") or "").strip()
         next_data["storage_backend"] = self._normalize_storage_backend(next_data.get("storage_backend"))
         normalized_sqlite_path = self._normalize_storage_sqlite_path(next_data.get("storage_sqlite_path"))
         if normalized_sqlite_path:

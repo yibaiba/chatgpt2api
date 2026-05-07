@@ -749,6 +749,46 @@ export default function ImagePage() {
     }
   };
 
+  const handleRenameConversation = async (id: string, title: string) => {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      return;
+    }
+    const currentConversation = conversationsRef.current.find((item) => item.id === id);
+    if (!currentConversation || currentConversation.title === trimmedTitle) {
+      return;
+    }
+
+    const renamedConversation: ImageConversation = {
+      ...currentConversation,
+      title: trimmedTitle,
+      updatedAt: currentConversation.turns.length > 0 ? new Date().toISOString() : currentConversation.updatedAt,
+    };
+    const nextConversations = sortImageConversations([
+      renamedConversation,
+      ...conversationsRef.current.filter((item) => item.id !== id),
+    ]);
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
+
+    if (currentConversation.turns.length === 0) {
+      return;
+    }
+
+    try {
+      await scheduleConversationPersistence(id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "重命名会话失败";
+      toast.error(message);
+      const items =
+        historyPersistenceMode === "server"
+          ? await listImageConversations()
+          : await listBrowserImageConversations(browserHistoryStorageKey);
+      conversationsRef.current = items;
+      setConversations(items);
+    }
+  };
+
   const handleClearHistory = async () => {
     try {
       if (historyPersistenceMode === "server") {
@@ -1302,6 +1342,7 @@ export default function ImagePage() {
             onClearHistory={openClearHistoryConfirm}
             onSelectConversation={setSelectedConversationId}
             onDeleteConversation={openDeleteConversationConfirm}
+            onRenameConversation={handleRenameConversation}
             formatConversationTime={formatConversationTime}
           />
         </div>
@@ -1448,6 +1489,7 @@ export default function ImagePage() {
                 setIsHistoryOpen(false);
               }}
               onDeleteConversation={openDeleteConversationConfirm}
+              onRenameConversation={handleRenameConversation}
               formatConversationTime={formatConversationTime}
             />
           </div>

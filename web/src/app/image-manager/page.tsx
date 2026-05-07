@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LoaderCircle, Trash2 } from "lucide-react";
+import { Download, LoaderCircle, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { getConversationImageCount } from "@/app/image-manager/conversation-utils";
+import { getConversationImageCount, getConversationImages, type ConversationImageAsset } from "@/app/image-manager/conversation-utils";
 import { ImageManagerDeleteDialog, ImageManagerDetailDialog } from "@/app/image-manager/dialogs";
 import { FilterToolbar } from "@/app/image-manager/filter-toolbar";
 import { ImageManagerTable } from "@/app/image-manager/table";
@@ -18,6 +18,43 @@ import { type AuthSession } from "@/lib/auth-types";
 import { clearImageConversations, deleteImageConversation, listImageConversations, type ImageConversation, type ImageConversationMode } from "@/store/image-conversations";
 
 type DeleteConfirmState = { type: "one"; conversationId: string; title: string } | { type: "batch"; conversationIds: string[]; count: number } | { type: "all" } | null;
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, content] = dataUrl.split(",", 2);
+  const mimeType = header.match(/^data:(.*?);base64$/)?.[1] || "image/png";
+  const binary = atob(content || "");
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type: mimeType });
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function dedupeFileName(fileName: string, usedNames: Set<string>) {
+  if (!usedNames.has(fileName)) {
+    usedNames.add(fileName);
+    return fileName;
+  }
+  const dotIndex = fileName.lastIndexOf(".");
+  const hasExtension = dotIndex > 0;
+  const stem = hasExtension ? fileName.slice(0, dotIndex) : fileName;
+  const extension = hasExtension ? fileName.slice(dotIndex) : "";
+  let suffix = 2;
+  while (true) {
+    const candidate = `${stem}-${suffix}${extension}`;
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+    suffix += 1;
+  }
+}
 
 export default function ImageManagerPage() {
   const router = useRouter();
@@ -174,6 +211,32 @@ export default function ImageManagerPage() {
   }, [filteredItems]);
   const historyDisabled = session?.image_history_persistence_mode !== "server";
 
+  const handleDownloadImage = useCallback((image: ConversationImageAsset) => {
+    downloadBlob(dataUrlToBlob(image.src), image.fileName);
+  }, []);
+
+  const handleDownloadSelectedZip = useCallback(async () => {
+    const selectedConversations = filteredItems.filter((item) => selectedIds.has(item.id));
+    const selectedImages = selectedConversations.flatMap((conversation) => getConversationImages(conversation));
+    if (selectedImages.length === 0) {
+      toast.error("已选会话里没有可下载的成功图片");
+      return;
+    }
+    try {
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const usedNames = new Set<string>();
+      for (const image of selectedImages) {
+        zip.file(dedupeFileName(image.fileName, usedNames), dataUrlToBlob(image.src));
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      downloadBlob(blob, `image-manager-${Date.now()}.zip`);
+      toast.success(`已打包 ${selectedImages.length} 张图片`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "打包 ZIP 失败");
+    }
+  }, [filteredItems, selectedIds]);
+
   if (isLoading) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
@@ -252,6 +315,7 @@ export default function ImageManagerPage() {
             <span>当前结果：{filteredItems.length} 条 · 时间范围：{dateRangeLabel} · 服务端历史模式：{session.image_history_persistence_mode === "server" ? "已启用" : "未启用"}</span>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button variant="outline" className="rounded-xl border-stone-200 bg-white px-4 text-stone-700" onClick={() => toggleAllFiltered(!allFilteredSelected)} disabled={historyDisabled || filteredItems.length === 0}>{allFilteredSelected ? "取消全选当前结果" : "全选当前结果"}</Button>
+              <Button variant="outline" className="rounded-xl border-stone-200 bg-white px-4 text-stone-700" onClick={() => void handleDownloadSelectedZip()} disabled={historyDisabled || selectedFilteredCount === 0}><Download className="size-4" />下载已选 ZIP</Button>
               <Button variant="destructive" className="rounded-xl px-4" onClick={() => setDeleteConfirm({ type: "batch", conversationIds: filteredItems.filter((item) => selectedIds.has(item.id)).map((item) => item.id), count: selectedFilteredCount })} disabled={historyDisabled || selectedFilteredCount === 0}><Trash2 className="size-4" />删除已选 ({selectedFilteredCount})</Button>
               <Button variant="destructive" className="rounded-xl px-4" onClick={() => setDeleteConfirm({ type: "all" })} disabled={historyDisabled || items.length === 0}><Trash2 className="size-4" />清空全部</Button>
             </div>
@@ -281,6 +345,7 @@ export default function ImageManagerPage() {
         setLightboxImages={setLightboxImages}
         setLightboxIndex={setLightboxIndex}
         setLightboxOpen={setLightboxOpen}
+        onDownloadImage={handleDownloadImage}
         onOpenChange={(open) => !open && setSelectedConversation(null)}
       />
       <ImageManagerDeleteDialog

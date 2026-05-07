@@ -26,6 +26,8 @@ export function ConfigCard() {
   const setRefreshAccountIntervalMinute = useSettingsStore((state) => state.setRefreshAccountIntervalMinute);
   const setRemoteAccountSyncIntervalMinute = useSettingsStore((state) => state.setRemoteAccountSyncIntervalMinute);
   const setRefreshAccountBatchSize = useSettingsStore((state) => state.setRefreshAccountBatchSize);
+  const setImageAccountConcurrency = useSettingsStore((state) => state.setImageAccountConcurrency);
+  const setGlobalSystemPrompt = useSettingsStore((state) => state.setGlobalSystemPrompt);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
   const setSensitiveWordFilterEnabled = useSettingsStore((state) => state.setSensitiveWordFilterEnabled);
   const setSensitiveWordsText = useSettingsStore((state) => state.setSensitiveWordsText);
@@ -116,6 +118,24 @@ export function ConfigCard() {
             </p>
           </div>
 
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">单账号图片并发</label>
+            <Input
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+              inputMode="numeric"
+              value={String(config?.image_account_concurrency || "")}
+              onChange={(event) => setImageAccountConcurrency(event.target.value)}
+              placeholder="1"
+              className="h-11 rounded-xl border-stone-200 bg-white"
+            />
+            <p className="text-xs text-stone-500">
+              限制单个账号同时处理的图片请求数；默认 1，可在多并发排队场景下降低误判“无可用图片额度”。
+            </p>
+          </div>
+
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm font-medium text-stone-700">账号自动清理</label>
             <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
@@ -131,6 +151,19 @@ export function ConfigCard() {
                 </span>
               </span>
             </label>
+          </div>
+
+          <div className="space-y-3 md:col-span-2">
+            <label className="text-sm font-medium text-stone-700">全局附加指令</label>
+            <Textarea
+              value={String(config?.global_system_prompt || "")}
+              onChange={(event) => setGlobalSystemPrompt(event.target.value)}
+              placeholder={"例如：先判断用户提示词是否合规；遇到违法、色情、暴力、仇恨等请求时拒绝回答。"}
+              className="min-h-28 rounded-xl border-stone-200 bg-white font-mono text-xs"
+            />
+            <p className="text-xs text-stone-500">
+              会在文本请求前统一作为最前面的 system 指令拼入，可用于固定角色、统一约束或附加审查要求。
+            </p>
           </div>
 
           <div className="space-y-3 md:col-span-2">

@@ -204,7 +204,7 @@ export function ImageResults({
                           <Button
                             variant="outline"
                             size="sm"
-                            className="rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                            className="h-7 w-7 rounded-full border-stone-200 bg-white px-0 text-stone-700 hover:bg-stone-50 sm:h-8 sm:w-auto sm:px-3"
                             onClick={() =>
                               void onReuseAsReference({
                                 conversationId: selectedConversation.id,
@@ -212,9 +212,10 @@ export function ImageResults({
                                 dataUrl: image.dataUrl,
                               })
                             }
+                            aria-label="加入编辑"
                           >
                             <Sparkles className="size-4" />
-                            加入编辑
+                            <span className="hidden sm:inline">加入编辑</span>
                           </Button>
                         </div>
                       ))}
@@ -313,7 +314,7 @@ export function ImageResults({
                             <Button
                               variant="outline"
                               size="sm"
-                              className="rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                              className="h-7 w-7 rounded-full border-stone-200 bg-white px-0 text-stone-700 hover:bg-stone-50 sm:h-8 sm:w-auto sm:px-3"
                               onClick={() =>
                                 void onReuseAsReference({
                                   conversationId: selectedConversation.id,
@@ -321,9 +322,10 @@ export function ImageResults({
                                   dataUrl: buildImageDataUrl(image),
                                 })
                               }
+                              aria-label="加入编辑"
                             >
                               <Sparkles className="size-4" />
-                              加入编辑
+                              <span className="hidden sm:inline">加入编辑</span>
                             </Button>
                           </div>
                         </div>

@@ -56,6 +56,12 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       min: 1,
       max: 10,
     }),
+    image_account_concurrency: normalizeClampedInteger(config.image_account_concurrency, {
+      fallback: 1,
+      min: 1,
+      max: 100,
+    }),
+    global_system_prompt: typeof config.global_system_prompt === "string" ? config.global_system_prompt : "",
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
     sensitive_word_filter_enabled: Boolean(config.sensitive_word_filter_enabled),
     sensitive_words: sensitiveWords,
@@ -134,6 +140,8 @@ type SettingsStore = {
   setRefreshAccountIntervalMinute: (value: string) => void;
   setRemoteAccountSyncIntervalMinute: (value: string) => void;
   setRefreshAccountBatchSize: (value: string) => void;
+  setImageAccountConcurrency: (value: string) => void;
+  setGlobalSystemPrompt: (value: string) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
   setSensitiveWordFilterEnabled: (value: boolean) => void;
   setSensitiveWordsText: (value: string) => void;
@@ -225,6 +233,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           min: 1,
           max: 10,
         }),
+        image_account_concurrency: normalizeClampedInteger(config.image_account_concurrency, {
+          fallback: 1,
+          min: 1,
+          max: 100,
+        }),
+        global_system_prompt: String(config.global_system_prompt || "").trim(),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
         sensitive_word_filter_enabled: Boolean(config.sensitive_word_filter_enabled),
         sensitive_words: Array.isArray(config.sensitive_words) ? config.sensitive_words : [],
@@ -295,6 +309,34 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           refresh_account_batch_size: value,
+        },
+      };
+    });
+  },
+
+  setImageAccountConcurrency: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          image_account_concurrency: value,
+        },
+      };
+    });
+  },
+
+  setGlobalSystemPrompt: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          global_system_prompt: value,
         },
       };
     });

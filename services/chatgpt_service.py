@@ -214,9 +214,16 @@ class ChatGPTService:
         return "\n\n".join(parts).strip()
 
     @staticmethod
-    def _compose_text_prompt(prompt: str, instruction_text: str = "") -> str:
+    def _merge_instruction_text(instruction_text: str = "") -> str:
+        parts = [
+            str(config.global_system_prompt or "").strip(),
+            str(instruction_text or "").strip(),
+        ]
+        return "\n\n".join(part for part in parts if part).strip()
+
+    def _compose_text_prompt(self, prompt: str, instruction_text: str = "") -> str:
         normalized_prompt = str(prompt or "").strip()
-        normalized_instruction_text = str(instruction_text or "").strip()
+        normalized_instruction_text = self._merge_instruction_text(instruction_text)
         if not normalized_instruction_text:
             return normalized_prompt
         if not normalized_prompt:

@@ -1,6 +1,8 @@
 "use client";
 
-import { getConversationImages, getConversationMode, getConversationPrompt, getConversationStatus, getModeLabel } from "@/app/image-manager/conversation-utils";
+import { Download } from "lucide-react";
+
+import { getConversationImages, getConversationMode, getConversationPrompt, getConversationStatus, getModeLabel, type ConversationImageAsset } from "@/app/image-manager/conversation-utils";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,6 +24,7 @@ type ImageManagerDetailDialogProps = {
   setLightboxImages: (images: Array<{ id: string; src: string }>) => void;
   setLightboxIndex: (index: number) => void;
   setLightboxOpen: (open: boolean) => void;
+  onDownloadImage: (image: ConversationImageAsset) => void | Promise<void>;
   onOpenChange: (open: boolean) => void;
 };
 
@@ -33,6 +36,7 @@ export function ImageManagerDetailDialog({
   setLightboxImages,
   setLightboxIndex,
   setLightboxOpen,
+  onDownloadImage,
   onOpenChange,
 }: ImageManagerDetailDialogProps) {
   return (
@@ -51,9 +55,31 @@ export function ImageManagerDetailDialog({
               <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4 text-sm text-stone-700">{getConversationPrompt(selectedConversation) || "—"}</div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {getConversationImages(selectedConversation).map((image, index) => (
-                  <button key={image.id} type="button" className="overflow-hidden rounded-2xl border border-stone-200 bg-stone-100 text-left transition hover:border-stone-300 hover:shadow-sm" onClick={() => { const images = getConversationImages(selectedConversation); setLightboxImages(images); setLightboxIndex(index); setLightboxOpen(true); }}>
-                    <img src={image.src} alt={selectedConversation.title} className="aspect-square w-full object-cover" />
-                  </button>
+                  <div key={image.id} className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                    <button
+                      type="button"
+                      className="block w-full overflow-hidden bg-stone-100 text-left transition hover:border-stone-300 hover:shadow-sm"
+                      onClick={() => {
+                        const images = getConversationImages(selectedConversation);
+                        setLightboxImages(images);
+                        setLightboxIndex(index);
+                        setLightboxOpen(true);
+                      }}
+                    >
+                      <img src={image.src} alt={selectedConversation.title} className="aspect-square w-full object-cover" />
+                    </button>
+                    <div className="flex justify-end px-3 py-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-full border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                        onClick={() => void onDownloadImage(image)}
+                      >
+                        <Download className="size-4" />
+                        下载
+                      </Button>
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>

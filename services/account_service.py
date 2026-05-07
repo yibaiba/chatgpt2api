@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
 import hashlib
 import json
-from threading import Lock
+from threading import Condition, Lock
 from typing import Any, Callable
 from datetime import datetime
 from pathlib import Path
@@ -41,8 +41,10 @@ class AccountService:
             self._store = store
             self.store_file = getattr(store, "path", Path("accounts.json"))
         self._lock = Lock()
+        self._image_slot_condition = Condition(self._lock)
         self._index = 0
         self._accounts = self._load_accounts()
+        self._image_inflight: dict[str, int] = {}
 
     @staticmethod
     def _clean_token(value: Any) -> str:
@@ -259,6 +261,19 @@ class AccountService:
         *,
         predicate: Callable[[dict], bool] | None = None,
     ) -> list[str]:
+        max_concurrency = max(1, int(config.image_account_concurrency or 1))
+        return [
+            token
+            for token in self._list_ready_candidate_tokens(excluded_tokens, predicate=predicate)
+            if int(self._image_inflight.get(token, 0)) < max_concurrency
+        ]
+
+    def _list_ready_candidate_tokens(
+        self,
+        excluded_tokens: set[str] | None = None,
+        *,
+        predicate: Callable[[dict], bool] | None = None,
+    ) -> list[str]:
         excluded = {self._clean_token(token) for token in (excluded_tokens or set()) if self._clean_token(token)}
         is_available = predicate or self._is_image_account_available
         return [
@@ -284,6 +299,43 @@ class AccountService:
             self._index += 1
             return access_token
 
+    def _acquire_next_candidate_token(
+        self,
+        excluded_tokens: set[str] | None = None,
+        *,
+        predicate: Callable[[dict], bool] | None = None,
+        empty_error: str | None = None,
+    ) -> str:
+        with self._image_slot_condition:
+            while True:
+                ready_tokens = self._list_ready_candidate_tokens(excluded_tokens, predicate=predicate)
+                if not ready_tokens:
+                    raise RuntimeError(empty_error or f"No available tokens found in {self.store_file}")
+                max_concurrency = max(1, int(config.image_account_concurrency or 1))
+                tokens = [
+                    token
+                    for token in ready_tokens
+                    if int(self._image_inflight.get(token, 0)) < max_concurrency
+                ]
+                if tokens:
+                    access_token = tokens[self._index % len(tokens)]
+                    self._index += 1
+                    self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
+                    return access_token
+                self._image_slot_condition.wait(timeout=1.0)
+
+    def release_image_slot(self, access_token: str) -> None:
+        access_token = self._clean_token(access_token)
+        if not access_token:
+            return
+        with self._image_slot_condition:
+            current_inflight = int(self._image_inflight.get(access_token, 0))
+            if current_inflight <= 1:
+                self._image_inflight.pop(access_token, None)
+            else:
+                self._image_inflight[access_token] = current_inflight - 1
+            self._image_slot_condition.notify_all()
+
     def refresh_account_state(self, access_token: str) -> dict | None:
         token_ref = anonymize_token(access_token)
         try:
@@ -305,12 +357,13 @@ class AccountService:
     def get_available_access_token(self) -> str:
         attempted_tokens: set[str] = set()
         while True:
-            access_token = self._pick_next_candidate_token(excluded_tokens=attempted_tokens)
+            access_token = self._acquire_next_candidate_token(excluded_tokens=attempted_tokens)
             attempted_tokens.add(access_token)
             token_ref = anonymize_token(access_token)
             account = self.refresh_account_state(access_token)
             if self._is_image_account_available(account or {}):
                 return access_token
+            self.release_image_slot(access_token)
             print(
                 f"[account-available] skip token={token_ref} "
                 f"quota={account.get('quota') if account else 'unknown'} "
@@ -320,7 +373,7 @@ class AccountService:
     def get_codex_image_access_token(self) -> str:
         attempted_tokens: set[str] = set()
         while True:
-            access_token = self._pick_next_candidate_token(
+            access_token = self._acquire_next_candidate_token(
                 excluded_tokens=attempted_tokens,
                 predicate=self._is_codex_image_account_available,
                 empty_error="没有可用的 Plus/Team/Pro 账号",
@@ -330,6 +383,7 @@ class AccountService:
             account = self.refresh_account_state(access_token)
             if self._is_codex_image_account_available(account or {}):
                 return access_token
+            self.release_image_slot(access_token)
             print(
                 f"[account-codex-available] skip token={token_ref} "
                 f"type={account.get('type') if account else 'unknown'} "
@@ -360,7 +414,9 @@ class AccountService:
             self._store = store
             self.store_file = next_store_file
             self._accounts = next_accounts
+            self._image_inflight = {}
             self._index = self._index % len(self._accounts) if self._accounts else 0
+            self._image_slot_condition.notify_all()
             return self._public_items(self._accounts)
 
     def list_limited_tokens(self) -> list[str]:
@@ -399,6 +455,7 @@ class AccountService:
                     indexed[access_token] = account
             self._accounts = list(indexed.values())
             self._save_accounts()
+            self._image_slot_condition.notify_all()
             items = self._public_items(self._accounts)
         return {"added": added, "skipped": skipped, "items": items}
 
@@ -411,12 +468,15 @@ class AccountService:
             self._accounts = [item for item in self._accounts if
                               self._clean_token(item.get("access_token")) not in target_set]
             removed = before - len(self._accounts)
+            for token in target_set:
+                self._image_inflight.pop(token, None)
             if self._accounts:
                 self._index %= len(self._accounts)
             else:
                 self._index = 0
             if removed:
                 self._save_accounts()
+                self._image_slot_condition.notify_all()
             items = self._public_items(self._accounts)
         return {"removed": removed, "items": items}
 
@@ -459,12 +519,16 @@ class AccountService:
         return {"removed": removed, "removed_tokens": removed_tokens, "items": items}
 
     def _remove_account_at_index(self, index: int) -> None:
+        access_token = self._clean_token(self._accounts[index].get("access_token"))
         del self._accounts[index]
+        if access_token:
+            self._image_inflight.pop(access_token, None)
         if self._accounts:
             self._index %= len(self._accounts)
         else:
             self._index = 0
         self._save_accounts()
+        self._image_slot_condition.notify_all()
 
     @staticmethod
     def _should_auto_remove_rate_limited_account(account: dict | None) -> bool:
@@ -486,6 +550,7 @@ class AccountService:
                 return None
             self._accounts[index] = account
             self._save_accounts()
+            self._image_slot_condition.notify_all()
             return dict(account)
         return None
 
@@ -523,9 +588,11 @@ class AccountService:
         return None
 
     def mark_image_result(self, access_token: str, success: bool) -> dict | None:
+        self.release_image_slot(access_token)
         return self._mark_image_activity(access_token, success, consume_quota=True)
 
     def mark_codex_image_result(self, access_token: str, success: bool) -> dict | None:
+        self.release_image_slot(access_token)
         return self._mark_image_activity(access_token, success, consume_quota=False)
 
     def fetch_remote_info(self, access_token: str) -> dict[str, Any]:
