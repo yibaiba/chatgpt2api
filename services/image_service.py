@@ -10,13 +10,15 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterator, Optional
 
 from curl_cffi.requests import Session
+from PIL import Image
 
 from services.account_service import account_service
 from services import proof_of_work
 from services.system_settings import system_settings_service
+from services.utils import CODEX_IMAGE_MODEL, ImageRequestOptions, parse_exact_image_size
 
 
 BASE_URL = "https://chatgpt.com"
@@ -27,6 +29,16 @@ USER_AGENT = (
 )
 OAI_CLIENT_BUILD_NUMBER = "6263762"
 OAI_CLIENT_VERSION = "prod-bb85d27e6e8ee4f71f4c78dbdd215e997ff394d6"
+CODEX_RESPONSE_MODEL = "gpt-5.4"
+CODEX_RESPONSE_VERSION = "0.122.0"
+CODEX_RESPONSE_INSTRUCTIONS = "you are a helpful assistant"
+CODEX_RESPONSE_TOOL_CHOICE = "auto"
+CODEX_RESPONSE_SESSION_ID = "test-session"
+CODEX_RESPONSE_USER_AGENT = (
+    "codex-tui/0.122.0 (Darwin; x86_64) "
+    "vscode/3.0.12 (codex-tui; 0.122.0)"
+)
+MAX_CODEX_INLINE_REQUEST_BYTES = 28 * 1024 * 1024
 
 # 动态提取的 build info，随首页 HTML 刷新，默认使用上方硬编码值兜底
 _cached_build_number: str = OAI_CLIENT_BUILD_NUMBER
@@ -44,6 +56,16 @@ IMAGE_UPSTREAM_CONNECTION_ERROR_MARKERS = (
     "tls connect error",
     "openssl_internal",
 )
+IMAGE_OUTPUT_MIME_TYPES = {
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+}
+IMAGE_OUTPUT_EXTENSIONS = {
+    "png": "png",
+    "jpeg": "jpg",
+    "webp": "webp",
+}
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -447,6 +469,16 @@ def is_retryable_image_output_error(message: str) -> bool:
     }
 
 
+def is_rate_limited_image_error(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    return (
+        "429" in text
+        or "rate limit" in text
+        or "too many requests" in text
+        or "too many retries" in text
+    )
+
+
 def is_conversation_forbidden_error(message: str) -> bool:
     text = str(message or "").lower()
     return (
@@ -460,6 +492,19 @@ def is_conversation_forbidden_error(message: str) -> bool:
 def _is_free_account(access_token: str) -> bool:
     account = account_service.get_account(access_token) or {}
     return str(account.get("type") or "Free").strip() == "Free"
+
+
+def _is_codex_image_account(access_token: str) -> bool:
+    account = account_service.get_account(access_token) or {}
+    account_type = str(account.get("type") or "").strip()
+    return account_type in {"Plus", "Team", "Pro"}
+
+
+def _ensure_codex_image_account(access_token: str, requested_model: str) -> None:
+    if str(requested_model or "").strip() != CODEX_IMAGE_MODEL:
+        return
+    if not _is_codex_image_account(access_token):
+        raise ImageGenerationError("codex-gpt-image-2 requires a Plus, Team, or Pro account")
 
 
 def _upload_image(session: Session, access_token: str, device_id: str, image_data: bytes, file_name: str, mime_type: str) -> str:
@@ -1219,12 +1264,305 @@ def _download_as_base64(session: Session, download_url: str) -> str:
     return base64.b64encode(_fetch_image_bytes(session, download_url)).decode("ascii")
 
 
-def _download_and_save_image(session: Session, download_url: str, base_url: str | None = None) -> str:
-    """下载图片并保存到本地，返回本地 URL"""
-    image_bytes = _fetch_image_bytes(session, download_url)
+def _guess_mime_type_from_format(output_format: str | None) -> str:
+    normalized = str(output_format or "png").strip().lower() or "png"
+    return IMAGE_OUTPUT_MIME_TYPES.get(normalized, "image/png")
+
+
+def _encode_image_data_url(image_data: bytes, mime_type: str) -> str:
+    encoded = base64.b64encode(image_data).decode("ascii")
+    return f"data:{mime_type or 'image/png'};base64,{encoded}"
+
+
+def _build_codex_response_input(prompt: str, images: list[tuple[bytes, str, str]] | None = None) -> list[dict[str, object]]:
+    if not images:
+        return [{"role": "user", "content": prompt}]
+    content: list[dict[str, str]] = [{"type": "input_text", "text": prompt}]
+    for image_data, _, mime_type in images:
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": _encode_image_data_url(image_data, mime_type),
+            }
+        )
+    return [{"role": "user", "content": content}]
+
+
+def _estimate_codex_inline_request_bytes(prompt: str, images: list[tuple[bytes, str, str]] | None = None) -> int:
+    input_items = _build_codex_response_input(prompt, images)
+    payload = json.dumps(input_items, ensure_ascii=False, separators=(",", ":"))
+    return len(payload.encode("utf-8"))
+
+
+def _build_codex_image_tool(image_options: ImageRequestOptions | None) -> dict[str, object]:
+    output_format = str((image_options.output_format if image_options is not None else "png") or "png").strip().lower() or "png"
+    tool: dict[str, object] = {
+        "type": "image_generation",
+        "output_format": output_format,
+    }
+    exact_size = parse_exact_image_size(image_options.size if image_options is not None else None)
+    if exact_size is not None:
+        tool["size"] = f"{exact_size[0]}x{exact_size[1]}"
+    return tool
+
+
+def _build_codex_response_payload(
+    prompt: str,
+    *,
+    image_options: ImageRequestOptions | None,
+    images: list[tuple[bytes, str, str]] | None = None,
+) -> dict[str, object]:
+    return {
+        "model": CODEX_RESPONSE_MODEL,
+        "input": _build_codex_response_input(prompt, images),
+        "tools": [_build_codex_image_tool(image_options)],
+        "instructions": CODEX_RESPONSE_INSTRUCTIONS,
+        "tool_choice": CODEX_RESPONSE_TOOL_CHOICE,
+        "stream": True,
+        "store": False,
+    }
+
+
+def _build_codex_response_headers(access_token: str) -> dict[str, str]:
+    account = account_service.get_account(access_token) or {}
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "content-type": "application/json",
+        "user-agent": CODEX_RESPONSE_USER_AGENT,
+        "version": CODEX_RESPONSE_VERSION,
+        "originator": "codex_cli_rs",
+        "session_id": CODEX_RESPONSE_SESSION_ID,
+    }
+    chatgpt_account_id = str(
+        account.get("chatgpt_account_id")
+        or account.get("account_id")
+        or account.get("user_id")
+        or ""
+    ).strip()
+    if chatgpt_account_id:
+        headers["chatgpt-account-id"] = chatgpt_account_id
+    return headers
+
+
+def _iter_codex_response_events(response) -> Iterator[dict[str, Any]]:
+    for raw_line in response.iter_lines():
+        if not raw_line:
+            continue
+        line = raw_line.decode("utf-8", errors="ignore") if isinstance(raw_line, bytes) else str(raw_line)
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ImageGenerationError("invalid SSE payload from codex responses") from exc
+        if isinstance(event, dict):
+            yield event
+
+
+def _extract_codex_response_error(event: dict[str, Any]) -> str:
+    for candidate in (
+        event.get("error"),
+        (event.get("response") or {}).get("error") if isinstance(event.get("response"), dict) else None,
+        (event.get("item") or {}).get("error") if isinstance(event.get("item"), dict) else None,
+    ):
+        if isinstance(candidate, dict):
+            message = str(candidate.get("message") or candidate.get("code") or "").strip()
+            if message:
+                return message
+        elif candidate:
+            message = str(candidate).strip()
+            if message:
+                return message
+    return "codex image generation failed"
+
+
+def _parse_codex_response_events(events: Iterator[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    image_item: dict[str, Any] = {}
+    response_payload: dict[str, Any] = {}
+    for event in events:
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "response.output_item.done":
+            item = event.get("item") or {}
+            if isinstance(item, dict) and item.get("type") == "image_generation_call" and item.get("result"):
+                image_item = item
+        elif event_type == "response.completed":
+            payload = event.get("response") or {}
+            if isinstance(payload, dict):
+                response_payload = payload
+                for item in payload.get("output") or []:
+                    if isinstance(item, dict) and item.get("type") == "image_generation_call" and item.get("result"):
+                        image_item = item
+        elif event_type in {"response.failed", "response.incomplete", "error"}:
+            raise ImageGenerationError(_extract_codex_response_error(event))
+
+    if not image_item:
+        raise ImageGenerationError("codex responses did not return image output")
+    return image_item, response_payload
+
+
+def _request_codex_response_stream(
+    session: Session,
+    access_token: str,
+    payload: dict[str, object],
+    *,
+    allow_fallback: bool = True,
+):
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/codex/responses",
+            headers=_build_codex_response_headers(access_token),
+            json=payload,
+            timeout=300,
+            stream=True,
+        ),
+        retries=2,
+    )
+    if response.ok:
+        return response
+    fallback_tools = payload.get("tools") if isinstance(payload.get("tools"), list) else []
+    should_retry_with_minimal_tool = (
+        allow_fallback
+        and response.status_code in {400, 422}
+        and any(
+            isinstance(tool, dict)
+            and (
+                tool.get("size")
+                or str(tool.get("output_format") or "").strip().lower() not in {"", "png"}
+            )
+            for tool in fallback_tools
+        )
+    )
+    if should_retry_with_minimal_tool:
+        minimal_payload = dict(payload)
+        minimal_payload["tools"] = [{"type": "image_generation", "output_format": "png"}]
+        print("[image-codex] native tool payload rejected, retry with minimal image_generation tool")
+        return _request_codex_response_stream(
+            session,
+            access_token,
+            minimal_payload,
+            allow_fallback=False,
+        )
+    if response.status_code >= 400:
+        print(f"[image-codex] responses failed status={response.status_code} body={response.text[:400]}")
+    raise ImageGenerationError(response.text[:400] or f"codex responses failed: {response.status_code}")
+
+
+def _build_codex_result_data(
+    prompt: str,
+    response_format: str,
+    *,
+    image_item: dict[str, Any],
+    response_payload: dict[str, Any],
+    image_options: ImageRequestOptions | None,
+    base_url: str | None,
+) -> tuple[int, dict[str, object]]:
+    image_b64 = str(image_item.get("result") or "").strip()
+    if not image_b64:
+        raise ImageGenerationError("codex responses did not return image base64 result")
+    try:
+        original_bytes = base64.b64decode(image_b64)
+    except Exception as exc:
+        raise ImageGenerationError("codex responses returned invalid image data") from exc
+    image_bytes, mime_type = _process_output_image(original_bytes, image_options)
+    output_format = str((image_options.output_format if image_options is not None else "png") or "png").strip().lower() or "png"
+    result_data: dict[str, object] = {
+        "revised_prompt": str(image_item.get("revised_prompt") or prompt).strip() or prompt,
+        "generation_route": "regular",
+        "mime_type": mime_type or _guess_mime_type_from_format(str(image_item.get("output_format") or "")),
+    }
+    if response_format == "url":
+        result_data["url"] = _save_processed_image(image_bytes, output_format, base_url)
+    else:
+        result_data["b64_json"] = base64.b64encode(image_bytes).decode("ascii")
+    created = int(response_payload.get("created_at") or time.time())
+    return created, result_data
+
+
+def _run_codex_image_task(
+    session: Session,
+    access_token: str,
+    prompt: str,
+    *,
+    response_format: str,
+    image_options: ImageRequestOptions | None,
+    base_url: str | None,
+    images: list[tuple[bytes, str, str]] | None = None,
+) -> dict[str, object]:
+    if images and _estimate_codex_inline_request_bytes(prompt, images) > MAX_CODEX_INLINE_REQUEST_BYTES:
+        raise ImageGenerationError("codex inline edit payload is too large, please use smaller reference images")
+    payload = _build_codex_response_payload(
+        prompt,
+        image_options=image_options,
+        images=images,
+    )
+    response = _request_codex_response_stream(session, access_token, payload)
+    image_item, response_payload = _parse_codex_response_events(_iter_codex_response_events(response))
+    created, result_data = _build_codex_result_data(
+        prompt,
+        response_format,
+        image_item=image_item,
+        response_payload=response_payload,
+        image_options=image_options,
+        base_url=base_url,
+    )
+    return {
+        "created": created,
+        "data": [result_data],
+        "response": response_payload,
+    }
+
+
+def _normalize_image_for_output(image: Image.Image, output_format: str) -> Image.Image:
+    normalized_format = str(output_format or "png").strip().lower() or "png"
+    if normalized_format == "jpeg":
+        if image.mode not in {"RGB", "L"}:
+            rgba_image = image.convert("RGBA")
+            background = Image.new("RGB", rgba_image.size, (255, 255, 255))
+            background.paste(rgba_image, mask=rgba_image.getchannel("A"))
+            return background
+        return image.convert("RGB") if image.mode != "RGB" else image
+    if normalized_format == "webp":
+        return image.convert("RGBA" if "A" in image.getbands() else "RGB")
+    if image.mode in {"P", "LA"}:
+        return image.convert("RGBA")
+    return image
+
+
+def _process_output_image(image_bytes: bytes, image_options: ImageRequestOptions | None) -> tuple[bytes, str]:
+    if image_options is None:
+        return image_bytes, "image/png"
+
+    output_format = str(image_options.output_format or "png").strip().lower() or "png"
+    requested_size = parse_exact_image_size(image_options.size)
+    if requested_size is None and output_format == "png":
+        return image_bytes, IMAGE_OUTPUT_MIME_TYPES["png"]
+
+    with Image.open(io.BytesIO(image_bytes)) as source_image:
+        working_image = source_image.copy()
+    if requested_size is not None and working_image.size != requested_size:
+        working_image = working_image.resize(requested_size, Image.Resampling.LANCZOS)
+    working_image = _normalize_image_for_output(working_image, output_format)
+
+    buffer = io.BytesIO()
+    save_kwargs: dict[str, object] = {}
+    if output_format in {"jpeg", "webp"}:
+        compression = image_options.compression
+        save_kwargs["quality"] = max(1, 100 - compression) if compression is not None else 95
+    if output_format == "webp":
+        save_kwargs["method"] = 6
+    working_image.save(buffer, format=output_format.upper(), **save_kwargs)
+    return buffer.getvalue(), IMAGE_OUTPUT_MIME_TYPES[output_format]
+
+
+def _save_processed_image(image_bytes: bytes, output_format: str, base_url: str | None = None) -> str:
     file_hash = hashlib.md5(image_bytes).hexdigest()
     timestamp = int(time.time())
-    filename = f"{timestamp}_{file_hash}.png"
+    extension = IMAGE_OUTPUT_EXTENSIONS[output_format]
+    filename = f"{timestamp}_{file_hash}.{extension}"
     relative_dir = Path(time.strftime("%Y"), time.strftime("%m"), time.strftime("%d"))
 
     file_path = config.images_dir / relative_dir / filename
@@ -1239,6 +1577,8 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[st
     requested_model = str(requested_model or "").strip() or "gpt-image-1"
     is_free_account = _is_free_account(access_token)
 
+    if requested_model == CODEX_IMAGE_MODEL:
+        return CODEX_IMAGE_MODEL, False
     if requested_model == "gpt-image-think":
         # 带思考的图片生成：使用 gpt-5-3（付费账户）或 auto（免费）
         upstream = "auto" if is_free_account else "gpt-5-3"
@@ -1250,6 +1590,8 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[st
 
 def _resolve_upstream_edit_model(requested_model: str) -> str:
     requested_model = str(requested_model or "").strip() or "gpt-image-2"
+    if requested_model == CODEX_IMAGE_MODEL:
+        return CODEX_IMAGE_MODEL
     if requested_model in {"gpt-image-1", "gpt-image-2", "gpt-image-think", "gpt-image"}:
         return "gpt-5-3"
     return requested_model or DEFAULT_MODEL
@@ -1287,15 +1629,19 @@ def _build_image_result_data(
     response_format: str,
     route: str,
     *,
+    image_options: ImageRequestOptions | None,
     session: Session,
     download_url: str,
     base_url: str | None,
 ) -> dict:
-    result_data = {"revised_prompt": prompt, "generation_route": route}
+    original_bytes = _fetch_image_bytes(session, download_url)
+    image_bytes, mime_type = _process_output_image(original_bytes, image_options)
+    output_format = str((image_options.output_format if image_options is not None else "png") or "png").strip().lower() or "png"
+    result_data = {"revised_prompt": prompt, "generation_route": route, "mime_type": mime_type}
     if response_format == "url":
-        result_data["url"] = _download_and_save_image(session, download_url, base_url)
+        result_data["url"] = _save_processed_image(image_bytes, output_format, base_url)
     else:
-        result_data["b64_json"] = _download_as_base64(session, download_url)
+        result_data["b64_json"] = base64.b64encode(image_bytes).decode("ascii")
     return result_data
 
 
@@ -1499,16 +1845,44 @@ def _run_legacy_regular_edit_mode(
     return _parse_sse(response)
 
 
-def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL, response_format: str = "b64_json", base_url: str = None) -> dict:
+def generate_image_result(
+    access_token: str,
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    response_format: str = "b64_json",
+    base_url: str = None,
+    *,
+    image_options: ImageRequestOptions | None = None,
+) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
     if not prompt:
         raise ImageGenerationError("prompt is required")
     if not access_token:
         raise ImageGenerationError("token is required")
+    _ensure_codex_image_account(access_token, model)
 
     session, fp = _new_session(access_token)
     try:
+        if model == CODEX_IMAGE_MODEL:
+            print(
+                f"[image-upstream] start token={access_token[:12]}... "
+                f"requested_model={model} upstream_model={CODEX_RESPONSE_MODEL} thinking=False"
+            )
+            _bootstrap(session, fp)
+            result = _run_codex_image_task(
+                session,
+                access_token,
+                prompt,
+                response_format=response_format,
+                image_options=image_options,
+                base_url=base_url,
+            )
+            print(f"[image-upstream] success token={access_token[:12]}... images=1 format={response_format}")
+            return {
+                "created": result["created"],
+                "data": result["data"],
+            }
         upstream_model, use_thinking = _resolve_upstream_model(access_token, model)
         actual_route = "regular"
         print(
@@ -1599,6 +1973,7 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
             prompt,
             response_format,
             actual_route,
+            image_options=image_options,
             session=session,
             download_url=download_url,
             base_url=base_url,
@@ -1658,6 +2033,8 @@ def edit_image_result(
     model: str = DEFAULT_MODEL,
     response_format: str = "b64_json",
     base_url: str = None,
+    *,
+    image_options: ImageRequestOptions | None = None,
 ) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -1667,9 +2044,33 @@ def edit_image_result(
         raise ImageGenerationError("token is required")
     if not images:
         raise ImageGenerationError("image is required")
+    _ensure_codex_image_account(access_token, model)
 
     session, fp = _new_session(access_token)
     try:
+        if model == CODEX_IMAGE_MODEL:
+            print(
+                f"[image-edit-upstream] start token={access_token[:12]}... "
+                f"requested_model={model} upstream_model={CODEX_RESPONSE_MODEL} thinking=False images={len(images)}"
+            )
+            _bootstrap(session, fp)
+            result = _run_codex_image_task(
+                session,
+                access_token,
+                prompt,
+                response_format=response_format,
+                image_options=image_options,
+                base_url=base_url,
+                images=images,
+            )
+            print(
+                f"[image-edit-upstream] success token={access_token[:12]}... "
+                f"inputs={len(images)} format={response_format}"
+            )
+            return {
+                "created": result["created"],
+                "data": result["data"],
+            }
         upstream_model = _resolve_upstream_edit_model(model)
         actual_route = "regular"
         print(
@@ -1762,6 +2163,7 @@ def edit_image_result(
             prompt,
             response_format,
             actual_route,
+            image_options=image_options,
             session=session,
             download_url=download_url,
             base_url=base_url,

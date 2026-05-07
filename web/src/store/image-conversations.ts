@@ -5,10 +5,17 @@ import localforage from "localforage";
 import type { UserRole } from "@/lib/auth-types";
 import type { ImageGenerationRoute, ImageModel } from "@/lib/api";
 import {
+  isImageBackground,
   isImageAspectRatio,
+  isImageOutputFormat,
   isImageOutputQuality,
+  isImageRenderQuality,
+  normalizeImageCompression,
+  type ImageBackground,
   type ImageAspectRatio,
+  type ImageOutputFormat,
   type ImageOutputQuality,
+  type ImageRenderQuality,
 } from "@/lib/image-options";
 import { httpRequest } from "@/lib/request";
 
@@ -38,6 +45,10 @@ export type ImageTurn = {
   mode: ImageConversationMode;
   aspectRatio?: ImageAspectRatio;
   outputQuality?: ImageOutputQuality;
+  renderQuality?: ImageRenderQuality;
+  background?: ImageBackground;
+  outputFormat?: ImageOutputFormat;
+  compression?: number;
   referenceImages: StoredReferenceImage[];
   count: number;
   images: StoredImage[];
@@ -150,6 +161,10 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     mode: turn.mode === "edit" ? "edit" : "generate",
     aspectRatio: isImageAspectRatio(turn.aspectRatio) ? turn.aspectRatio : undefined,
     outputQuality: isImageOutputQuality(turn.outputQuality) ? turn.outputQuality : undefined,
+    renderQuality: isImageRenderQuality(turn.renderQuality) ? turn.renderQuality : undefined,
+    background: isImageBackground(turn.background) ? turn.background : undefined,
+    outputFormat: isImageOutputFormat(turn.outputFormat) ? turn.outputFormat : undefined,
+    compression: normalizeImageCompression(turn.compression),
     referenceImages: getLegacyReferenceImages(turn),
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     images: normalizedImages,

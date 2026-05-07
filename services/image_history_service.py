@@ -49,6 +49,20 @@ class ImageHistoryService:
         return count
 
     @staticmethod
+    def _clean_optional_int(value: Any, *, minimum: int | None = None, maximum: int | None = None) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        if minimum is not None:
+            normalized = max(minimum, normalized)
+        if maximum is not None:
+            normalized = min(maximum, normalized)
+        return normalized
+
+    @staticmethod
     def _data_url_mime_type(data_url: str) -> str:
         prefix = str(data_url or "").strip()
         if prefix.startswith("data:"):
@@ -151,6 +165,12 @@ class ImageHistoryService:
             "prompt": prompt,
             "model": model,
             "mode": mode,
+            "aspectRatio": self._clean_text(raw.get("aspectRatio") or raw.get("aspect_ratio")) or None,
+            "outputQuality": self._clean_text(raw.get("outputQuality") or raw.get("output_quality")) or None,
+            "renderQuality": self._clean_text(raw.get("renderQuality") or raw.get("render_quality")) or None,
+            "background": self._clean_text(raw.get("background")) or None,
+            "outputFormat": self._clean_text(raw.get("outputFormat") or raw.get("output_format")) or None,
+            "compression": self._clean_optional_int(raw.get("compression"), minimum=0, maximum=100),
             "referenceImages": self._legacy_reference_images(raw),
             "count": self._clean_count(raw.get("count"), minimum=1, maximum=10),
             "images": images,
@@ -194,6 +214,12 @@ class ImageHistoryService:
                     "prompt": raw.get("prompt"),
                     "model": raw.get("model"),
                     "mode": raw.get("mode"),
+                    "aspectRatio": raw.get("aspectRatio") or raw.get("aspect_ratio"),
+                    "outputQuality": raw.get("outputQuality") or raw.get("output_quality"),
+                    "renderQuality": raw.get("renderQuality") or raw.get("render_quality"),
+                    "background": raw.get("background"),
+                    "outputFormat": raw.get("outputFormat") or raw.get("output_format"),
+                    "compression": raw.get("compression"),
                     "referenceImages": raw.get("referenceImages") or raw.get("reference_images"),
                     "sourceImage": raw.get("sourceImage") or raw.get("source_image"),
                     "count": raw.get("count"),

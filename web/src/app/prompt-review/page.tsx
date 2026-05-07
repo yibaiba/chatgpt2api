@@ -21,7 +21,7 @@ import type { AuthSession } from "@/lib/auth-types";
 import { syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 import { streamPromptReview } from "@/lib/prompt-review";
 import { buildPromptReviewStorageKey } from "@/lib/prompt-review-storage";
-import { cn } from "@/lib/utils";
+import { cn, generateClientId } from "@/lib/utils";
 
 type ContextMode = "full" | "warn" | "auto";
 type ReviewMessageState = "done" | "streaming" | "blocked" | "error";
@@ -45,7 +45,7 @@ function buildThread(seed = ""): ReviewThread {
   const now = Date.now();
   const preview = seed.trim();
   return {
-    id: `local-${crypto.randomUUID()}`,
+    id: `local-${generateClientId()}`,
     title: preview ? preview.slice(0, 18) : "新审查对话",
     serverThreadId: null,
     roundCount: 0,
@@ -191,8 +191,8 @@ export default function PromptReviewPage() {
       workingThread = createFreshThread(prompt);
       toast.message("当前线程已较长，已自动新开审查对话");
     }
-    const userMessage: ReviewMessage = { id: crypto.randomUUID(), role: "user", content: prompt, state: "done" };
-    const assistantMessage: ReviewMessage = { id: crypto.randomUUID(), role: "assistant", content: "", state: "streaming" };
+    const userMessage: ReviewMessage = { id: generateClientId(), role: "user", content: prompt, state: "done" };
+    const assistantMessage: ReviewMessage = { id: generateClientId(), role: "assistant", content: "", state: "streaming" };
     setDraft("");
     setActiveId(workingThread.id);
     patchThread(workingThread.id, (thread) => ({

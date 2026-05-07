@@ -4,8 +4,13 @@
   "image_history_persistence_mode": "browser",
   "proxy_pool": [],
   "remote_account_sync_interval_minute": 60,
-  "auto_remove_rate_limited_accounts": false,
+  "auto_remove_rate_limited_accounts": true,
   "proxy": "",
   "base_url": "",
+  "sensitive_word_filter_enabled": true,
+  "sensitive_words": [],
+  "storage_backend": "json",
+  "storage_sqlite_path": "/Users/yibai/Code/PycharmProjects/chatgpt2api/data/accounts.sqlite3",
+  "storage_env_override_active": false,
   "auth-key-hash": "pbkdf2_sha256$260000$0edf2f17e4ad1e2185b49dcb76e7e528$2df553ecb66e266ffcf220aa659cb1720b6923dcf2400483b2ee90771356dbc5"
 }

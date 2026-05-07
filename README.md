@@ -51,11 +51,13 @@ docker compose up -d --build
 - 兼容最小 Anthropic `POST /v1/messages`，并支持基础 Claude tool-use content blocks
 - `GET /v1/models` 返回最小文本模型入口（如 `auto`）以及图片模型
 - 支持通过 `n` 返回多张生成结果
+- 支持 Codex 中的画图接口逆向，模型别名为 `codex-gpt-image-2`；仅 `Plus` / `Team` / `Pro` 订阅可用，可与官网 `gpt-image-2` 额度并存
 
 ### 在线画图功能
 
 - 内置在线画图工作台，支持生成、图片编辑与多图组图编辑
-- 支持 `gpt-image-1` / `gpt-image-2` 模型选择
+- 支持 `gpt-image-2` / `codex-gpt-image-2` / `gpt-image-think` 模型选择
+- 仅 `codex-gpt-image-2` 支持原生 `size / quality / background / output_format / compression`
 - 编辑模式支持参考图上传
 - 支持将已生成图片直接作为参考图继续编辑（桌面端可拖拽，移动端可一键加入）
 - 前端支持多图生成交互
@@ -179,8 +181,8 @@ curl http://localhost:8000/v1/models \
 
 | 字段   | 说明                                       |
 |:-----|:-----------------------------------------|
-| 返回模型 | 当前返回 `auto`、`gpt-4.1`、`gpt-5` 以及图片模型 `gpt-image-1`、`gpt-image-2`、`gpt-image-think` |
-| 注意事项 | 文本模型当前走最小 bridge 直通路径，图片模型仍按现有图片兼容逻辑执行 |
+| 返回模型 | 当前返回 `auto`、`gpt-4.1`、`gpt-5` 以及图片模型 `gpt-image-1`、`gpt-image-2`、`codex-gpt-image-2`、`gpt-image-think` |
+| 注意事项 | 文本模型当前走最小 bridge 直通路径；`codex-gpt-image-2` 仅适用于 `Plus` / `Team` / `Pro` 账号，且与官网 `gpt-image-2` 额度分离 |
 
 <br>
 </details>
@@ -219,11 +221,11 @@ curl http://localhost:8000/v1/images/generations \
 | `prompt`          | 图片生成提示词                                            |
 | `n`               | 生成数量，当前后端限制为 `1-4`                                 |
 | `response_format` | 返回格式，支持 `b64_json` 与 `url`，默认值为 `b64_json`            |
-| `size`            | 目标输出尺寸，支持 `auto` 或 `WIDTHxHEIGHT`；最长边 ≤ `3840`，宽高均需是 `16` 的倍数，长宽比 ≤ `3:1`，总像素需介于 `655,360` 到 `8,294,400` |
-| `quality`         | 输出质量，支持 `auto`、`low`、`medium`、`high`               |
-| `background`      | 背景模式，支持 `auto`、`transparent`、`opaque`；`gpt-image-2` 不支持 `transparent` |
-| `output_format`   | 输出格式，支持 `png`、`jpeg`、`webp`                              |
-| `compression`     | JPEG / WebP 压缩级别，范围 `0-100`；`png` 不支持该参数 |
+| `size`            | 所有模型都支持 `auto` 与历史兼容的 `WIDTH:HEIGHT`；仅 `codex-gpt-image-2` 额外支持精确 `WIDTHxHEIGHT`，最长边 ≤ `3840`，宽高均需是 `16` 的倍数，长宽比 ≤ `3:1`，总像素需介于 `655,360` 到 `8,294,400` |
+| `quality`         | 仅 `codex-gpt-image-2` 支持，取值 `auto`、`low`、`medium`、`high`；当前会作为上游图片提示词增强 |
+| `background`      | 仅 `codex-gpt-image-2` 支持，取值 `auto`、`opaque`；`transparent` 暂不支持 |
+| `output_format`   | 仅 `codex-gpt-image-2` 支持，取值 `png`、`jpeg`、`webp`；服务端会在下载上游结果后按请求格式重编码 |
+| `compression`     | 仅 `codex-gpt-image-2` 支持；JPEG / WebP 压缩级别范围 `0-100`，`png` 不支持该参数 |
 
 补充说明：
 
@@ -231,6 +233,7 @@ curl http://localhost:8000/v1/images/generations \
 - 超过 `2560x1440`（`3,686,400` 像素）的输出属于实验性范围
 - `response_format=url` 时，需要先在设置页或 `config.json` 中显式配置 `base_url`；服务会把处理后的图片保存到本地 `data/images/` 并返回 `${base_url}/images/...` 地址
 - `POST /v1/images/edits` 现在限制最多 4 张参考图、单张 10MB、总上传 20MB，且仅接受常见图片 MIME 类型
+- 图片工作台只有 `codex-gpt-image-2` 会把 `2K / 4K` 换算为原生 `size` 参数；其它模型仍走网页链路并在前端做本地高清放大
 
 <br>
 </details>

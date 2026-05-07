@@ -4,9 +4,26 @@ import { useState } from "react";
 import { Clock3, CornerDownLeft, LoaderCircle, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ImageGenerationRoute } from "@/lib/api";
-import { getImageOutputQualityLabel } from "@/lib/image-options";
-import type { ImageConversation, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
+import type { ImageGenerationRoute, ImageModel } from "@/lib/api";
+import {
+  getImageBackgroundLabel,
+  getImageOutputFormatLabel,
+  getImageOutputQualityLabel,
+  getImageRenderQualityLabel,
+  isCodexImageModel,
+  type ImageBackground,
+  type ImageAspectRatio,
+  type ImageOutputFormat,
+  type ImageOutputQuality,
+  type ImageRenderQuality,
+} from "@/lib/image-options";
+import type {
+  ImageConversation,
+  ImageConversationMode,
+  ImageTurnStatus,
+  StoredImage,
+  StoredReferenceImage,
+} from "@/store/image-conversations";
 
 export type ImageLightboxItem = {
   id: string;
@@ -21,6 +38,14 @@ type ImageResultsProps = {
   onReusePrompt: (payload: {
     conversationId?: string;
     prompt: string;
+    mode: ImageConversationMode;
+    model: ImageModel;
+    aspectRatio?: ImageAspectRatio;
+    outputQuality?: ImageOutputQuality;
+    renderQuality?: ImageRenderQuality;
+    background?: ImageBackground;
+    outputFormat?: ImageOutputFormat;
+    compression?: number;
     referenceImages: StoredReferenceImage[];
   }) => void | Promise<void>;
   formatConversationTime: (value: string) => string;
@@ -123,6 +148,14 @@ export function ImageResults({
                       void onReusePrompt({
                         conversationId: selectedConversation.id,
                         prompt: turn.prompt,
+                        mode: turn.mode,
+                        model: turn.model,
+                        aspectRatio: turn.aspectRatio,
+                        outputQuality: turn.outputQuality,
+                        renderQuality: turn.renderQuality,
+                        background: turn.background,
+                        outputFormat: turn.outputFormat,
+                        compression: turn.compression,
                         referenceImages: turn.referenceImages,
                       })
                     }
@@ -191,9 +224,30 @@ export function ImageResults({
 
                 <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
                   <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
+                  <span className="rounded-full bg-stone-100 px-3 py-1">{getModelLabel(turn.model)}</span>
                   {turn.aspectRatio ? <span className="rounded-full bg-stone-100 px-3 py-1">{turn.aspectRatio}</span> : null}
                   {turn.outputQuality ? (
                     <span className="rounded-full bg-stone-100 px-3 py-1">{getImageOutputQualityLabel(turn.outputQuality)}</span>
+                  ) : null}
+                  {isCodexImageModel(turn.model) && turn.renderQuality && turn.renderQuality !== "auto" ? (
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+                      质量 {getImageRenderQualityLabel(turn.renderQuality)}
+                    </span>
+                  ) : null}
+                  {isCodexImageModel(turn.model) && turn.background && turn.background !== "auto" ? (
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+                      背景 {getImageBackgroundLabel(turn.background)}
+                    </span>
+                  ) : null}
+                  {isCodexImageModel(turn.model) && turn.outputFormat && turn.outputFormat !== "png" ? (
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+                      {getImageOutputFormatLabel(turn.outputFormat)}
+                    </span>
+                  ) : null}
+                  {isCodexImageModel(turn.model) && typeof turn.compression === "number" ? (
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+                      压缩 {turn.compression}
+                    </span>
                   ) : null}
                   <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                   {turn.status === "queued" ? (
@@ -334,6 +388,16 @@ function getTurnStatusLabel(status: ImageTurnStatus) {
     return "已完成";
   }
   return "失败";
+}
+
+function getModelLabel(model: string) {
+  if (model === "codex-gpt-image-2") {
+    return "Codex";
+  }
+  if (model === "gpt-image-think") {
+    return "思考";
+  }
+  return "标准";
 }
 
 function buildImageDataUrl(image: StoredImage) {

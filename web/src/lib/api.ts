@@ -13,7 +13,7 @@ export type {
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
-export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2" | "gpt-image-think";
+export type ImageModel = "auto" | "gpt-image-1" | "gpt-image-2" | "codex-gpt-image-2" | "gpt-image-think";
 export type ImageGenerationRoute = "regular" | "thinking" | "fallback";
 export type GeneratedImageResponseItem = {
   b64_json?: string;
@@ -24,6 +24,13 @@ export type GeneratedImageResponseItem = {
 };
 export type GeneratedImageResponse = { created: number; data: GeneratedImageResponseItem[] };
 export type ImageJobStatus = "queued" | "running" | "success" | "error";
+export type ImageJobRequestOptions = {
+  size?: string;
+  quality?: "auto" | "low" | "medium" | "high";
+  background?: "auto" | "opaque";
+  output_format?: "png" | "jpeg" | "webp";
+  compression?: number;
+};
 export type ImageJob<T> = {
   id: string;
   status: ImageJobStatus;
@@ -140,7 +147,7 @@ export async function waitForImageJob<T>(initialJobOrId: ImageJob<T> | string) {
 export async function createImageGenerationJob(
   prompt: string,
   model: ImageModel = "gpt-image-2",
-  size?: string,
+  options: ImageJobRequestOptions = {},
 ) {
   const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
     "/api/image-jobs/generations",
@@ -149,7 +156,7 @@ export async function createImageGenerationJob(
       body: {
         prompt,
         model,
-        ...(size ? { size } : {}),
+        ...options,
         n: 1,
         response_format: "b64_json",
       },
@@ -162,7 +169,7 @@ export async function createImageEditJob(
   files: File | File[],
   prompt: string,
   model: ImageModel = "gpt-image-2",
-  size?: string,
+  options: ImageJobRequestOptions = {},
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -172,8 +179,20 @@ export async function createImageEditJob(
   });
   formData.append("prompt", prompt);
   formData.append("model", model);
-  if (size) {
-    formData.append("size", size);
+  if (options.size) {
+    formData.append("size", options.size);
+  }
+  if (options.quality) {
+    formData.append("quality", options.quality);
+  }
+  if (options.background) {
+    formData.append("background", options.background);
+  }
+  if (options.output_format) {
+    formData.append("output_format", options.output_format);
+  }
+  if (typeof options.compression === "number") {
+    formData.append("compression", String(options.compression));
   }
   formData.append("n", "1");
 
@@ -242,8 +261,12 @@ export type RegisterMailProvider = {
   enabled: boolean;
   api_key?: string;
   api_base?: string;
+  admin_password?: string;
   default_domain?: string;
   expiry_time?: number;
+  random_subdomain?: boolean;
+  subdomain?: string;
+  wildcard?: boolean;
   domains: string[];
 };
 
@@ -511,9 +534,9 @@ export async function deleteProxyEntry(proxyId: string) {
 export async function generateImage(
   prompt: string,
   model: ImageModel = "gpt-image-2",
-  size?: string,
+  options: ImageJobRequestOptions = {},
 ) {
-  const job = await createImageGenerationJob(prompt, model, size);
+  const job = await createImageGenerationJob(prompt, model, options);
   return waitForImageJob(job);
 }
 
@@ -521,9 +544,9 @@ export async function editImage(
   files: File | File[],
   prompt: string,
   model: ImageModel = "gpt-image-2",
-  size?: string,
+  options: ImageJobRequestOptions = {},
 ) {
-  const job = await createImageEditJob(files, prompt, model, size);
+  const job = await createImageEditJob(files, prompt, model, options);
   return waitForImageJob(job);
 }
 

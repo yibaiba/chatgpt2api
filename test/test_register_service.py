@@ -229,6 +229,26 @@ class RegisterServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "moemail provider requires api_base"):
                 service.start()
 
+    def test_validate_mail_config_accepts_new_supported_provider_types(self) -> None:
+        cases = [
+            ("tempmail_lol", {"type": "tempmail_lol", "enabled": True}),
+            (
+                "cloudflare_temp_email",
+                {"type": "cloudflare_temp_email", "enabled": True, "api_base": "https://mail.example.com", "admin_password": "secret"},
+            ),
+            ("duckmail", {"type": "duckmail", "enabled": True, "api_key": "duck-key"}),
+            ("gptmail", {"type": "gptmail", "enabled": True, "api_key": "gpt-key"}),
+            (
+                "inbucket",
+                {"type": "inbucket", "enabled": True, "api_base": "https://mail.example.com", "domains": ["example.com"]},
+            ),
+            ("yyds_mail", {"type": "yyds_mail", "enabled": True, "api_key": "yyds-key"}),
+        ]
+
+        for provider_type, provider in cases:
+            with self.subTest(provider_type=provider_type):
+                mail_provider.validate_mail_config({"providers": [provider]})
+
     def test_default_mail_wait_interval_uses_faster_polling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = RegisterService(Path(tmp_dir) / "register.json", accounts_service=_FakeAccountsService())
@@ -276,9 +296,10 @@ class MailProviderPollingTests(unittest.TestCase):
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict | None = None) -> None:
+    def __init__(self, status_code: int, payload: dict | None = None, text: str | None = None) -> None:
         self.status_code = status_code
         self._payload = payload or {}
+        self.text = text if text is not None else str(self._payload)
 
     def json(self) -> dict:
         return self._payload
@@ -418,6 +439,63 @@ class MailProviderSecurityTests(unittest.TestCase):
                 session_class.assert_called_once_with(impersonate="edge101", verify=True)
             finally:
                 provider.close()
+
+    def test_tempmail_provider_surfaces_free_tier_rate_limit_hint(self) -> None:
+        session = mock.Mock()
+        session.headers = {}
+        session.request.return_value = _FakeResponse(429, {"error": "Rate limited (free)"}, text='{"error":"Rate limited (free)"}')
+        with mock.patch("services.register.mail_provider.Session", return_value=session):
+            provider = mail_provider.TempMailLolProvider(
+                {
+                    "type": "tempmail_lol",
+                    "api_key": "",
+                },
+                {
+                    "request_timeout": 30,
+                    "wait_timeout": 30,
+                    "wait_interval": 2,
+                    "user_agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                with self.assertRaisesRegex(RuntimeError, "free tier is rate limited"):
+                    provider.create_mailbox()
+            finally:
+                provider.close()
+
+
+class MailProviderFactoryTests(unittest.TestCase):
+    def test_create_mailbox_dispatches_new_provider_types(self) -> None:
+        cases = [
+            ("cloudflare_temp_email", "CloudflareTempMailProvider"),
+            ("duckmail", "DuckMailProvider"),
+            ("gptmail", "GptMailProvider"),
+            ("inbucket", "InbucketMailProvider"),
+            ("yyds_mail", "YydsMailProvider"),
+        ]
+
+        for provider_type, class_name in cases:
+            with self.subTest(provider_type=provider_type):
+                instance = mock.Mock()
+                instance.create_mailbox.return_value = {"provider": provider_type, "provider_ref": "demo-ref"}
+                with mock.patch.object(mail_provider, class_name, return_value=instance) as provider_class:
+                    result = mail_provider.create_mailbox(
+                        {
+                            "providers": [
+                                {
+                                    "id": "demo",
+                                    "type": provider_type,
+                                    "enabled": True,
+                                }
+                            ]
+                        },
+                        "demo-user",
+                    )
+
+                self.assertEqual(provider_type, result["provider"])
+                provider_class.assert_called_once()
+                instance.create_mailbox.assert_called_once_with("demo-user")
+                instance.close.assert_called_once()
 
 
 if __name__ == "__main__":

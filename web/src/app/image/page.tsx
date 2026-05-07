@@ -30,11 +30,20 @@ import {
   type ImageModel,
 } from "@/lib/api";
 import { formatMonthDayTimeInShanghai } from "@/lib/time";
+import { generateClientId } from "@/lib/utils";
 import {
-  applyAspectRatioPrompt,
+  buildImageJobRequestOptions,
+  DEFAULT_IMAGE_BACKGROUND,
+  DEFAULT_IMAGE_OUTPUT_FORMAT,
+  DEFAULT_IMAGE_RENDER_QUALITY,
+  isCodexImageModel,
+  normalizeImageCompression,
   isImageAspectRatio,
+  type ImageBackground,
   type ImageAspectRatio,
+  type ImageOutputFormat,
   type ImageOutputQuality,
+  type ImageRenderQuality,
 } from "@/lib/image-options";
 import { consumeImageOnboardingIntent } from "@/lib/onboarding";
 import { upscaleGeneratedImage } from "@/lib/image-upscale";
@@ -89,10 +98,7 @@ function formatAvailableQuota(accounts: Account[]) {
 }
 
 function createId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return generateClientId();
 }
 
 function readFileAsDataUrl(file: File) {
@@ -120,6 +126,13 @@ function pickFallbackConversationId(conversations: ImageConversation[]) {
     conversation.turns.some((turn) => turn.status === "queued" || turn.status === "generating"),
   );
   return activeConversation?.id ?? conversations[0]?.id ?? null;
+}
+
+function normalizeImageModelForMode(mode: ImageConversationMode, model: ImageModel): ImageModel {
+  if (mode === "edit" && model === "gpt-image-think") {
+    return "gpt-image-2";
+  }
+  return model;
 }
 
 function getLoadingImages(turn: ImageTurn) {
@@ -216,6 +229,10 @@ export default function ImagePage() {
   const [imageModel, setImageModel] = useState<ImageModel>(DEFAULT_IMAGE_MODEL);
   const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("1:1");
   const [imageOutputQuality, setImageOutputQuality] = useState<ImageOutputQuality>("original");
+  const [imageRenderQuality, setImageRenderQuality] = useState<ImageRenderQuality>(DEFAULT_IMAGE_RENDER_QUALITY);
+  const [imageBackground, setImageBackground] = useState<ImageBackground>(DEFAULT_IMAGE_BACKGROUND);
+  const [imageOutputFormat, setImageOutputFormat] = useState<ImageOutputFormat>(DEFAULT_IMAGE_OUTPUT_FORMAT);
+  const [imageCompression, setImageCompression] = useState("");
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -595,11 +612,47 @@ export default function ImagePage() {
     }
   }, []);
 
+  const resetCodexImageOptions = useCallback(() => {
+    setImageRenderQuality(DEFAULT_IMAGE_RENDER_QUALITY);
+    setImageBackground(DEFAULT_IMAGE_BACKGROUND);
+    setImageOutputFormat(DEFAULT_IMAGE_OUTPUT_FORMAT);
+    setImageCompression("");
+  }, []);
+
   const handleImageModeChange = useCallback((nextMode: ImageConversationMode) => {
     setImageMode(nextMode);
     if (nextMode === "edit") {
-      setImageModel("gpt-image-2");
+      setImageModel((current) => {
+        const nextModel = normalizeImageModelForMode("edit", current);
+        if (!isCodexImageModel(nextModel)) {
+          resetCodexImageOptions();
+        }
+        return nextModel;
+      });
     }
+  }, [resetCodexImageOptions]);
+
+  const handleImageModelChange = useCallback((nextModel: ImageModel) => {
+    setImageModel(nextModel);
+    if (!isCodexImageModel(nextModel)) {
+      resetCodexImageOptions();
+    }
+  }, [resetCodexImageOptions]);
+
+  const handleImageOutputFormatChange = useCallback((nextFormat: ImageOutputFormat) => {
+    setImageOutputFormat(nextFormat);
+    if (nextFormat === "png") {
+      setImageCompression("");
+    }
+  }, []);
+
+  const handleImageCompressionChange = useCallback((nextValue: string) => {
+    const digitsOnly = nextValue.replace(/[^\d]/g, "").slice(0, 3);
+    if (!digitsOnly) {
+      setImageCompression("");
+      return;
+    }
+    setImageCompression(String(Math.min(100, Number(digitsOnly))));
   }, []);
 
   const resetComposer = useCallback(() => {
@@ -830,7 +883,19 @@ export default function ImagePage() {
   );
 
   const handleReusePrompt = useCallback(
-    async (payload: { conversationId?: string; prompt: string; referenceImages: StoredReferenceImage[] }) => {
+    async (payload: {
+      conversationId?: string;
+      prompt: string;
+      mode: ImageConversationMode;
+      model: ImageModel;
+      aspectRatio?: ImageAspectRatio;
+      outputQuality?: ImageOutputQuality;
+      renderQuality?: ImageRenderQuality;
+      background?: ImageBackground;
+      outputFormat?: ImageOutputFormat;
+      compression?: number;
+      referenceImages: StoredReferenceImage[];
+    }) => {
       const nextPrompt = payload.prompt.trim();
       const referenceCount = payload.referenceImages.length;
       if (!nextPrompt && referenceCount === 0) {
@@ -843,9 +908,24 @@ export default function ImagePage() {
         if (payload.conversationId) {
           setSelectedConversationId(payload.conversationId);
         }
+        const nextMode = payload.mode === "edit" || referenceCount > 0 ? "edit" : "generate";
+        const nextModel = normalizeImageModelForMode(nextMode, payload.model);
         setImagePrompt(nextPrompt);
+        setImageAspectRatio(payload.aspectRatio ?? "1:1");
+        setImageOutputQuality(payload.outputQuality ?? "original");
+        if (isCodexImageModel(nextModel)) {
+          setImageRenderQuality(payload.renderQuality ?? DEFAULT_IMAGE_RENDER_QUALITY);
+          setImageBackground(payload.background ?? DEFAULT_IMAGE_BACKGROUND);
+          setImageOutputFormat(payload.outputFormat ?? DEFAULT_IMAGE_OUTPUT_FORMAT);
+          setImageCompression(
+            payload.outputFormat === "png" ? "" : String(normalizeImageCompression(payload.compression) ?? ""),
+          );
+        } else {
+          resetCodexImageOptions();
+        }
         applyPreparedReferenceImages(restoredReferenceImages);
-        handleImageModeChange(referenceCount > 0 ? "edit" : "generate");
+        handleImageModeChange(nextMode);
+        setImageModel(nextModel);
         focusComposer(nextPrompt.length);
         toast.success(
           referenceCount > 0 ? `已恢复提示词和 ${referenceCount} 张参考图` : "已恢复提示词到当前输入框",
@@ -855,7 +935,13 @@ export default function ImagePage() {
         toast.error(message);
       }
     },
-    [applyPreparedReferenceImages, focusComposer, handleImageModeChange, prepareReferenceImagesForComposer],
+    [
+      applyPreparedReferenceImages,
+      focusComposer,
+      handleImageModeChange,
+      prepareReferenceImagesForComposer,
+      resetCodexImageOptions,
+    ],
   );
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
@@ -903,9 +989,19 @@ export default function ImagePage() {
         const referenceFiles = queuedTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${queuedTurn.id}-${index + 1}.png`, image.type),
         );
+        const submittedModel = normalizeImageModelForMode(queuedTurn.mode, queuedTurn.model);
+        const useNativeCodexSize = isCodexImageModel(submittedModel);
         const pendingImages = getLoadingImages(queuedTurn);
-        const submittedPrompt = applyAspectRatioPrompt(queuedTurn.prompt, queuedTurn.aspectRatio);
-        const submittedModel = queuedTurn.mode === "edit" ? "gpt-image-2" : queuedTurn.model;
+        const imageJobOptions = buildImageJobRequestOptions({
+          model: submittedModel,
+          aspectRatio: queuedTurn.aspectRatio,
+          outputQuality: queuedTurn.outputQuality ?? "original",
+          renderQuality: queuedTurn.renderQuality ?? DEFAULT_IMAGE_RENDER_QUALITY,
+          background: queuedTurn.background ?? DEFAULT_IMAGE_BACKGROUND,
+          outputFormat: queuedTurn.outputFormat ?? DEFAULT_IMAGE_OUTPUT_FORMAT,
+          compression: queuedTurn.compression,
+        });
+        const submittedPrompt = queuedTurn.prompt.trim();
 
         if (queuedTurn.mode === "edit" && referenceFiles.length === 0) {
           throw new Error("未找到可用于继续编辑的参考图");
@@ -938,8 +1034,8 @@ export default function ImagePage() {
             if (!jobId) {
               const job =
                 queuedTurn.mode === "edit"
-                  ? await createImageEditJob(referenceFiles, submittedPrompt, submittedModel)
-                  : await createImageGenerationJob(submittedPrompt, submittedModel);
+                  ? await createImageEditJob(referenceFiles, submittedPrompt, submittedModel, imageJobOptions)
+                  : await createImageGenerationJob(submittedPrompt, submittedModel, imageJobOptions);
               jobOrId = job;
               jobId = job.id;
 
@@ -979,7 +1075,7 @@ export default function ImagePage() {
 
             let b64Json = first.b64_json;
             let mimeType = first.mime_type || "image/png";
-            if (queuedTurn.outputQuality && queuedTurn.outputQuality !== "original") {
+            if (!useNativeCodexSize && queuedTurn.outputQuality && queuedTurn.outputQuality !== "original") {
               try {
                 const upscaled = await upscaleGeneratedImage(first.b64_json, first.mime_type, queuedTurn.outputQuality);
                 b64Json = upscaled.b64_json;
@@ -1131,13 +1227,21 @@ export default function ImagePage() {
     const draftOwnerRole: UserRole = viewerRole === "admin" ? "admin" : "user";
     const draftOwnerId = viewerSession?.id || (draftOwnerRole === "admin" ? "admin" : "unknown");
     const draftOwnerName = viewerSession?.name || (draftOwnerRole === "admin" ? "管理员" : "普通用户");
+    const submittedModel = normalizeImageModelForMode(imageMode, imageModel);
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
-      model: imageMode === "edit" ? "gpt-image-2" : imageModel,
+      model: submittedModel,
       mode: imageMode,
       aspectRatio: imageAspectRatio,
       outputQuality: imageOutputQuality,
+      renderQuality: isCodexImageModel(submittedModel) ? imageRenderQuality : undefined,
+      background: isCodexImageModel(submittedModel) ? imageBackground : undefined,
+      outputFormat: isCodexImageModel(submittedModel) ? imageOutputFormat : undefined,
+      compression:
+        isCodexImageModel(submittedModel) && imageOutputFormat !== "png"
+          ? normalizeImageCompression(imageCompression)
+          : undefined,
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
       images: Array.from({ length: parsedCount }, (_, index) => ({
@@ -1290,17 +1394,25 @@ export default function ImagePage() {
             aspectRatio={imageAspectRatio}
             imageCount={imageCount}
             outputQuality={imageOutputQuality}
+            renderQuality={imageRenderQuality}
+            background={imageBackground}
+            outputFormat={imageOutputFormat}
+            compressionValue={imageCompression}
             availableQuota={availableQuota}
             activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
             textareaRef={textareaRef}
             fileInputRef={fileInputRef}
             onModeChange={handleImageModeChange}
-            onModelChange={setImageModel}
+            onModelChange={handleImageModelChange}
             onPromptChange={setImagePrompt}
             onAspectRatioChange={setImageAspectRatio}
             onImageCountChange={setImageCount}
             onOutputQualityChange={setImageOutputQuality}
+            onRenderQualityChange={setImageRenderQuality}
+            onBackgroundChange={setImageBackground}
+            onOutputFormatChange={handleImageOutputFormatChange}
+            onCompressionChange={handleImageCompressionChange}
             onSubmit={handleSubmit}
             onPickReferenceImage={() => fileInputRef.current?.click()}
             onReferenceImageChange={handleReferenceImageChange}

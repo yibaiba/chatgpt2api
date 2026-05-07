@@ -46,6 +46,28 @@ class AccountCapabilityTests(unittest.TestCase):
             )
         )
 
+    def test_codex_image_accounts_require_non_limited_paid_accounts(self) -> None:
+        self.assertFalse(
+            AccountService._is_codex_image_account_available(
+                {"status": "限流", "type": "Plus", "quota": 0}
+            )
+        )
+        self.assertTrue(
+            AccountService._is_codex_image_account_available(
+                {"status": "正常", "type": "Team", "quota": 0}
+            )
+        )
+        self.assertFalse(
+            AccountService._is_codex_image_account_available(
+                {"status": "正常", "type": "ProLite", "quota": 0}
+            )
+        )
+        self.assertFalse(
+            AccountService._is_codex_image_account_available(
+                {"status": "异常", "type": "Pro", "quota": 0}
+            )
+        )
+
     def test_prolite_variants_are_normalized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(Path(tmp_dir) / "accounts.json")
@@ -85,6 +107,52 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertEqual(updated["quota"], 0)
             self.assertEqual(updated["status"], "正常")
             self.assertTrue(updated["image_quota_unknown"])
+
+    def test_mark_codex_image_result_keeps_chatgpt_quota_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["token-1"])
+            with mock.patch.object(
+                type(config),
+                "auto_remove_rate_limited_accounts",
+                new_callable=mock.PropertyMock,
+                return_value=False,
+            ):
+                service.update_account(
+                    "token-1",
+                    {
+                        "type": "Plus",
+                        "status": "限流",
+                        "quota": 0,
+                        "image_quota_unknown": False,
+                    },
+                )
+
+                updated = service.mark_codex_image_result("token-1", success=True)
+
+            self.assertIsNotNone(updated)
+            self.assertEqual(0, updated["quota"])
+            self.assertEqual("限流", updated["status"])
+            self.assertEqual(1, updated["success"])
+
+    def test_get_codex_image_access_token_uses_paid_account_even_when_chatgpt_quota_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(["free-token", "limited-plus-token", "plus-token"])
+            with mock.patch.object(
+                type(config),
+                "auto_remove_rate_limited_accounts",
+                new_callable=mock.PropertyMock,
+                return_value=False,
+            ):
+                service.update_account("free-token", {"type": "Free", "status": "正常", "quota": 10})
+                service.update_account("limited-plus-token", {"type": "Plus", "status": "限流", "quota": 0})
+                service.update_account("plus-token", {"type": "Plus", "status": "正常", "quota": 0})
+
+                with mock.patch.object(service, "refresh_account_state", side_effect=lambda token: service.get_account(token)):
+                    selected = service.get_codex_image_access_token()
+
+            self.assertEqual("plus-token", selected)
 
     def test_delete_accounts_by_status_only_removes_matching_abnormal_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

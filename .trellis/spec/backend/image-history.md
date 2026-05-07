@@ -254,6 +254,12 @@ await saveConversationToCurrentStore(savedConversation);
 ### 3. Contracts
 - Job creation must authenticate and reserve quota synchronously before returning a job id.
 - The actual upstream image call runs in a background thread.
+- Supported web/UI image models are `gpt-image-2`, `codex-gpt-image-2`, and `gpt-image-think`; edit mode must not offer `gpt-image-think`.
+- Persisted conversation/job `model` values should keep the user-selected model, including `codex-gpt-image-2`; do not silently rewrite Codex requests back to `gpt-image-2`.
+- The web workspace should derive one `size` request per turn from the chosen aspect ratio and output-size preset:
+  - `original` keeps the lightweight aspect-ratio hint contract
+  - `2K` / `4K` only resolve to exact `WIDTHxHEIGHT` requests when the selected model is `codex-gpt-image-2`
+  - non-Codex models keep the existing browser-side upscale behavior after job completion
 - The background worker must settle quota exactly once:
   - success: settle with `count_generated_images(result)`
   - failure: settle with `0`
@@ -261,6 +267,7 @@ await saveConversationToCurrentStore(savedConversation);
 - Polling must require the same authenticated identity that created the job.
 - The frontend `generateImage()` and `editImage()` helpers should call `/api/image-jobs/*` and poll `GET /api/image-jobs/{id}`.
 - OpenAI-compatible `/v1/images/*` endpoints remain synchronous and should not be repurposed for the web UI polling contract.
+- `codex-gpt-image-2` is a paid-only alias for upstream Codex image capacity and should stay distinct from the regular web `gpt-image-2` quota semantics.
 
 ### 4. Validation & Error Matrix
 

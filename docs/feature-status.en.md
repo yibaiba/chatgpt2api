@@ -8,9 +8,11 @@
 | OpenAI 兼容 `POST /v1/images/edits` | ✅  | 已支持，可上传图片进行编辑。 |
 | 面向图片工作流的 `POST /v1/chat/completions` | ✅  | 已支持图片相关请求。 |
 | 面向图片工作流的 `POST /v1/responses` | ✅  | 已支持图片生成工具调用。 |
-| `GET /v1/models` 接口 | ✅  | 当前返回 `gpt-image-1` 与 `gpt-image-2`。 |
+| `GET /v1/models` 接口 | ✅  | 当前返回 `gpt-image-1`、`gpt-image-2`、`codex-gpt-image-2` 与 `gpt-image-think`。 |
 | 同时生成多张图片 | ✅  | 已支持，后端与前端都可进行多图生成。 |
-| 前端图片工作台 | ✅  | 已支持图片生成、图片编辑、模型选择、历史记录与查看大图。 |
+| 前端图片工作台 | ✅  | 已支持图片生成、图片编辑、`gpt-image-2` / `codex-gpt-image-2` / `gpt-image-think` 模型选择、历史记录与查看大图；仅 Codex 会把 `2K / 4K` 换算为原生 `size` 请求。 |
+| Codex 独立生图额度别名 | ✅  | 已支持 `codex-gpt-image-2`，仅 `Plus` / `Team` / `Pro` 可用，并与官网 `gpt-image-2` 额度分离。 |
+| OpenAI image option compatibility | ✅  | `/v1/images/*` 已接收 `size`、`quality`、`background`、`output_format`、`compression`；其中精确 `size`、输出格式与压缩级别仅对 Codex 生效。 |
 | 前端图片输入 / 参考图交互 | ✅  | 已支持参考图上传、预览、移除和编辑模式工作流。 |
 | 账号池管理 | ✅  | 已支持列表、筛选、批量操作、导出、手动编辑、刷新和删除。 |
 | 账号额度刷新与恢复时间同步 | ✅  | 已支持账号信息刷新，限流账号也会自动继续检查。 |
@@ -19,14 +21,14 @@
 | CPA 文件浏览与按需导入 | ✅  | 已支持读取远程文件列表、筛选、勾选并导入到本地号池。 |
 | CPA 导入进度跟踪 | ✅  | 已支持导入进度展示与轮询更新。 |
 | Docker 自托管部署 | ✅  | 已支持 Docker Compose 部署，并提供多架构镜像。 |
-| 模型列表与实际能力是否完全一致 | ⚠️ | 模型列表会显示 `gpt-image-1` 和 `gpt-image-2`，但实际效果可能与上游状态有关。 |
+| 模型列表与实际能力是否完全一致 | ⚠️ | 模型列表会显示 `gpt-image-1`、`gpt-image-2`、`codex-gpt-image-2` 和 `gpt-image-think`，但实际效果仍受上游账号能力影响；额外图片参数当前只对 Codex 打开。 |
 | `gpt-image-1` 与 `gpt-image-2` 的能力区分 | ⚠️ | `gpt-image-2` 已可选，但目前仍处于灰度 / 实验状态。 |
 | 兼容接口中的多参考图能力 | ⚠️ | 前端已支持多参考图交互，接口侧相关能力仍在完善中。 |
 | 更高级的 Token 调度策略 | ⚠️ | 当前已有基础轮询与限流刷新机制，更复杂的调度策略仍在完善中。 |
 | Render / Vercel 等部署表述 | ⚠️ | 当前主要以 Docker 部署为主，其他平台部署方式暂未重点说明。 |
 | `/v1/complete` 文本补全与流式输出 | ❌  | 待实现。 |
 | 流式输出支持 | ❌  | 待实现。 |
-| 图片尺寸参数 | ❌  | 待实现。 |
+| 图片尺寸参数 | ✅  | 已支持历史兼容比例；精确 `WIDTHxHEIGHT` 与前端 `2K / 4K` 原生 `size` 请求目前仅对 Codex 打开。 |
 | 服务端图片 URL 缓存 | ❌  | 待实现。 |
 | `sub2api` 导入 | ❌  | 待实现。 |
 | `rt_token` 刷新 | ❌  | 待实现。 |

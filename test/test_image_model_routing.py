@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import base64
+import io
+import json
 import os
 import unittest
 from unittest import mock
+
+from PIL import Image
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
@@ -10,6 +15,7 @@ from services.image_service import (
     EditInputImage,
     ImageGenerationError,
     _build_edit_input_payload,
+    _build_image_result_data,
     _build_regular_picture_v2_body,
     _collect_edit_output,
     _download_as_base64,
@@ -25,6 +31,7 @@ from services.image_service import (
     generate_image_result,
 )
 from services.chatgpt_service import ChatGPTService
+from services.utils import ImageRequestOptions
 
 
 class ImageModelRoutingTests(unittest.TestCase):
@@ -36,11 +43,29 @@ class ImageModelRoutingTests(unittest.TestCase):
         response.text = text
         return response
 
+    def _stream_response(self, *events: dict, status_code: int = 200, text: str = ""):
+        response = mock.Mock()
+        response.status_code = status_code
+        response.ok = 200 <= status_code < 400
+        response.text = text
+        response.iter_lines.return_value = [
+            f"data: {json.dumps(event)}".encode("utf-8")
+            for event in events
+        ]
+        return response
+
     def test_standard_model_uses_regular_picture_pipeline_slug(self) -> None:
         with mock.patch("services.image_service.account_service.get_account", return_value={"type": "Pro"}):
             upstream_model, use_thinking = _resolve_upstream_model("token", "gpt-image-2")
 
         self.assertEqual("gpt-5-3", upstream_model)
+        self.assertFalse(use_thinking)
+
+    def test_codex_model_keeps_codex_slug_for_paid_accounts(self) -> None:
+        with mock.patch("services.image_service.account_service.get_account", return_value={"type": "Pro"}):
+            upstream_model, use_thinking = _resolve_upstream_model("token", "codex-gpt-image-2")
+
+        self.assertEqual("codex-gpt-image-2", upstream_model)
         self.assertFalse(use_thinking)
 
     def test_think_model_keeps_thinking_route(self) -> None:
@@ -61,6 +86,166 @@ class ImageModelRoutingTests(unittest.TestCase):
         self.assertEqual("gpt-5-3", _resolve_upstream_edit_model("gpt-image-2"))
         self.assertEqual("gpt-5-3", _resolve_upstream_edit_model("gpt-image-think"))
         self.assertEqual("gpt-5-3", _resolve_upstream_edit_model("gpt-image-1"))
+        self.assertEqual("codex-gpt-image-2", _resolve_upstream_edit_model("codex-gpt-image-2"))
+
+    def test_codex_generation_requires_paid_account(self) -> None:
+        with mock.patch("services.image_service.account_service.get_account", return_value={"type": "Free"}):
+            with self.assertRaisesRegex(ImageGenerationError, "Plus, Team, or Pro"):
+                generate_image_result(
+                    access_token="token",
+                    prompt="draw a cat",
+                    model="codex-gpt-image-2",
+                )
+
+    def test_codex_generate_uses_native_responses_route(self) -> None:
+        buffer = io.BytesIO()
+        Image.new("RGB", (8, 8), color=(128, 64, 255)).save(buffer, format="PNG")
+        image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+        session = mock.Mock()
+        session.post.return_value = self._stream_response(
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "image_generation_call",
+                    "result": image_b64,
+                    "output_format": "png",
+                },
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "created_at": 123,
+                    "status": "completed",
+                },
+            },
+        )
+
+        with (
+            mock.patch(
+                "services.image_service.account_service.get_account",
+                return_value={"type": "Pro", "user_id": "user_123"},
+            ),
+            mock.patch("services.image_service._new_session", return_value=(session, "fp")),
+            mock.patch("services.image_service._bootstrap", return_value="device"),
+            mock.patch("services.image_service._chat_requirements") as chat_requirements,
+            mock.patch("services.image_service._run_regular_generation_mode") as regular_generation,
+        ):
+            result = generate_image_result(
+                access_token="token",
+                prompt="draw a cat",
+                model="codex-gpt-image-2",
+                image_options=ImageRequestOptions(size="2048x1024"),
+            )
+
+        self.assertEqual(123, result["created"])
+        self.assertIn("b64_json", result["data"][0])
+        chat_requirements.assert_not_called()
+        regular_generation.assert_not_called()
+        session.post.assert_called_once()
+        self.assertTrue(session.post.call_args.args[0].endswith("/backend-api/codex/responses"))
+        self.assertEqual(
+            {
+                "type": "image_generation",
+                "output_format": "png",
+                "size": "2048x1024",
+            },
+            session.post.call_args.kwargs["json"]["tools"][0],
+        )
+        self.assertEqual("you are a helpful assistant", session.post.call_args.kwargs["json"]["instructions"])
+        self.assertEqual("auto", session.post.call_args.kwargs["json"]["tool_choice"])
+        self.assertEqual("gpt-5.4", session.post.call_args.kwargs["json"]["model"])
+        self.assertEqual("user_123", session.post.call_args.kwargs["headers"]["chatgpt-account-id"])
+        self.assertEqual("test-session", session.post.call_args.kwargs["headers"]["session_id"])
+
+    def test_codex_edit_uses_native_responses_route_without_upload(self) -> None:
+        buffer = io.BytesIO()
+        Image.new("RGB", (8, 8), color=(12, 34, 56)).save(buffer, format="PNG")
+        image_data = buffer.getvalue()
+        image_b64 = base64.b64encode(image_data).decode("ascii")
+        session = mock.Mock()
+        session.post.return_value = self._stream_response(
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "image_generation_call",
+                    "result": image_b64,
+                    "output_format": "png",
+                },
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_456",
+                    "created_at": 456,
+                    "status": "completed",
+                },
+            },
+        )
+
+        with (
+            mock.patch(
+                "services.image_service.account_service.get_account",
+                return_value={"type": "Pro", "user_id": "user_123"},
+            ),
+            mock.patch("services.image_service._new_session", return_value=(session, "fp")),
+            mock.patch("services.image_service._bootstrap", return_value="device"),
+            mock.patch("services.image_service._upload_image") as upload_image,
+            mock.patch("services.image_service._chat_requirements") as chat_requirements,
+        ):
+            result = edit_image_result(
+                access_token="token",
+                prompt="make it brighter",
+                images=[(image_data, "reference.png", "image/png")],
+                model="codex-gpt-image-2",
+            )
+
+        self.assertEqual(456, result["created"])
+        self.assertIn("b64_json", result["data"][0])
+        upload_image.assert_not_called()
+        chat_requirements.assert_not_called()
+        session.post.assert_called_once()
+        input_payload = session.post.call_args.kwargs["json"]["input"]
+        self.assertEqual("user", input_payload[0]["role"])
+        self.assertEqual("input_text", input_payload[0]["content"][0]["type"])
+        self.assertTrue(
+            input_payload[0]["content"][1]["image_url"].startswith("data:image/png;base64,")
+        )
+        self.assertEqual("you are a helpful assistant", session.post.call_args.kwargs["json"]["instructions"])
+        self.assertEqual("auto", session.post.call_args.kwargs["json"]["tool_choice"])
+
+    def test_codex_responses_missing_image_output_raises_clear_error(self) -> None:
+        session = mock.Mock()
+        session.post.return_value = self._stream_response(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_789",
+                    "created_at": 789,
+                    "status": "completed",
+                    "output": [],
+                },
+            },
+        )
+
+        with (
+            mock.patch(
+                "services.image_service.account_service.get_account",
+                return_value={"type": "Pro", "user_id": "user_123"},
+            ),
+            mock.patch("services.image_service._new_session", return_value=(session, "fp")),
+            mock.patch("services.image_service._bootstrap", return_value="device"),
+        ):
+            with self.assertRaisesRegex(
+                ImageGenerationError,
+                "codex responses did not return image output",
+            ):
+                edit_image_result(
+                    access_token="token",
+                    prompt="make it brighter",
+                    images=[(b"png", "reference.png", "image/png")],
+                    model="codex-gpt-image-2",
+                )
 
     def test_edit_payload_preserves_attachment_metadata(self) -> None:
         image = EditInputImage(
@@ -133,6 +318,27 @@ class ImageModelRoutingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ImageGenerationError, r"upstream image connection failed, please retry later"):
             _download_as_base64(session, "https://example.com/image.png")
+
+    def test_build_image_result_data_resizes_and_reencodes_requested_output(self) -> None:
+        source = io.BytesIO()
+        Image.new("RGBA", (1024, 1024), (255, 0, 0, 255)).save(source, format="PNG")
+
+        with mock.patch("services.image_service._fetch_image_bytes", return_value=source.getvalue()):
+            result = _build_image_result_data(
+                "draw a cat",
+                "b64_json",
+                "regular",
+                image_options=ImageRequestOptions(size="2048x1024", output_format="webp", compression=20),
+                session=mock.Mock(),
+                download_url="https://example.com/image.png",
+                base_url=None,
+            )
+
+        self.assertEqual("image/webp", result["mime_type"])
+        decoded = base64.b64decode(result["b64_json"])
+        with Image.open(io.BytesIO(decoded)) as generated:
+            self.assertEqual((2048, 1024), generated.size)
+            self.assertEqual("WEBP", generated.format)
 
     def test_regular_picture_payload_without_images_uses_text_message(self) -> None:
         body = _build_regular_picture_v2_body("draw a cat", "parent", "gpt-5-3")
@@ -213,7 +419,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             mock.patch("services.image_service._conversation_init") as conversation_init,
             mock.patch("services.image_service._run_legacy_regular_generation_mode") as run_legacy,
             mock.patch("services.image_service._fetch_download_url", return_value="https://example.com/image.png"),
-            mock.patch("services.image_service._download_as_base64", return_value="ZmFrZQ=="),
+            mock.patch("services.image_service._fetch_image_bytes", return_value=b"fake"),
         ):
             result = generate_image_result(
                 access_token="token",
@@ -242,7 +448,7 @@ class ImageModelRoutingTests(unittest.TestCase):
                 return_value={"conversation_id": "conversation_regular", "file_ids": ["file_output"], "text": ""},
             ) as run_legacy,
             mock.patch("services.image_service._fetch_download_url", return_value="https://example.com/image.png"),
-            mock.patch("services.image_service._download_as_base64", return_value="ZmFrZQ=="),
+            mock.patch("services.image_service._fetch_image_bytes", return_value=b"fake"),
         ):
             result = generate_image_result(
                 access_token="token",
@@ -379,7 +585,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             ) as run_regular,
             mock.patch("services.image_service._run_legacy_regular_edit_mode") as run_legacy_regular,
             mock.patch("services.image_service._fetch_download_url", return_value="https://example.com/image.png"),
-            mock.patch("services.image_service._download_as_base64", return_value="ZmFrZQ=="),
+            mock.patch("services.image_service._fetch_image_bytes", return_value=b"fake"),
         ):
             result = edit_image_result(
                 access_token="token",
@@ -410,7 +616,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             ) as run_regular,
             mock.patch("services.image_service._send_edit_conversation") as legacy_send_regular,
             mock.patch("services.image_service._fetch_download_url", return_value="https://example.com/image.png"),
-            mock.patch("services.image_service._download_as_base64", return_value="ZmFrZQ=="),
+            mock.patch("services.image_service._fetch_image_bytes", return_value=b"fake"),
         ):
             result = edit_image_result(
                 access_token="token",
@@ -440,7 +646,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             mock.patch("services.image_service._run_legacy_regular_edit_mode", return_value=regular_parsed) as run_legacy_regular,
             mock.patch("services.image_service._poll_image_ids", return_value=[]),
             mock.patch("services.image_service._fetch_download_url", return_value="https://example.com/image.png"),
-            mock.patch("services.image_service._download_as_base64", return_value="ZmFrZQ=="),
+            mock.patch("services.image_service._fetch_image_bytes", return_value=b"fake"),
         ):
             result = edit_image_result(
                 access_token="token",
@@ -479,11 +685,83 @@ class ImageModelRoutingTests(unittest.TestCase):
         self.assertEqual(2, edit_image_result_mock.call_count)
         self.assertEqual(
             [
-                mock.call("token-1", "make it brighter", [(b"image-data", "reference.png", "image/png")], "gpt-image-2", "b64_json", None),
-                mock.call("token-2", "make it brighter", [(b"image-data", "reference.png", "image/png")], "gpt-image-2", "b64_json", None),
+                mock.call(
+                    "token-1",
+                    "make it brighter",
+                    [(b"image-data", "reference.png", "image/png")],
+                    "gpt-image-2",
+                    image_options=None,
+                    response_format="b64_json",
+                    base_url=None,
+                ),
+                mock.call(
+                    "token-2",
+                    "make it brighter",
+                    [(b"image-data", "reference.png", "image/png")],
+                    "gpt-image-2",
+                    image_options=None,
+                    response_format="b64_json",
+                    base_url=None,
+                ),
             ],
             edit_image_result_mock.call_args_list,
         )
+
+    def test_codex_generate_with_pool_uses_codex_account_selection_and_preserves_chatgpt_quota(self) -> None:
+        account_service = mock.Mock()
+        account_service.get_codex_image_access_token.return_value = "token-codex"
+        account_service.mark_codex_image_result.return_value = {"quota": 0, "status": "限流"}
+        service = ChatGPTService(account_service)
+        success_result = {"created": 123, "data": [{"b64_json": "ZmFrZQ=="}]}
+
+        with mock.patch(
+            "services.chatgpt_service.generate_image_result",
+            return_value=success_result,
+        ) as generate_image_result_mock:
+            result = service.generate_with_pool(
+                prompt="draw a cat",
+                model="codex-gpt-image-2",
+                n=1,
+            )
+
+        self.assertEqual(success_result, result)
+        account_service.get_codex_image_access_token.assert_called_once_with()
+        account_service.mark_codex_image_result.assert_called_once_with("token-codex", success=True)
+        account_service.mark_image_result.assert_not_called()
+        generate_image_result_mock.assert_called_once_with(
+            "token-codex",
+            "draw a cat",
+            "codex-gpt-image-2",
+            image_options=None,
+            response_format="b64_json",
+            base_url=None,
+        )
+
+    def test_codex_generate_with_pool_skips_rate_limited_token_and_retries_next_paid_account(self) -> None:
+        account_service = mock.Mock()
+        account_service.get_codex_image_access_token.side_effect = ["token-codex-1", "token-codex-2"]
+        account_service.mark_codex_image_result.side_effect = [
+            {"quota": 119, "status": "正常"},
+            {"quota": 118, "status": "正常"},
+        ]
+        service = ChatGPTService(account_service)
+        success_result = {"created": 123, "data": [{"b64_json": "ZmFrZQ=="}]}
+
+        with mock.patch(
+            "services.chatgpt_service.generate_image_result",
+            side_effect=[ImageGenerationError("codex responses failed: 429"), success_result],
+        ) as generate_image_result_mock:
+            result = service.generate_with_pool(
+                prompt="draw a cat",
+                model="codex-gpt-image-2",
+                n=1,
+            )
+
+        self.assertEqual(success_result, result)
+        self.assertEqual(2, account_service.get_codex_image_access_token.call_count)
+        account_service.update_account.assert_called_once_with("token-codex-1", {"status": "限流"})
+        self.assertEqual(2, account_service.mark_codex_image_result.call_count)
+        self.assertEqual(2, generate_image_result_mock.call_count)
 
     def test_regular_edit_stream_wraps_tls_errors_as_image_generation_error(self) -> None:
         with mock.patch(
@@ -681,6 +959,23 @@ class ImageModelRoutingTests(unittest.TestCase):
 
         images = edit_with_pool.call_args.args[1]
         self.assertEqual([(b"new", "image_1.png", "image/png")], images)
+
+    def test_create_response_uses_image_model_when_requested(self) -> None:
+        service = ChatGPTService(mock.Mock())
+        body = {
+            "model": "codex-gpt-image-2",
+            "tools": [{"type": "image_generation"}],
+            "input": "draw a cat",
+        }
+
+        with mock.patch.object(
+            service,
+            "generate_with_pool",
+            return_value={"created": 123, "data": [{"b64_json": "ZmFrZQ=="}]},
+        ) as generate_with_pool:
+            service.create_response(body)
+
+        self.assertEqual("codex-gpt-image-2", generate_with_pool.call_args.args[1])
 
 
 if __name__ == "__main__":

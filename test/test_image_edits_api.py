@@ -31,6 +31,7 @@ class _FakeChatGPTService:
         model: str,
         n: int,
         *,
+        image_options=None,
         response_format: str = "b64_json",
         base_url: str | None = None,
     ):
@@ -40,6 +41,7 @@ class _FakeChatGPTService:
             "images": normalized_images,
             "model": model,
             "n": n,
+            "image_options": image_options,
             "response_format": response_format,
             "base_url": base_url,
         }
@@ -54,6 +56,7 @@ class _FakeChatGPTService:
         model: str,
         n: int,
         *,
+        image_options=None,
         response_format: str = "b64_json",
         base_url: str | None = None,
     ):
@@ -63,6 +66,7 @@ class _FakeChatGPTService:
             "prompt": prompt,
             "model": model,
             "n": n,
+            "image_options": image_options,
             "response_format": response_format,
             "base_url": base_url,
         }
@@ -247,6 +251,68 @@ class ImageEditsApiTests(unittest.TestCase):
         self.assertEqual(
             "Make the aspect ratio 3:4 , test prompt",
             _FakeChatGPTService.last_call["prompt"],
+        )
+
+    def test_generations_forward_exact_size_and_output_options(self) -> None:
+        response = self.client.post(
+            "/v1/images/generations",
+            headers=self.auth_header,
+            json={
+                "prompt": "test prompt",
+                "model": "codex-gpt-image-2",
+                "n": 1,
+                "size": "2160x3840",
+                "quality": "high",
+                "background": "opaque",
+                "output_format": "webp",
+                "compression": 20,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(_FakeChatGPTService.last_call)
+        self.assertIn("Render at 2160x3840 resolution.", _FakeChatGPTService.last_call["prompt"])
+        self.assertIn("Make the aspect ratio 9:16 , test prompt", _FakeChatGPTService.last_call["prompt"])
+        self.assertEqual("2160x3840", _FakeChatGPTService.last_call["image_options"].size)
+        self.assertEqual("high", _FakeChatGPTService.last_call["image_options"].quality)
+        self.assertEqual("opaque", _FakeChatGPTService.last_call["image_options"].background)
+        self.assertEqual("webp", _FakeChatGPTService.last_call["image_options"].output_format)
+        self.assertEqual(20, _FakeChatGPTService.last_call["image_options"].compression)
+
+    def test_generations_reject_exact_size_for_non_codex_model(self) -> None:
+        response = self.client.post(
+            "/v1/images/generations",
+            headers=self.auth_header,
+            json={
+                "prompt": "test prompt",
+                "model": "gpt-image-1",
+                "n": 1,
+                "size": "2160x3840",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            "exact WIDTHxHEIGHT size is only supported for codex-gpt-image-2",
+            response.json()["detail"]["error"],
+        )
+
+    def test_generations_reject_output_options_for_non_codex_model(self) -> None:
+        response = self.client.post(
+            "/v1/images/generations",
+            headers=self.auth_header,
+            json={
+                "prompt": "test prompt",
+                "model": "gpt-image-1",
+                "n": 1,
+                "quality": "high",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            "quality is only supported for codex-gpt-image-2",
+            response.json()["detail"]["error"],
         )
 
     def test_generations_block_sensitive_words_without_reserving_quota(self) -> None:

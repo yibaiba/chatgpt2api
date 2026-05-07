@@ -20,9 +20,16 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { ImageModel } from "@/lib/api";
 import {
+  getImageBackgroundLabel,
   getImageOutputQualityLabel,
+  getImageOutputFormatLabel,
+  getImageRenderQualityLabel,
+  isCodexImageModel,
+  type ImageBackground,
   type ImageAspectRatio,
+  type ImageOutputFormat,
   type ImageOutputQuality,
+  type ImageRenderQuality,
 } from "@/lib/image-options";
 import type { ImageConversationMode } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
@@ -37,6 +44,10 @@ type ImageComposerProps = {
   aspectRatio: ImageAspectRatio;
   imageCount: string;
   outputQuality: ImageOutputQuality;
+  renderQuality: ImageRenderQuality;
+  background: ImageBackground;
+  outputFormat: ImageOutputFormat;
+  compressionValue: string;
   availableQuota: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -48,6 +59,10 @@ type ImageComposerProps = {
   onAspectRatioChange: (value: ImageAspectRatio) => void;
   onImageCountChange: (value: string) => void;
   onOutputQualityChange: (value: ImageOutputQuality) => void;
+  onRenderQualityChange: (value: ImageRenderQuality) => void;
+  onBackgroundChange: (value: ImageBackground) => void;
+  onOutputFormatChange: (value: ImageOutputFormat) => void;
+  onCompressionChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -66,6 +81,10 @@ export function ImageComposer({
   aspectRatio,
   imageCount,
   outputQuality,
+  renderQuality,
+  background,
+  outputFormat,
+  compressionValue,
   availableQuota,
   activeTaskCount,
   referenceImages,
@@ -77,6 +96,10 @@ export function ImageComposer({
   onAspectRatioChange,
   onImageCountChange,
   onOutputQualityChange,
+  onRenderQualityChange,
+  onBackgroundChange,
+  onOutputFormatChange,
+  onCompressionChange,
   onSubmit,
   onPickReferenceImage,
   onReferenceImageChange,
@@ -262,6 +285,10 @@ export function ImageComposer({
               aspectRatio={aspectRatio}
               imageCount={imageCount}
               outputQuality={outputQuality}
+              renderQuality={renderQuality}
+              background={background}
+              outputFormat={outputFormat}
+              compressionValue={compressionValue}
               onToggle={() => setMobileSettingsOpen((value) => !value)}
             />
             <div
@@ -272,16 +299,24 @@ export function ImageComposer({
             >
               <ImagePanelControls
                 mode={mode}
-                model={model}
-                aspectRatio={aspectRatio}
-                imageCount={imageCount}
-                outputQuality={outputQuality}
-                onModeChange={onModeChange}
-                onModelChange={onModelChange}
-                onAspectRatioChange={onAspectRatioChange}
-                onImageCountChange={onImageCountChange}
-                onOutputQualityChange={onOutputQualityChange}
-              />
+                 model={model}
+                 aspectRatio={aspectRatio}
+                 imageCount={imageCount}
+                 outputQuality={outputQuality}
+                 renderQuality={renderQuality}
+                 background={background}
+                 outputFormat={outputFormat}
+                 compressionValue={compressionValue}
+                 onModeChange={onModeChange}
+                 onModelChange={onModelChange}
+                 onAspectRatioChange={onAspectRatioChange}
+                 onImageCountChange={onImageCountChange}
+                 onOutputQualityChange={onOutputQualityChange}
+                 onRenderQualityChange={onRenderQualityChange}
+                 onBackgroundChange={onBackgroundChange}
+                 onOutputFormatChange={onOutputFormatChange}
+                 onCompressionChange={onCompressionChange}
+               />
             </div>
             <Textarea
               ref={textareaRef}
@@ -380,6 +415,10 @@ function MobileImageSettingsBar({
   aspectRatio,
   imageCount,
   outputQuality,
+  renderQuality,
+  background,
+  outputFormat,
+  compressionValue,
   onToggle,
 }: {
   open: boolean;
@@ -388,6 +427,10 @@ function MobileImageSettingsBar({
   aspectRatio: ImageAspectRatio;
   imageCount: string;
   outputQuality: ImageOutputQuality;
+  renderQuality: ImageRenderQuality;
+  background: ImageBackground;
+  outputFormat: ImageOutputFormat;
+  compressionValue: string;
   onToggle: () => void;
 }) {
   const normalizedCount = Math.max(1, Math.min(10, Number(imageCount) || 1));
@@ -398,6 +441,16 @@ function MobileImageSettingsBar({
     `${normalizedCount} 张`,
     getImageOutputQualityLabel(outputQuality),
   ];
+  if (isCodexImageModel(model)) {
+    summary.push(
+      getImageRenderQualityLabel(renderQuality),
+      getImageBackgroundLabel(background),
+      getImageOutputFormatLabel(outputFormat),
+    );
+    if (compressionValue) {
+      summary.push(`压缩 ${compressionValue}`);
+    }
+  }
 
   return (
     <div className="border-b border-stone-200/80 px-4 py-3 sm:hidden">
@@ -427,5 +480,11 @@ function MobileImageSettingsBar({
 }
 
 function getImageModelShortLabel(model: ImageModel) {
-  return model === "gpt-image-think" ? "思考" : "标准";
+  if (model === "gpt-image-think") {
+    return "思考";
+  }
+  if (model === "codex-gpt-image-2") {
+    return "Codex";
+  }
+  return "标准";
 }

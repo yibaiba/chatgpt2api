@@ -14,6 +14,7 @@ from services.image_service import (
     ImageGenerationError,
     edit_image_result,
     generate_image_result,
+    is_rate_limited_image_error,
     is_retryable_image_output_error,
     is_token_invalid_error,
 )
@@ -21,6 +22,11 @@ from services.text_backend import TextBackend, TextBackendError, TextConversatio
 from services.text_thread_service import text_thread_service
 from services.utils import (
     BLOCKED_RESPONSE_ERROR_PREFIX,
+    CODEX_IMAGE_MODEL,
+    IMAGE_MODELS,
+    ImageRequestOptions,
+    build_image_prompt,
+    build_image_request_options,
     build_chat_image_completion,
     ensure_prompt_not_blocked,
     extract_assistant_history_messages,
@@ -64,6 +70,24 @@ def _extract_response_images(input_value: object) -> list[tuple[bytes, str]]:
 class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
+
+    @staticmethod
+    def _is_codex_image_model(model: str) -> bool:
+        return str(model or "").strip() == CODEX_IMAGE_MODEL
+
+    def _get_image_request_token(self, model: str) -> str:
+        if self._is_codex_image_model(model):
+            getter = getattr(self.account_service, "get_codex_image_access_token", None)
+            if callable(getter):
+                return getter()
+        return self.account_service.get_available_access_token()
+
+    def _mark_image_request_result(self, access_token: str, success: bool, model: str) -> dict | None:
+        if self._is_codex_image_model(model):
+            marker = getattr(self.account_service, "mark_codex_image_result", None)
+            if callable(marker):
+                return marker(access_token, success=success)
+        return self.account_service.mark_image_result(access_token, success=success)
 
     def _list_text_access_tokens(self, excluded_tokens: set[str] | None = None) -> list[str]:
         excluded = {str(token or "").strip() for token in (excluded_tokens or set()) if str(token or "").strip()}
@@ -779,6 +803,8 @@ class ChatGPTService:
         n: int,
         response_format: str = "b64_json",
         base_url: str | None = None,
+        *,
+        image_options: ImageRequestOptions | None = None,
     ):
         created = None
         image_items: list[dict[str, object]] = []
@@ -787,7 +813,7 @@ class ChatGPTService:
         for index in range(1, n + 1):
             while True:
                 try:
-                    request_token = self.account_service.get_available_access_token()
+                    request_token = self._get_image_request_token(model)
                 except RuntimeError as exc:
                     last_error = str(exc)
                     print(f"[image-generate] stop index={index}/{n} error={exc}")
@@ -799,10 +825,11 @@ class ChatGPTService:
                         request_token,
                         prompt,
                         model,
-                        response_format,
-                        base_url,
+                        image_options=image_options,
+                        response_format=response_format,
+                        base_url=base_url,
                     )
-                    account = self.account_service.mark_image_result(request_token, success=True)
+                    account = self._mark_image_request_result(request_token, success=True, model=model)
                     if created is None:
                         created = result.get("created")
                     data = result.get("data")
@@ -814,7 +841,7 @@ class ChatGPTService:
                     )
                     break
                 except ImageGenerationError as exc:
-                    account = self.account_service.mark_image_result(request_token, success=False)
+                    account = self._mark_image_request_result(request_token, success=False, model=model)
                     message = str(exc)
                     last_error = message
                     print(
@@ -824,6 +851,10 @@ class ChatGPTService:
                     if is_token_invalid_error(message):
                         self.account_service.remove_token(request_token)
                         print(f"[image-generate] remove invalid token={request_token[:12]}...")
+                        continue
+                    if self._is_codex_image_model(model) and is_rate_limited_image_error(message):
+                        self.account_service.update_account(request_token, {"status": "限流"})
+                        print(f"[image-generate] mark codex token limited={request_token[:12]}..., retry next token")
                         continue
                     break
 
@@ -843,6 +874,8 @@ class ChatGPTService:
         n: int,
         response_format: str = "b64_json",
         base_url: str | None = None,
+        *,
+        image_options: ImageRequestOptions | None = None,
     ):
         created = None
         image_items: list[dict[str, object]] = []
@@ -855,7 +888,7 @@ class ChatGPTService:
             transient_retry_count = 0
             while True:
                 try:
-                    request_token = self.account_service.get_available_access_token()
+                    request_token = self._get_image_request_token(model)
                 except RuntimeError as exc:
                     last_error = str(exc)
                     print(f"[image-edit] stop index={index}/{n} error={exc}")
@@ -871,10 +904,11 @@ class ChatGPTService:
                         prompt,
                         normalized_images,
                         model,
-                        response_format,
-                        base_url,
+                        image_options=image_options,
+                        response_format=response_format,
+                        base_url=base_url,
                     )
-                    account = self.account_service.mark_image_result(request_token, success=True)
+                    account = self._mark_image_request_result(request_token, success=True, model=model)
                     if created is None:
                         created = result.get("created")
                     data = result.get("data")
@@ -886,7 +920,7 @@ class ChatGPTService:
                     )
                     break
                 except ImageGenerationError as exc:
-                    account = self.account_service.mark_image_result(request_token, success=False)
+                    account = self._mark_image_request_result(request_token, success=False, model=model)
                     message = str(exc)
                     last_error = message
                     print(
@@ -896,6 +930,10 @@ class ChatGPTService:
                     if is_token_invalid_error(message):
                         self.account_service.remove_token(request_token)
                         print(f"[image-edit] remove invalid token={request_token[:12]}...")
+                        continue
+                    if self._is_codex_image_model(model) and is_rate_limited_image_error(message):
+                        self.account_service.update_account(request_token, {"status": "限流"})
+                        print(f"[image-edit] mark codex token limited={request_token[:12]}..., retry next token")
                         continue
                     if (
                         is_retryable_image_output_error(message)
@@ -929,7 +967,18 @@ class ChatGPTService:
 
         model = str(body.get("model") or "gpt-image-2").strip() or "gpt-image-2"
         n = parse_image_count(body.get("n"))
-        prompt = extract_chat_prompt(body)
+        try:
+            image_options = build_image_request_options(
+                model=model,
+                size=body.get("size"),
+                quality=body.get("quality"),
+                background=body.get("background"),
+                output_format=body.get("output_format"),
+                compression=body.get("compression"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        prompt = build_image_prompt(extract_chat_prompt(body), image_options)
         if not prompt:
             raise HTTPException(status_code=400, detail={"error": "prompt is required"})
         self._enforce_sensitive_word_filter(prompt)
@@ -938,9 +987,9 @@ class ChatGPTService:
         try:
             if image_infos:
                 images = [(data, f"image_{idx}.png", mime_type) for idx, (data, mime_type) in enumerate(image_infos, start=1)]
-                image_result = self.edit_with_pool(prompt, images, model, n)
+                image_result = self.edit_with_pool(prompt, images, model, n, image_options=image_options)
             else:
-                image_result = self.generate_with_pool(prompt, model, n)
+                image_result = self.generate_with_pool(prompt, model, n, image_options=image_options)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
@@ -963,12 +1012,26 @@ class ChatGPTService:
 
         image_infos = _extract_response_images(body.get("input"))
         model = str(body.get("model") or "gpt-5").strip() or "gpt-5"
+        image_model = model if model in IMAGE_MODELS else "gpt-image-2"
+        try:
+            image_options = build_image_request_options(
+                model=image_model,
+                size=body.get("size"),
+                quality=body.get("quality"),
+                background=body.get("background"),
+                output_format=body.get("output_format"),
+                compression=body.get("compression"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        prompt = build_image_prompt(prompt, image_options)
+        self._enforce_sensitive_word_filter(prompt)
         try:
             if image_infos:
                 images = [(data, f"image_{idx}.png", mime_type) for idx, (data, mime_type) in enumerate(image_infos, start=1)]
-                image_result = self.edit_with_pool(prompt, images, "gpt-image-2", 1)
+                image_result = self.edit_with_pool(prompt, images, image_model, 1, image_options=image_options)
             else:
-                image_result = self.generate_with_pool(prompt, "gpt-image-2", 1)
+                image_result = self.generate_with_pool(prompt, image_model, 1, image_options=image_options)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 

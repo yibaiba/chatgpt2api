@@ -5,7 +5,7 @@ import base64
 import hashlib
 import json
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +21,7 @@ from services.utils import anonymize_token
 
 class AccountService:
     REMOTE_SYNC_REMOVABLE_STATUSES = {"异常", "禁用"}
+    CODEX_IMAGE_ACCOUNT_TYPES = {"Plus", "Team", "Pro"}
     ACCOUNT_TYPE_MAP = {
         "free": "Free",
         "plus": "Plus",
@@ -79,6 +80,16 @@ class AccountService:
         if bool(account.get("image_quota_unknown")):
             return True
         return int(account.get("quota") or 0) > 0
+
+    @classmethod
+    def _is_codex_image_account_available(cls, account: dict) -> bool:
+        if not isinstance(account, dict):
+            return False
+        status = str(account.get("status") or "").strip()
+        if status in {"禁用", "限流", "异常"}:
+            return False
+        account_type = str(account.get("type") or "").strip()
+        return account_type in cls.CODEX_IMAGE_ACCOUNT_TYPES
 
     def _decode_access_token_payload(self, access_token: str) -> dict[str, Any]:
         parts = self._clean_token(access_token).split(".")
@@ -242,21 +253,33 @@ class AccountService:
         with self._lock:
             return [token for item in self._accounts if (token := self._clean_token(item.get("access_token")))]
 
-    def _list_available_candidate_tokens(self, excluded_tokens: set[str] | None = None) -> list[str]:
+    def _list_available_candidate_tokens(
+        self,
+        excluded_tokens: set[str] | None = None,
+        *,
+        predicate: Callable[[dict], bool] | None = None,
+    ) -> list[str]:
         excluded = {self._clean_token(token) for token in (excluded_tokens or set()) if self._clean_token(token)}
+        is_available = predicate or self._is_image_account_available
         return [
             token
             for item in self._accounts
-            if self._is_image_account_available(item)
+            if is_available(item)
                and (token := self._clean_token(item.get("access_token")))
                and token not in excluded
         ]
 
-    def _pick_next_candidate_token(self, excluded_tokens: set[str] | None = None) -> str:
+    def _pick_next_candidate_token(
+        self,
+        excluded_tokens: set[str] | None = None,
+        *,
+        predicate: Callable[[dict], bool] | None = None,
+        empty_error: str | None = None,
+    ) -> str:
         with self._lock:
-            tokens = self._list_available_candidate_tokens(excluded_tokens)
+            tokens = self._list_available_candidate_tokens(excluded_tokens, predicate=predicate)
             if not tokens:
-                raise RuntimeError(f"No available tokens found in {self.store_file}")
+                raise RuntimeError(empty_error or f"No available tokens found in {self.store_file}")
             access_token = tokens[self._index % len(tokens)]
             self._index += 1
             return access_token
@@ -291,6 +314,25 @@ class AccountService:
             print(
                 f"[account-available] skip token={token_ref} "
                 f"quota={account.get('quota') if account else 'unknown'} "
+                f"status={account.get('status') if account else 'unknown'}"
+            )
+
+    def get_codex_image_access_token(self) -> str:
+        attempted_tokens: set[str] = set()
+        while True:
+            access_token = self._pick_next_candidate_token(
+                excluded_tokens=attempted_tokens,
+                predicate=self._is_codex_image_account_available,
+                empty_error="没有可用的 Plus/Team/Pro 账号",
+            )
+            attempted_tokens.add(access_token)
+            token_ref = anonymize_token(access_token)
+            account = self.refresh_account_state(access_token)
+            if self._is_codex_image_account_available(account or {}):
+                return access_token
+            print(
+                f"[account-codex-available] skip token={token_ref} "
+                f"type={account.get('type') if account else 'unknown'} "
                 f"status={account.get('status') if account else 'unknown'}"
             )
 
@@ -447,7 +489,7 @@ class AccountService:
             return dict(account)
         return None
 
-    def mark_image_result(self, access_token: str, success: bool) -> dict | None:
+    def _mark_image_activity(self, access_token: str, success: bool, *, consume_quota: bool) -> dict | None:
         access_token = self._clean_token(access_token)
         if not access_token:
             return None
@@ -460,12 +502,12 @@ class AccountService:
             image_quota_unknown = bool(next_item.get("image_quota_unknown"))
             if success:
                 next_item["success"] = int(next_item.get("success") or 0) + 1
-                if not image_quota_unknown:
+                if consume_quota and not image_quota_unknown:
                     next_item["quota"] = max(0, int(next_item.get("quota") or 0) - 1)
-                if not image_quota_unknown and next_item["quota"] == 0:
+                if consume_quota and not image_quota_unknown and next_item["quota"] == 0:
                     next_item["status"] = "限流"
                     next_item["restore_at"] = next_item.get("restore_at") or None
-                elif next_item.get("status") == "限流":
+                elif consume_quota and next_item.get("status") == "限流":
                     next_item["status"] = "正常"
             else:
                 next_item["fail"] = int(next_item.get("fail") or 0) + 1
@@ -479,6 +521,12 @@ class AccountService:
             self._save_accounts()
             return dict(account)
         return None
+
+    def mark_image_result(self, access_token: str, success: bool) -> dict | None:
+        return self._mark_image_activity(access_token, success, consume_quota=True)
+
+    def mark_codex_image_result(self, access_token: str, success: bool) -> dict | None:
+        return self._mark_image_activity(access_token, success, consume_quota=False)
 
     def fetch_remote_info(self, access_token: str) -> dict[str, Any]:
         access_token = self._clean_token(access_token)

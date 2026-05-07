@@ -29,15 +29,32 @@ type RegisterCardProps = {
   onReset: () => void;
 };
 
-function emptyProvider(): RegisterMailProvider {
+const PROVIDER_OPTIONS = [
+  "cloudflare_temp_email",
+  "tempmail_lol",
+  "moemail",
+  "inbucket",
+  "duckmail",
+  "gptmail",
+  "yyds_mail",
+] as const;
+
+type RegisterProviderType = (typeof PROVIDER_OPTIONS)[number];
+
+function buildProvider(type: RegisterProviderType = "tempmail_lol", seed?: Partial<RegisterMailProvider>): RegisterMailProvider {
   return {
-    id: Math.random().toString(36).slice(2, 10),
-    type: "generic",
-    enabled: true,
-    api_key: "",
-    api_base: "",
-    default_domain: "",
-    domains: [],
+    id: seed?.id || Math.random().toString(36).slice(2, 10),
+    type,
+    enabled: seed?.enabled ?? true,
+    api_key: type === "tempmail_lol" || type === "moemail" || type === "duckmail" || type === "gptmail" || type === "yyds_mail" ? seed?.api_key || "" : "",
+    api_base: type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" ? seed?.api_base || (type === "yyds_mail" ? "https://maliapi.215.im/v1" : "") : "",
+    admin_password: type === "cloudflare_temp_email" ? seed?.admin_password || "" : undefined,
+    default_domain: type === "duckmail" ? seed?.default_domain || "duckmail.sbs" : type === "gptmail" ? seed?.default_domain || "" : undefined,
+    expiry_time: seed?.expiry_time,
+    random_subdomain: type === "inbucket" ? seed?.random_subdomain ?? true : undefined,
+    subdomain: type === "yyds_mail" ? seed?.subdomain || "" : undefined,
+    wildcard: type === "yyds_mail" ? seed?.wildcard ?? false : undefined,
+    domains: seed?.domains || [],
   };
 }
 
@@ -80,6 +97,24 @@ export function RegisterCard({
   const stats = config.stats;
   const providers = config.mail.providers;
   const isActing = Boolean(actionLabel);
+  const updateProvider = (index: number, updates: Partial<RegisterMailProvider>) =>
+    updateConfig(config, onChange, (current) => ({
+      ...current,
+      mail: {
+        ...current.mail,
+        providers: current.mail.providers.map((item, itemIndex) => (itemIndex === index ? { ...item, ...updates } : item)),
+      },
+    }));
+  const switchProviderType = (index: number, type: RegisterProviderType) =>
+    updateConfig(config, onChange, (current) => ({
+      ...current,
+      mail: {
+        ...current.mail,
+        providers: current.mail.providers.map((item, itemIndex) =>
+          itemIndex === index ? buildProvider(type, { id: item.id, enabled: item.enabled }) : item,
+        ),
+      },
+    }));
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.95fr)]">
@@ -91,7 +126,7 @@ export function RegisterCard({
                   <UserPlus className="size-4" />
                   <h2 className="text-lg font-semibold tracking-tight">注册配置</h2>
                 </div>
-                <p className="text-sm text-stone-500">当前已支持 `tempmail_lol` 与 `moemail` provider；成功后会自动把 access token 导入现有号池并刷新状态。</p>
+                <p className="text-sm text-stone-500">当前已支持 `cloudflare_temp_email`、`tempmail_lol`、`moemail`、`inbucket`、`duckmail`、`gptmail` 与 `yyds_mail`；成功后会自动把 access token 导入现有号池并刷新状态。</p>
               </div>
             <div className="flex gap-2">
               <Button
@@ -233,7 +268,7 @@ export function RegisterCard({
           <div className="space-y-4 border-t border-stone-200 pt-4">
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-stone-800">邮箱 provider 配置</h3>
-                <p className="text-xs text-stone-500">这一版已对 `tempmail_lol` 与 `moemail` 开启真实执行；其余 provider 会在后续阶段补齐。</p>
+                <p className="text-xs text-stone-500">按 provider 类型展示对应字段；先保存配置，再启动 runner，可以避免带着半成品字段直接跑任务。</p>
               </div>
 
             <div className="grid gap-4 md:grid-cols-3">
@@ -291,155 +326,162 @@ export function RegisterCard({
             </div>
 
             <div className="space-y-4">
-              {providers.map((provider, index) => (
-                <div key={provider.id || index} className="space-y-3 rounded-2xl border border-stone-200 bg-stone-50/70 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-3 text-sm text-stone-700">
-                      <Checkbox
-                        checked={Boolean(provider.enabled)}
-                        onCheckedChange={(checked) =>
+              {providers.map((provider, index) => {
+                const providerType = PROVIDER_OPTIONS.includes(provider.type as RegisterProviderType)
+                  ? (provider.type as RegisterProviderType)
+                  : "tempmail_lol";
+                return (
+                  <div key={provider.id || index} className="space-y-3 rounded-2xl border border-stone-200 bg-stone-50/70 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="flex items-center gap-3 text-sm text-stone-700">
+                        <Checkbox
+                          checked={Boolean(provider.enabled)}
+                          onCheckedChange={(checked) => updateProvider(index, { enabled: Boolean(checked) })}
+                          disabled={config.enabled}
+                        />
+                        启用 provider
+                      </label>
+                      <button
+                        type="button"
+                        className="rounded-lg p-2 text-stone-400 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50"
+                        onClick={() =>
                           updateConfig(config, onChange, (current) => ({
                             ...current,
                             mail: {
                               ...current.mail,
-                              providers: current.mail.providers.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, enabled: Boolean(checked) } : item,
-                              ),
+                              providers: current.mail.providers.filter((_, itemIndex) => itemIndex !== index),
                             },
                           }))
                         }
                         disabled={config.enabled}
-                      />
-                      启用 provider
-                    </label>
-                    <button
-                      type="button"
-                      className="rounded-lg p-2 text-stone-400 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50"
-                      onClick={() =>
-                        updateConfig(config, onChange, (current) => ({
-                          ...current,
-                          mail: {
-                            ...current.mail,
-                            providers: current.mail.providers.filter((_, itemIndex) => itemIndex !== index),
-                          },
-                        }))
-                      }
-                      disabled={config.enabled}
-                      title="删除 provider"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
+                        title="删除 provider"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-stone-700">类型</label>
-                      <Input
-                        value={provider.type}
-                        onChange={(event) =>
-                          updateConfig(config, onChange, (current) => ({
-                            ...current,
-                            mail: {
-                              ...current.mail,
-                              providers: current.mail.providers.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, type: event.target.value } : item,
-                              ),
-                            },
-                          }))
-                        }
-                        className="h-11 rounded-xl border-stone-200 bg-white"
-                        placeholder="tempmail_lol / moemail"
-                        disabled={config.enabled}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-stone-700">API Key</label>
-                      <Input
-                        value={provider.api_key || ""}
-                        onChange={(event) =>
-                          updateConfig(config, onChange, (current) => ({
-                            ...current,
-                            mail: {
-                              ...current.mail,
-                              providers: current.mail.providers.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, api_key: event.target.value } : item,
-                              ),
-                            },
-                          }))
-                        }
-                        className="h-11 rounded-xl border-stone-200 bg-white"
-                        disabled={config.enabled}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-stone-700">API Base</label>
-                      <Input
-                        value={provider.api_base || ""}
-                        onChange={(event) =>
-                          updateConfig(config, onChange, (current) => ({
-                            ...current,
-                            mail: {
-                              ...current.mail,
-                              providers: current.mail.providers.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, api_base: event.target.value } : item,
-                              ),
-                            },
-                          }))
-                        }
-                        className="h-11 rounded-xl border-stone-200 bg-white"
-                        disabled={config.enabled}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-stone-700">默认域名</label>
-                      <Input
-                        value={provider.default_domain || ""}
-                        onChange={(event) =>
-                          updateConfig(config, onChange, (current) => ({
-                            ...current,
-                            mail: {
-                              ...current.mail,
-                              providers: current.mail.providers.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, default_domain: event.target.value } : item,
-                              ),
-                            },
-                          }))
-                        }
-                        className="h-11 rounded-xl border-stone-200 bg-white"
-                        disabled={config.enabled}
-                      />
-                    </div>
-                    <div className="space-y-2 md:col-span-2">
-                      <label className="text-sm font-medium text-stone-700">Domains</label>
-                      <Textarea
-                        value={(provider.domains || []).join("\n")}
-                        onChange={(event) =>
-                          updateConfig(config, onChange, (current) => ({
-                            ...current,
-                            mail: {
-                              ...current.mail,
-                              providers: current.mail.providers.map((item, itemIndex) =>
-                                itemIndex === index
-                                  ? {
-                                      ...item,
-                                      domains: event.target.value
-                                        .split(/[\n,]/)
-                                        .map((entry) => entry.trim())
-                                        .filter(Boolean),
-                                    }
-                                  : item,
-                              ),
-                            },
-                          }))
-                        }
-                        placeholder="每行一个域名"
-                        className="min-h-24 rounded-xl border-stone-200 bg-white font-mono text-xs"
-                        disabled={config.enabled}
-                      />
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-stone-700">类型</label>
+                        <Select value={providerType} onValueChange={(value) => switchProviderType(index, value as RegisterProviderType)} disabled={config.enabled}>
+                          <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PROVIDER_OPTIONS.map((option) => (
+                              <SelectItem key={option} value={option}>
+                                {option}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {(providerType === "cloudflare_temp_email" || providerType === "moemail" || providerType === "inbucket" || providerType === "yyds_mail") && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-stone-700">API Base</label>
+                          <Input
+                            value={provider.api_base || ""}
+                            onChange={(event) => updateProvider(index, { api_base: event.target.value })}
+                            className="h-11 rounded-xl border-stone-200 bg-white"
+                            disabled={config.enabled}
+                          />
+                        </div>
+                      )}
+
+                      {providerType === "cloudflare_temp_email" && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-stone-700">Admin Password</label>
+                          <Input
+                            value={provider.admin_password || ""}
+                            onChange={(event) => updateProvider(index, { admin_password: event.target.value })}
+                            className="h-11 rounded-xl border-stone-200 bg-white"
+                            disabled={config.enabled}
+                          />
+                        </div>
+                      )}
+
+                      {providerType === "inbucket" && (
+                        <label className="flex items-center gap-3 pt-8 text-sm text-stone-700">
+                          <Checkbox
+                            checked={Boolean(provider.random_subdomain ?? true)}
+                            onCheckedChange={(checked) => updateProvider(index, { random_subdomain: Boolean(checked) })}
+                            disabled={config.enabled}
+                          />
+                          启用随机子域名
+                        </label>
+                      )}
+
+                      {(providerType === "tempmail_lol" || providerType === "moemail" || providerType === "duckmail" || providerType === "gptmail" || providerType === "yyds_mail") && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-stone-700">API Key</label>
+                          <Input
+                            value={provider.api_key || ""}
+                            onChange={(event) => updateProvider(index, { api_key: event.target.value })}
+                            className="h-11 rounded-xl border-stone-200 bg-white"
+                            disabled={config.enabled}
+                          />
+                        </div>
+                      )}
+
+                      {(providerType === "duckmail" || providerType === "gptmail") && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-stone-700">默认域名</label>
+                          <Input
+                            value={provider.default_domain || ""}
+                            onChange={(event) => updateProvider(index, { default_domain: event.target.value })}
+                            placeholder={providerType === "duckmail" ? "duckmail.sbs" : ""}
+                            className="h-11 rounded-xl border-stone-200 bg-white"
+                            disabled={config.enabled}
+                          />
+                        </div>
+                      )}
+
+                      {providerType === "yyds_mail" && (
+                        <>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-stone-700">Subdomain</label>
+                            <Input
+                              value={provider.subdomain || ""}
+                              onChange={(event) => updateProvider(index, { subdomain: event.target.value })}
+                              className="h-11 rounded-xl border-stone-200 bg-white"
+                              disabled={config.enabled}
+                            />
+                          </div>
+                          <label className="flex items-center gap-3 pt-8 text-sm text-stone-700">
+                            <Checkbox
+                              checked={Boolean(provider.wildcard)}
+                              onCheckedChange={(checked) => updateProvider(index, { wildcard: Boolean(checked) })}
+                              disabled={config.enabled}
+                            />
+                            Wildcard
+                          </label>
+                        </>
+                      )}
+
+                      {(providerType === "tempmail_lol" || providerType === "cloudflare_temp_email" || providerType === "moemail" || providerType === "inbucket" || providerType === "yyds_mail") && (
+                        <div className="space-y-2 md:col-span-2">
+                          <label className="text-sm font-medium text-stone-700">{providerType === "inbucket" ? "基础域名列表" : "Domains"}</label>
+                          <Textarea
+                            value={(provider.domains || []).join("\n")}
+                            onChange={(event) =>
+                              updateProvider(index, {
+                                domains: event.target.value
+                                  .split(/[\n,]/)
+                                  .map((entry) => entry.trim())
+                                  .filter(Boolean),
+                              })
+                            }
+                            placeholder={providerType === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : providerType === "moemail" ? "每行一个域名" : "每行一个域名，留空则使用服务默认域名"}
+                            className="min-h-24 rounded-xl border-stone-200 bg-white font-mono text-xs"
+                            disabled={config.enabled}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               <Button
                 type="button"
@@ -450,9 +492,9 @@ export function RegisterCard({
                     ...current,
                     mail: {
                       ...current.mail,
-                      providers: [...current.mail.providers, emptyProvider()],
-                    },
-                  }))
+                        providers: [...current.mail.providers, buildProvider()],
+                      },
+                    }))
                 }
                 disabled={config.enabled}
               >
@@ -531,7 +573,7 @@ export function RegisterCard({
 
           <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             <AlertTriangle className="size-4 shrink-0" />
-            真实执行目前支持 `tempmail_lol` 与 `moemail`。若 provider 类型、api_key 或 moemail 的 api_base 不可用，启动时会直接返回错误。
+            若 provider 的必填字段缺失，启动时会直接返回错误；保存前请确认类型与对应字段已经填完整。
           </div>
 
           <div className="space-y-2">

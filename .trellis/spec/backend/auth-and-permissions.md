@@ -93,6 +93,8 @@
 #### Quota settlement
 - Normal-user quota is enforced before upstream image work starts.
 - Quota settlement must happen after the actual number of returned images is known.
+- The normal-user quota contract is local to this project and applies the same way to `gpt-image-2`, `codex-gpt-image-2`, and `gpt-image-think`.
+- `codex-gpt-image-2` may only use upstream accounts of type `Plus`, `Team`, or `Pro`; that upstream-account gate does not bypass local normal-user quota checks.
 - For normal users:
   - reserve first
   - settle with `actual_count`
@@ -103,6 +105,9 @@
   - `/v1/images/generations` and `/v1/images/edits`: count non-empty `b64_json` items in `data`
   - `/v1/chat/completions`: count generated markdown image markers in the returned assistant content
   - `/v1/responses`: count `output[].type == "image_generation_call"`
+- Upstream account bookkeeping rules:
+  - regular image requests may consume the account's normal web image quota/status
+  - `codex-gpt-image-2` requests must not decrement the regular `gpt-image-2` quota/status bookkeeping; only request success/fail counters and timestamps should move
 
 ### 4. Validation & Error Matrix
 

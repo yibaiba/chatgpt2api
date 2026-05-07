@@ -108,8 +108,12 @@ def _normalize_provider(raw: object) -> dict[str, Any] | None:
         "enabled": _clean_bool(raw.get("enabled", raw.get("enable", True))),
         "api_key": _clean_text(raw.get("api_key")),
         "api_base": _clean_text(raw.get("api_base")),
+        "admin_password": _clean_text(raw.get("admin_password")),
         "default_domain": _clean_text(raw.get("default_domain")),
         "expiry_time": _clean_int(raw.get("expiry_time"), fallback=0, min_value=0, max_value=31_536_000),
+        "random_subdomain": True if raw.get("random_subdomain") is None else _clean_bool(raw.get("random_subdomain")),
+        "subdomain": _clean_text(raw.get("subdomain")),
+        "wildcard": _clean_bool(raw.get("wildcard")),
         "domains": domains,
     }
 

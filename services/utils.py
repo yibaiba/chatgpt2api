@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
+from math import gcd
 import re
 import time
 import uuid
@@ -13,17 +15,37 @@ SUPPORTED_TEXT_MODELS = (
     "gpt-4.1",
     "gpt-5",
 )
+CODEX_IMAGE_MODEL = "codex-gpt-image-2"
 SUPPORTED_IMAGE_MODELS = (
     "gpt-image-1",
     "gpt-image-2",
+    CODEX_IMAGE_MODEL,
     "gpt-image-think",
 )
 SUPPORTED_API_MODELS = tuple(dict.fromkeys((*SUPPORTED_TEXT_MODELS, *SUPPORTED_IMAGE_MODELS)))
 IMAGE_MODELS = set(SUPPORTED_IMAGE_MODELS)
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ASPECT_RATIO_PREFIX_RE = re.compile(r"^\s*Make the aspect ratio\s+\S+\s*,\s*", re.IGNORECASE)
+IMAGE_SIZE_RE = re.compile(r"^\s*(\d+)\s*[xX]\s*(\d+)\s*$")
+IMAGE_RATIO_RE = re.compile(r"^\s*(\d+)\s*:\s*(\d+)\s*$")
 BLOCKED_PROMPT_ERROR_PREFIX = "prompt contains blocked word"
 BLOCKED_RESPONSE_ERROR_PREFIX = "response contains blocked word"
+SUPPORTED_IMAGE_QUALITIES = {"auto", "low", "medium", "high"}
+SUPPORTED_IMAGE_BACKGROUNDS = {"auto", "transparent", "opaque"}
+SUPPORTED_IMAGE_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
+MAX_IMAGE_EDGE = 3840
+MIN_IMAGE_PIXELS = 655_360
+MAX_IMAGE_PIXELS = 8_294_400
+MAX_IMAGE_ASPECT_RATIO = 3.0
+
+
+@dataclass(frozen=True)
+class ImageRequestOptions:
+    size: str | None = None
+    quality: str = "auto"
+    background: str = "auto"
+    output_format: str = "png"
+    compression: int | None = None
 
 
 def anonymize_token(token: object) -> str:
@@ -32,6 +54,10 @@ def anonymize_token(token: object) -> str:
         return "token:empty"
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:10]
     return f"token:{digest}"
+
+
+def is_codex_image_model(model: object) -> bool:
+    return str(model or "").strip() == CODEX_IMAGE_MODEL
 
 
 def is_image_chat_request(body: dict[str, object]) -> bool:
@@ -183,6 +209,166 @@ def apply_image_size_prompt(prompt: object, size: object) -> str:
         lines[0] = ASPECT_RATIO_PREFIX_RE.sub(prefix, lines[0], count=1)
         return "\n".join(lines).strip()
     return f"{prefix}{normalized_prompt}"
+
+
+def _validate_ratio(width: int, height: int, *, field_name: str) -> None:
+    if width <= 0 or height <= 0:
+        raise ValueError(f"{field_name} values must be positive")
+    ratio = max(width / height, height / width)
+    if ratio > MAX_IMAGE_ASPECT_RATIO:
+        raise ValueError(f"{field_name} aspect ratio must be at most 3:1")
+
+
+def simplify_image_ratio(width: int, height: int) -> str:
+    divisor = gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def normalize_image_size(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized == "auto":
+        return "auto"
+
+    ratio_match = IMAGE_RATIO_RE.match(normalized)
+    if ratio_match:
+        width = int(ratio_match.group(1))
+        height = int(ratio_match.group(2))
+        _validate_ratio(width, height, field_name="size")
+        return simplify_image_ratio(width, height)
+
+    size_match = IMAGE_SIZE_RE.match(normalized)
+    if not size_match:
+        raise ValueError("size must be auto, WIDTHxHEIGHT, or WIDTH:HEIGHT")
+
+    width = int(size_match.group(1))
+    height = int(size_match.group(2))
+    if width % 16 != 0 or height % 16 != 0:
+        raise ValueError("size width and height must both be multiples of 16")
+    if width > MAX_IMAGE_EDGE or height > MAX_IMAGE_EDGE:
+        raise ValueError(f"size width and height must be at most {MAX_IMAGE_EDGE}")
+    _validate_ratio(width, height, field_name="size")
+    pixels = width * height
+    if pixels < MIN_IMAGE_PIXELS or pixels > MAX_IMAGE_PIXELS:
+        raise ValueError(
+            f"size pixel count must be between {MIN_IMAGE_PIXELS} and {MAX_IMAGE_PIXELS}"
+        )
+    return f"{width}x{height}"
+
+
+def parse_exact_image_size(size: object) -> tuple[int, int] | None:
+    normalized = normalize_image_size(size)
+    if not normalized or normalized == "auto" or ":" in normalized:
+        return None
+    matched = IMAGE_SIZE_RE.match(normalized)
+    if not matched:
+        return None
+    return int(matched.group(1)), int(matched.group(2))
+
+
+def normalize_image_quality(value: object) -> str:
+    normalized = str(value or "auto").strip().lower() or "auto"
+    if normalized not in SUPPORTED_IMAGE_QUALITIES:
+        raise ValueError("quality must be one of auto, low, medium, high")
+    return normalized
+
+
+def normalize_image_background(value: object, model: object) -> str:
+    normalized = str(value or "auto").strip().lower() or "auto"
+    if normalized not in SUPPORTED_IMAGE_BACKGROUNDS:
+        raise ValueError("background must be one of auto, transparent, opaque")
+    normalized_model = str(model or "").strip()
+    if normalized == "transparent" and normalized_model in {"gpt-image-2", "gpt-image-think", CODEX_IMAGE_MODEL, "gpt-image"}:
+        raise ValueError(f"{normalized_model or 'this model'} does not support transparent background")
+    return normalized
+
+
+def normalize_image_output_format(value: object) -> str:
+    normalized = str(value or "png").strip().lower() or "png"
+    if normalized not in SUPPORTED_IMAGE_OUTPUT_FORMATS:
+        raise ValueError("output_format must be one of png, jpeg, webp")
+    return normalized
+
+
+def normalize_image_compression(value: object, *, output_format: str) -> int | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        compression = int(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("compression must be an integer between 0 and 100") from exc
+    if output_format == "png":
+        raise ValueError("compression is only supported for jpeg and webp output")
+    if compression < 0 or compression > 100:
+        raise ValueError("compression must be an integer between 0 and 100")
+    return compression
+
+
+def build_image_request_options(
+    *,
+    model: object,
+    size: object = None,
+    quality: object = None,
+    background: object = None,
+    output_format: object = None,
+    compression: object = None,
+) -> ImageRequestOptions:
+    codex_model = is_codex_image_model(model)
+    normalized_size = normalize_image_size(size)
+    normalized_quality = normalize_image_quality(quality)
+    normalized_background = normalize_image_background(background, model)
+    normalized_output_format = normalize_image_output_format(output_format)
+    normalized_compression = normalize_image_compression(compression, output_format=normalized_output_format)
+    if not codex_model:
+        if normalized_size and "x" in normalized_size:
+            raise ValueError(f"exact WIDTHxHEIGHT size is only supported for {CODEX_IMAGE_MODEL}")
+        if normalized_quality != "auto":
+            raise ValueError(f"quality is only supported for {CODEX_IMAGE_MODEL}")
+        if normalized_background != "auto":
+            raise ValueError(f"background is only supported for {CODEX_IMAGE_MODEL}")
+        if normalized_output_format != "png":
+            raise ValueError(f"output_format is only supported for {CODEX_IMAGE_MODEL}")
+        if normalized_compression is not None:
+            raise ValueError(f"compression is only supported for {CODEX_IMAGE_MODEL}")
+    return ImageRequestOptions(
+        size=normalized_size,
+        quality=normalized_quality,
+        background=normalized_background,
+        output_format=normalized_output_format,
+        compression=normalized_compression,
+    )
+
+
+def build_image_prompt(prompt: object, options: ImageRequestOptions | None = None) -> str:
+    normalized_prompt = str(prompt or "").strip()
+    if options is None:
+        return normalized_prompt
+
+    next_prompt = normalized_prompt
+    exact_size = parse_exact_image_size(options.size)
+    if exact_size is not None:
+        width, height = exact_size
+        next_prompt = apply_image_size_prompt(next_prompt, simplify_image_ratio(width, height))
+        resolution_hint = f"Render at {width}x{height} resolution."
+        next_prompt = f"{resolution_hint}\n{next_prompt}".strip()
+    elif options.size and options.size != "auto":
+        next_prompt = apply_image_size_prompt(next_prompt, options.size)
+
+    hints: list[str] = []
+    if options.quality != "auto":
+        hints.append(f"Use {options.quality} image quality.")
+    if options.background == "transparent":
+        hints.append("Use a transparent background.")
+    elif options.background == "opaque":
+        hints.append("Use an opaque background.")
+
+    if not hints:
+        return next_prompt
+    if not next_prompt:
+        return "\n".join(hints)
+    return "\n".join([*hints, next_prompt]).strip()
 
 
 def find_sensitive_word(text: object, sensitive_words: object) -> str | None:

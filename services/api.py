@@ -35,7 +35,9 @@ from services.sub2api_service import (
 from services.image_service import ImageGenerationError
 from services.system_settings import system_settings_service
 from services.utils import (
-    apply_image_size_prompt,
+    ImageRequestOptions,
+    build_image_prompt,
+    build_image_request_options,
     ensure_prompt_not_blocked,
     extract_chat_prompt,
     has_response_image_generation_tool,
@@ -67,6 +69,10 @@ class ImageGenerationRequest(BaseModel):
     model: str = "auto"
     n: int = Field(default=1, ge=1, le=4)
     size: str | None = None
+    quality: str | None = None
+    background: str | None = None
+    output_format: str | None = None
+    compression: int | None = None
     response_format: str = "b64_json"
     history_disabled: bool = True
 
@@ -292,6 +298,12 @@ class ImageTurnPayload(BaseModel):
     prompt: str = ""
     model: str = ""
     mode: str | None = None
+    aspect_ratio: str | None = Field(default=None, alias="aspectRatio")
+    output_quality: str | None = Field(default=None, alias="outputQuality")
+    render_quality: str | None = Field(default=None, alias="renderQuality")
+    background: str | None = None
+    output_format: str | None = Field(default=None, alias="outputFormat")
+    compression: int | None = None
     reference_images: list[StoredReferenceImagePayload] = Field(default_factory=list, alias="referenceImages")
     count: int = Field(default=1)
     images: list[StoredImagePayload] = Field(default_factory=list)
@@ -311,6 +323,12 @@ class ImageConversationPayload(BaseModel):
     prompt: str = ""
     model: str = ""
     mode: str | None = None
+    aspect_ratio: str | None = Field(default=None, alias="aspectRatio")
+    output_quality: str | None = Field(default=None, alias="outputQuality")
+    render_quality: str | None = Field(default=None, alias="renderQuality")
+    background: str | None = None
+    output_format: str | None = Field(default=None, alias="outputFormat")
+    compression: int | None = None
     reference_images: list[StoredReferenceImagePayload] = Field(default_factory=list, alias="referenceImages")
     count: int = Field(default=1)
     images: list[StoredImagePayload] = Field(default_factory=list)
@@ -786,6 +804,7 @@ def create_app() -> FastAPI:
             prompt: str,
             model: str,
             n: int,
+            image_options: ImageRequestOptions,
             response_format: str,
             base_url: str | None,
     ) -> None:
@@ -795,6 +814,7 @@ def create_app() -> FastAPI:
                 prompt,
                 model,
                 n,
+                image_options=image_options,
                 response_format=response_format,
                 base_url=base_url,
             )
@@ -816,6 +836,7 @@ def create_app() -> FastAPI:
             images: list[tuple[bytes, str, str]],
             model: str,
             n: int,
+            image_options: ImageRequestOptions,
             response_format: str,
             base_url: str | None,
     ) -> None:
@@ -826,6 +847,7 @@ def create_app() -> FastAPI:
                 images,
                 model,
                 n,
+                image_options=image_options,
                 response_format=response_format,
                 base_url=base_url,
             )
@@ -1179,11 +1201,19 @@ def create_app() -> FastAPI:
         identity = require_session(request, authorization)
         reserved_count = int(body.n or 1)
         try:
+            image_options = build_image_request_options(
+                model=body.model,
+                size=body.size,
+                quality=body.quality,
+                background=body.background,
+                output_format=body.output_format,
+                compression=body.compression,
+            )
             normalized_response_format = normalize_image_response_format(body.response_format)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
-        prompt = apply_image_size_prompt(body.prompt, body.size)
+        prompt = build_image_prompt(body.prompt, image_options)
         ensure_prompt_not_blocked(
             prompt,
             enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
@@ -1197,7 +1227,17 @@ def create_app() -> FastAPI:
         job = create_image_job(identity)
         Thread(
             target=run_generation_image_job,
-            args=(job["id"], dict(identity), reserved_count, prompt, body.model, body.n, normalized_response_format, base_url),
+            args=(
+                job["id"],
+                dict(identity),
+                reserved_count,
+                prompt,
+                body.model,
+                body.n,
+                image_options,
+                normalized_response_format,
+                base_url,
+            ),
             name=f"image-generation-job-{job['id']}",
             daemon=True,
         ).start()
@@ -1213,6 +1253,10 @@ def create_app() -> FastAPI:
             model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
             size: str | None = Form(default=None),
+            quality: str | None = Form(default=None),
+            background: str | None = Form(default=None),
+            output_format: str | None = Form(default=None),
+            compression: int | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
     ):
         identity = require_session(request, authorization)
@@ -1224,12 +1268,20 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail={"error": "image file is required"})
 
         try:
+            image_options = build_image_request_options(
+                model=model,
+                size=size,
+                quality=quality,
+                background=background,
+                output_format=output_format,
+                compression=compression,
+            )
             normalized_response_format = normalize_image_response_format(response_format)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
         images = await load_validated_edit_uploads(uploads)
-        normalized_prompt = apply_image_size_prompt(prompt, size)
+        normalized_prompt = build_image_prompt(prompt, image_options)
         ensure_prompt_not_blocked(
             normalized_prompt,
             enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
@@ -1243,7 +1295,18 @@ def create_app() -> FastAPI:
         job = create_image_job(identity)
         Thread(
             target=run_edit_image_job,
-            args=(job["id"], dict(identity), n, normalized_prompt, images, model, n, normalized_response_format, base_url),
+            args=(
+                job["id"],
+                dict(identity),
+                n,
+                normalized_prompt,
+                images,
+                model,
+                n,
+                image_options,
+                normalized_response_format,
+                base_url,
+            ),
             name=f"image-edit-job-{job['id']}",
             daemon=True,
         ).start()
@@ -1263,11 +1326,19 @@ def create_app() -> FastAPI:
         identity = require_session(request, authorization)
         reserved_count = int(body.n or 1)
         try:
+            image_options = build_image_request_options(
+                model=body.model,
+                size=body.size,
+                quality=body.quality,
+                background=body.background,
+                output_format=body.output_format,
+                compression=body.compression,
+            )
             normalized_response_format = normalize_image_response_format(body.response_format)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
-        prompt = apply_image_size_prompt(body.prompt, body.size)
+        prompt = build_image_prompt(body.prompt, image_options)
         ensure_prompt_not_blocked(
             prompt,
             enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
@@ -1283,6 +1354,7 @@ def create_app() -> FastAPI:
                 prompt,
                 body.model,
                 body.n,
+                image_options=image_options,
                 response_format=normalized_response_format,
                 base_url=base_url,
             )
@@ -1305,6 +1377,10 @@ def create_app() -> FastAPI:
             model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
             size: str | None = Form(default=None),
+            quality: str | None = Form(default=None),
+            background: str | None = Form(default=None),
+            output_format: str | None = Form(default=None),
+            compression: int | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
     ):
         identity = require_session(request, authorization)
@@ -1316,12 +1392,20 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail={"error": "image file is required"})
 
         try:
+            image_options = build_image_request_options(
+                model=model,
+                size=size,
+                quality=quality,
+                background=background,
+                output_format=output_format,
+                compression=compression,
+            )
             normalized_response_format = normalize_image_response_format(response_format)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         base_url = require_image_base_url() if normalized_response_format == "url" else None
         images = await load_validated_edit_uploads(uploads)
-        normalized_prompt = apply_image_size_prompt(prompt, size)
+        normalized_prompt = build_image_prompt(prompt, image_options)
         ensure_prompt_not_blocked(
             normalized_prompt,
             enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
@@ -1338,6 +1422,7 @@ def create_app() -> FastAPI:
                 images,
                 model,
                 n,
+                image_options=image_options,
                 response_format=normalized_response_format,
                 base_url=base_url,
             )
