@@ -21,6 +21,7 @@ import type { ImageHistoryPersistenceMode } from "@/lib/auth-types";
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_SQLITE_STORAGE_DISPLAY_PATH = "./data/accounts.sqlite3";
 
 function normalizeClampedInteger(
   value: unknown,
@@ -45,6 +46,12 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
         .map((item) => String(item || "").trim())
         .filter((item, index, array) => item && array.findIndex((value) => value.toLowerCase() === item.toLowerCase()) === index)
     : [];
+  const storageSqlitePath =
+    typeof config.storage_sqlite_path === "string" ? config.storage_sqlite_path.trim() : "";
+  const normalizedStorageSqlitePath =
+    storageSqlitePath.endsWith("/data/accounts.sqlite3") || storageSqlitePath.endsWith("\\data\\accounts.sqlite3")
+      ? DEFAULT_SQLITE_STORAGE_DISPLAY_PATH
+      : storageSqlitePath;
   return {
     ...config,
     "auth-key": typeof config["auth-key"] === "string" ? config["auth-key"] : "",
@@ -67,6 +74,9 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     sensitive_words: sensitiveWords,
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
+    storage_backend: typeof config.storage_backend === "string" ? config.storage_backend : "json",
+    storage_sqlite_path: normalizedStorageSqlitePath,
+    storage_env_override_active: Boolean(config.storage_env_override_active),
     image_history_persistence_mode: imageHistoryPersistenceMode,
   };
 }

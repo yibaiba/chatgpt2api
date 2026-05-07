@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { History, KeyRound, Link2, LoaderCircle, Save, ShieldAlert } from "lucide-react";
+import { Database, History, KeyRound, Link2, LoaderCircle, Save, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -236,6 +236,22 @@ export function ConfigCard() {
               className="h-11 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">用于生成 `response_format=url` 时的图片访问前缀。</p>
+          </div>
+
+          <div className="space-y-2 md:col-span-2">
+            <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+              <Database className="size-3.5" />
+              SQLite 账号存储路径
+            </label>
+            <Input
+              value={String(config?.storage_sqlite_path || "./data/accounts.sqlite3")}
+              readOnly
+              className="h-11 rounded-xl border-stone-200 bg-stone-50 font-mono text-xs text-stone-600"
+            />
+            <p className="text-xs text-stone-500">
+              当前仅用于展示；默认显示为相对路径 `./data/accounts.sqlite3`，运行时仍会由后端解析成绝对路径。
+              {config?.storage_env_override_active ? " 当前路径受环境变量覆盖。" : ""}
+            </p>
           </div>
         </div>
 

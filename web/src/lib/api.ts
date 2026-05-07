@@ -250,6 +250,9 @@ export type SettingsConfig = {
   proxy: string;
   base_url?: string;
   global_system_prompt?: string;
+  storage_backend?: string;
+  storage_sqlite_path?: string;
+  storage_env_override_active?: boolean;
   "auth-key"?: string;
   auth_key_configured?: boolean;
   refresh_account_interval_minute?: number | string;
