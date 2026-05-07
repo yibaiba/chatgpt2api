@@ -23,6 +23,15 @@ export type GeneratedImageResponseItem = {
   generation_route?: ImageGenerationRoute;
 };
 export type GeneratedImageResponse = { created: number; data: GeneratedImageResponseItem[] };
+export type ApiModel = {
+  id: string;
+  object: string;
+  created?: number;
+  owned_by?: string;
+  permission?: unknown[];
+  root?: string | null;
+  parent?: string | null;
+};
 export type ImageJobStatus = "queued" | "running" | "success" | "error";
 export type ImageJobRequestOptions = {
   size?: string;
@@ -87,6 +96,11 @@ export type Account = {
 
 type AccountListResponse = {
   items: Account[];
+};
+
+type ModelsListResponse = {
+  object: string;
+  data: ApiModel[];
 };
 
 type AccountMutationResponse = {
@@ -163,6 +177,11 @@ export async function createImageGenerationJob(
     },
   );
   return job;
+}
+
+export async function fetchAvailableModels() {
+  const response = await httpRequest<ModelsListResponse>("/v1/models");
+  return Array.isArray(response.data) ? response.data : [];
 }
 
 export async function createImageEditJob(

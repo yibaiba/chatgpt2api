@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 import json
+from threading import Lock
 import time
 import uuid
 
@@ -18,7 +19,12 @@ from services.image_service import (
     is_retryable_image_output_error,
     is_token_invalid_error,
 )
-from services.text_backend import TextBackend, TextBackendError, TextConversationExpiredError
+from services.text_backend import (
+    TextBackend,
+    TextBackendError,
+    TextConversationExpiredError,
+    fetch_available_text_model_slugs,
+)
 from services.text_thread_service import text_thread_service
 from services.utils import (
     BLOCKED_RESPONSE_ERROR_PREFIX,
@@ -42,11 +48,13 @@ from services.utils import (
     find_sensitive_word_match,
     parse_image_count,
     strip_assistant_history_prefix,
+    SUPPORTED_IMAGE_MODELS,
     SUPPORTED_API_MODELS,
 )
 
 
 MAX_TRANSIENT_IMAGE_EDIT_RETRIES = 1
+MODEL_DISCOVERY_CACHE_TTL_SECONDS = 5 * 60
 
 
 def _extract_response_images(input_value: object) -> list[tuple[bytes, str]]:
@@ -70,6 +78,9 @@ def _extract_response_images(input_value: object) -> list[tuple[bytes, str]]:
 class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
+        self._models_cache_lock = Lock()
+        self._models_cache_expires_at = 0.0
+        self._models_cache: list[str] | None = None
 
     @staticmethod
     def _is_codex_image_model(model: str) -> bool:
@@ -428,8 +439,36 @@ class ChatGPTService:
         }
 
     @staticmethod
-    def list_models() -> list[str]:
-        return list(SUPPORTED_API_MODELS)
+    def _merge_supported_models(text_models: Iterable[str] | None) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for model in ("auto", *(text_models or []), *SUPPORTED_IMAGE_MODELS):
+            slug = str(model or "").strip()
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            merged.append(slug)
+        return merged or list(SUPPORTED_API_MODELS)
+
+    def _discover_text_models(self) -> list[str]:
+        tokens = self._list_text_access_tokens()
+        if not tokens:
+            raise TextBackendError("no available access token")
+        return fetch_available_text_model_slugs(tokens[0])
+
+    def list_models(self) -> list[str]:
+        now = time.time()
+        with self._models_cache_lock:
+            if self._models_cache is not None and self._models_cache_expires_at > now:
+                return list(self._models_cache)
+        try:
+            discovered_models = self._merge_supported_models(self._discover_text_models())
+        except Exception:
+            discovered_models = list(SUPPORTED_API_MODELS)
+        with self._models_cache_lock:
+            self._models_cache = list(discovered_models)
+            self._models_cache_expires_at = now + MODEL_DISCOVERY_CACHE_TTL_SECONDS
+        return list(discovered_models)
 
     def _build_message_response(
         self,

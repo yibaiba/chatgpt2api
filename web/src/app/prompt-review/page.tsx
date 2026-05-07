@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { fetchSettingsConfig } from "@/lib/api";
+import { fetchAvailableModels, fetchSettingsConfig } from "@/lib/api";
 import type { AuthSession } from "@/lib/auth-types";
 import { syncStoredAuthSessionWithFallback } from "@/lib/auth-session";
 import { streamPromptReview } from "@/lib/prompt-review";
@@ -39,7 +39,22 @@ type ReviewThread = {
 
 const CONTEXT_LIMIT = 6;
 const AUTO_RESET_LIMIT = 12;
-const MODEL_OPTIONS = ["auto", "gpt-4.1", "gpt-5"];
+const DEFAULT_MODEL_OPTIONS = ["auto", "gpt-4.1", "gpt-5"];
+const IMAGE_MODEL_OPTIONS = new Set(["gpt-image-1", "gpt-image-2", "codex-gpt-image-2", "gpt-image-think"]);
+
+function normalizePromptReviewModelOptions(values: string[]) {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  for (const value of ["auto", ...values]) {
+    const model = String(value || "").trim();
+    if (!model || seen.has(model) || IMAGE_MODEL_OPTIONS.has(model)) {
+      continue;
+    }
+    seen.add(model);
+    options.push(model);
+  }
+  return options.length ? options : [...DEFAULT_MODEL_OPTIONS];
+}
 
 function buildThread(seed = ""): ReviewThread {
   const now = Date.now();
@@ -87,6 +102,7 @@ export default function PromptReviewPage() {
   const [activeId, setActiveId] = useState("");
   const [draft, setDraft] = useState("");
   const [model, setModel] = useState("gpt-4.1");
+  const [modelOptions, setModelOptions] = useState<string[]>([...DEFAULT_MODEL_OPTIONS]);
   const [contextMode, setContextMode] = useState<ContextMode>("warn");
   const [sensitiveWords, setSensitiveWords] = useState<string[]>([]);
   const [storageKey, setStorageKey] = useState("");
@@ -110,11 +126,20 @@ export default function PromptReviewPage() {
         const stored = typeof window === "undefined" ? null : window.localStorage.getItem(nextStorageKey);
         const parsed = stored ? (JSON.parse(stored) as ReviewThread[]) : [];
         const nextThreads = Array.isArray(parsed) && parsed.length ? parsed : [buildThread()];
+        let nextModelOptions = [...DEFAULT_MODEL_OPTIONS];
+        try {
+          const models = await fetchAvailableModels();
+          nextModelOptions = normalizePromptReviewModelOptions(models.map((item) => item.id));
+        } catch {
+          nextModelOptions = [...DEFAULT_MODEL_OPTIONS];
+        }
         const settings = await fetchSettingsConfig();
         if (cancelled) {
           return;
         }
         setStorageKey(nextStorageKey);
+        setModelOptions(nextModelOptions);
+        setModel((current) => (nextModelOptions.includes(current) ? current : (nextModelOptions[0] ?? "auto")));
         setThreads(nextThreads);
         setActiveId(nextThreads[0]?.id || "");
         setSensitiveWords(Array.isArray(settings.config.sensitive_words) ? settings.config.sensitive_words.filter(Boolean) : []);
@@ -396,7 +421,7 @@ export default function PromptReviewPage() {
                   <SelectValue placeholder="选择模型" />
                 </SelectTrigger>
                 <SelectContent>
-                  {MODEL_OPTIONS.map((item) => (
+                  {modelOptions.map((item) => (
                     <SelectItem key={item} value={item}>
                       {item}
                     </SelectItem>

@@ -32,12 +32,56 @@ class TextConversationExpiredError(TextBackendError):
 
 CLIENT_CREATED_ROOT = "client-created-root"
 NO_CONDUIT_TOKEN = "no-token"
+TEXT_MODELS_PATH = "/backend-api/models?history_and_training_disabled=false"
 
 
 def _close_response(response) -> None:
     close = getattr(response, "close", None)
     if callable(close):
         close()
+
+
+def fetch_available_text_model_slugs(access_token: str) -> list[str]:
+    normalized_token = str(access_token or "").strip()
+    if not normalized_token:
+        raise TextBackendError("access_token is required for model discovery")
+    session, fp = _new_session(normalized_token)
+    try:
+        _bootstrap(session, fp)
+        response = _retry(
+            lambda: session.get(
+                BASE_URL + TEXT_MODELS_PATH,
+                headers={
+                    "x-openai-target-path": "/backend-api/models",
+                    "x-openai-target-route": "/backend-api/models",
+                },
+                timeout=30,
+            ),
+            retries=2,
+        )
+        if not response.ok:
+            raise TextBackendError(response.text[:400] or f"models request failed: {response.status_code}")
+        payload = response.json() or {}
+        if not isinstance(payload, dict):
+            raise TextBackendError("models response was not a JSON object")
+        slugs: list[str] = []
+        seen: set[str] = set()
+        for item in payload.get("models") or []:
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug") or "").strip()
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            slugs.append(slug)
+        slugs.sort()
+        return slugs
+    except TextBackendError:
+        raise
+    except Exception as exc:
+        raise TextBackendError(str(exc) or "model discovery failed") from exc
+    finally:
+        session.close()
 
 
 def _build_text_conversation_body(prompt: str, parent_message_id: str, model: str) -> dict[str, object]:
