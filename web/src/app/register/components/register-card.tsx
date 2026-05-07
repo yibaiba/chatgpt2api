@@ -97,6 +97,12 @@ export function RegisterCard({
   const stats = config.stats;
   const providers = config.mail.providers;
   const isActing = Boolean(actionLabel);
+  const modeSummary =
+    config.mode === "total"
+      ? "总数模式：启动后一次性补到设定数量，跑完就停止。"
+      : config.mode === "quota"
+        ? `额度模式：后台常驻，每隔 ${config.check_interval} 秒检查一次；达到目标额度后暂停，跌破后自动继续补号。`
+        : `可用账号模式：后台常驻，每隔 ${config.check_interval} 秒检查一次；达到目标可用数后暂停，跌破后自动继续补号。`;
   const updateProvider = (index: number, updates: Partial<RegisterMailProvider>) =>
     updateConfig(config, onChange, (current) => ({
       ...current,
@@ -171,6 +177,7 @@ export function RegisterCard({
                   <SelectItem value="available">目标可用账号</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs leading-5 text-stone-500">{modeSummary}</p>
             </div>
 
             <div className="space-y-2">
@@ -232,6 +239,9 @@ export function RegisterCard({
                 className="h-11 rounded-xl border-stone-200 bg-white"
                 disabled={config.enabled || config.mode === "total"}
               />
+              <p className="text-xs text-stone-500">
+                仅 `目标额度` / `目标可用账号` 模式生效；刷新页面不会停止后台 runner，后端会按这个间隔继续巡检。
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -574,6 +584,11 @@ export function RegisterCard({
           <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             <AlertTriangle className="size-4 shrink-0" />
             若 provider 的必填字段缺失，启动时会直接返回错误；保存前请确认类型与对应字段已经填完整。
+          </div>
+
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
+            当前 runner 运行在后端：`目标额度` / `目标可用账号` 模式会常驻巡检，达标后暂停，跌破后自动恢复；
+            `注册总数` 模式仍然是一次性任务。
           </div>
 
           <div className="space-y-2">
