@@ -12,7 +12,7 @@
   "sensitive_words": [],
   "global_system_prompt": "",
   "storage_backend": "json",
-  "storage_sqlite_path": "/Users/yibai/Code/PycharmProjects/chatgpt2api/data/accounts.sqlite3",
+  "storage_sqlite_path": "./data/accounts.sqlite3",
   "storage_env_override_active": false,
   "auth-key-hash": "pbkdf2_sha256$260000$0edf2f17e4ad1e2185b49dcb76e7e528$2df553ecb66e266ffcf220aa659cb1720b6923dcf2400483b2ee90771356dbc5"
 }

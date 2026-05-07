@@ -11,6 +11,7 @@ from services.auth_security import derive_session_secret, hash_auth_secret, veri
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 CONFIG_FILE = BASE_DIR / "config.json"
+DEFAULT_STORAGE_SQLITE_PATH = "./data/accounts.sqlite3"
 
 
 @dataclass(frozen=True)
@@ -156,11 +157,22 @@ class ConfigStore:
 
     @staticmethod
     def _path_from_storage_sqlite_value(value: object) -> Path:
-        raw_path = ConfigStore._normalize_storage_sqlite_path(value) or str(DATA_DIR / "accounts.sqlite3")
+        raw_path = ConfigStore._normalize_storage_sqlite_path(value) or DEFAULT_STORAGE_SQLITE_PATH
         path = Path(raw_path).expanduser()
         if not path.is_absolute():
             path = (BASE_DIR / path).resolve()
         return path
+
+    @staticmethod
+    def _canonical_storage_sqlite_path(value: object) -> str:
+        raw_path = ConfigStore._normalize_storage_sqlite_path(value)
+        if not raw_path:
+            return ""
+        if ConfigStore._path_from_storage_sqlite_value(raw_path) == ConfigStore._path_from_storage_sqlite_value(
+            DEFAULT_STORAGE_SQLITE_PATH
+        ):
+            return DEFAULT_STORAGE_SQLITE_PATH
+        return raw_path
 
     def _build_public_data(self, data: dict[str, object]) -> dict[str, object]:
         public_data = dict(data)
@@ -403,7 +415,7 @@ class ConfigStore:
         next_data["sensitive_words"] = self._normalize_sensitive_words(next_data.get("sensitive_words"))
         next_data["global_system_prompt"] = str(next_data.get("global_system_prompt") or "").strip()
         next_data["storage_backend"] = self._normalize_storage_backend(next_data.get("storage_backend"))
-        normalized_sqlite_path = self._normalize_storage_sqlite_path(next_data.get("storage_sqlite_path"))
+        normalized_sqlite_path = self._canonical_storage_sqlite_path(next_data.get("storage_sqlite_path"))
         if normalized_sqlite_path:
             next_data["storage_sqlite_path"] = normalized_sqlite_path
         else:

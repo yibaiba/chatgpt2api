@@ -242,6 +242,37 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_config_store_canonicalizes_default_sqlite_path_to_data_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "plain-secret"}), encoding="utf-8")
+
+            module = self.config_module
+            old_env_auth_key = module.os.environ.get("CHATGPT2API_AUTH_KEY")
+            try:
+                module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                store = module.ConfigStore(config_file)
+                default_path = module.DATA_DIR / "accounts.sqlite3"
+
+                data = store.update(
+                    {
+                        "storage_backend": "sqlite",
+                        "storage_sqlite_path": str(default_path),
+                    }
+                )
+                raw = json.loads(config_file.read_text(encoding="utf-8"))
+
+                self.assertEqual("sqlite", data["storage_backend"])
+                self.assertEqual(str(default_path), data["storage_sqlite_path"])
+                self.assertEqual("./data/accounts.sqlite3", raw["storage_sqlite_path"])
+                self.assertEqual(default_path, store.storage_sqlite_path)
+            finally:
+                if old_env_auth_key is None:
+                    module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+                else:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+
     def test_config_store_rejects_unsupported_storage_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)
