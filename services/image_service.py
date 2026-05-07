@@ -52,7 +52,9 @@ IMAGE_DOWNLOAD_RETRY_STATUSES = (408, 409, 425, 429, 500, 502, 503, 504)
 IMAGE_DOWNLOAD_TIMEOUT_SECONDS = 180
 IMAGE_UPSTREAM_CONNECTION_ERROR_MARKERS = (
     "curl: (28)",
+    "curl: (56)",
     "curl: (35)",
+    "connection closed abruptly",
     "tls connect error",
     "openssl_internal",
 )
@@ -1346,21 +1348,26 @@ def _build_codex_response_headers(access_token: str) -> dict[str, str]:
 
 
 def _iter_codex_response_events(response) -> Iterator[dict[str, Any]]:
-    for raw_line in response.iter_lines():
-        if not raw_line:
-            continue
-        line = raw_line.decode("utf-8", errors="ignore") if isinstance(raw_line, bytes) else str(raw_line)
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if not payload or payload == "[DONE]":
-            continue
-        try:
-            event = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ImageGenerationError("invalid SSE payload from codex responses") from exc
-        if isinstance(event, dict):
-            yield event
+    try:
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8", errors="ignore") if isinstance(raw_line, bytes) else str(raw_line)
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise ImageGenerationError("invalid SSE payload from codex responses") from exc
+            if isinstance(event, dict):
+                yield event
+    except ImageGenerationError:
+        raise
+    except Exception as exc:
+        raise ImageGenerationError(image_stream_error_message(exc)) from exc
 
 
 def _extract_codex_response_error(event: dict[str, Any]) -> str:
@@ -1411,16 +1418,19 @@ def _request_codex_response_stream(
     *,
     allow_fallback: bool = True,
 ):
-    response = _retry(
-        lambda: session.post(
-            BASE_URL + "/backend-api/codex/responses",
-            headers=_build_codex_response_headers(access_token),
-            json=payload,
-            timeout=300,
-            stream=True,
-        ),
-        retries=2,
-    )
+    try:
+        response = _retry(
+            lambda: session.post(
+                BASE_URL + "/backend-api/codex/responses",
+                headers=_build_codex_response_headers(access_token),
+                json=payload,
+                timeout=300,
+                stream=True,
+            ),
+            retries=2,
+        )
+    except Exception as exc:
+        raise ImageGenerationError(image_stream_error_message(exc)) from exc
     if response.ok:
         return response
     fallback_tools = payload.get("tools") if isinstance(payload.get("tools"), list) else []

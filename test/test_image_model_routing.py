@@ -247,6 +247,62 @@ class ImageModelRoutingTests(unittest.TestCase):
                     model="codex-gpt-image-2",
                 )
 
+    def test_codex_generate_wraps_connection_closed_post_error(self) -> None:
+        session = mock.Mock()
+
+        with (
+            mock.patch(
+                "services.image_service.account_service.get_account",
+                return_value={"type": "Pro", "user_id": "user_123"},
+            ),
+            mock.patch("services.image_service._new_session", return_value=(session, "fp")),
+            mock.patch("services.image_service._bootstrap", return_value="device"),
+            mock.patch(
+                "services.image_service._retry",
+                side_effect=RuntimeError(
+                    "Failed to perform, curl: (56) Connection closed abruptly. "
+                    "See https://curl.se/libcurl/c/libcurl-errors.html first for more details."
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ImageGenerationError,
+                "upstream image connection failed, please retry later",
+            ):
+                generate_image_result(
+                    access_token="token",
+                    prompt="draw a cat",
+                    model="codex-gpt-image-2",
+                )
+
+    def test_codex_generate_wraps_connection_closed_stream_error(self) -> None:
+        session = mock.Mock()
+        response = mock.Mock()
+        response.ok = True
+        response.iter_lines.side_effect = RuntimeError(
+            "Failed to perform, curl: (56) Connection closed abruptly. "
+            "See https://curl.se/libcurl/c/libcurl-errors.html first for more details."
+        )
+        session.post.return_value = response
+
+        with (
+            mock.patch(
+                "services.image_service.account_service.get_account",
+                return_value={"type": "Pro", "user_id": "user_123"},
+            ),
+            mock.patch("services.image_service._new_session", return_value=(session, "fp")),
+            mock.patch("services.image_service._bootstrap", return_value="device"),
+        ):
+            with self.assertRaisesRegex(
+                ImageGenerationError,
+                "upstream image connection failed, please retry later",
+            ):
+                generate_image_result(
+                    access_token="token",
+                    prompt="draw a cat",
+                    model="codex-gpt-image-2",
+                )
+
     def test_edit_payload_preserves_attachment_metadata(self) -> None:
         image = EditInputImage(
             file_id="file_123",
