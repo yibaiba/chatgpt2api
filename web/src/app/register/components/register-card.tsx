@@ -97,12 +97,27 @@ export function RegisterCard({
   const stats = config.stats;
   const providers = config.mail.providers;
   const isActing = Boolean(actionLabel);
+  const currentQuota = Number(stats.current_quota ?? 0);
+  const currentAvailable = Number(stats.current_available ?? 0);
+  const targetReached =
+    config.mode === "quota"
+      ? currentQuota >= config.target_quota
+      : config.mode === "available"
+        ? currentAvailable >= config.target_available
+        : false;
+  const statusLabel = config.enabled ? (config.mode !== "total" && targetReached ? "巡检待机" : "运行中") : "已停止";
   const modeSummary =
     config.mode === "total"
       ? "总数模式：启动后一次性补到设定数量，跑完就停止。"
       : config.mode === "quota"
         ? `额度模式：后台常驻，每隔 ${config.check_interval} 秒检查一次；达到目标额度后暂停，跌破后自动继续补号。`
         : `可用账号模式：后台常驻，每隔 ${config.check_interval} 秒检查一次；达到目标可用数后暂停，跌破后自动继续补号。`;
+  const statusSummary =
+    config.mode === "total"
+      ? `总数模式会持续执行，直到完成 ${config.total} 个任务。`
+      : config.mode === "quota"
+        ? `当前总额度 ${currentQuota} / 目标额度 ${config.target_quota}。${targetReached ? "已达标，runner 正在后台巡检等待。" : "尚未达标，runner 会继续补号。"}`
+        : `当前可用账号 ${currentAvailable} / 目标可用账号 ${config.target_available}。${targetReached ? "已达标，runner 正在后台巡检等待。" : "尚未达标，runner 会继续补号。"}`;
   const updateProvider = (index: number, updates: Partial<RegisterMailProvider>) =>
     updateConfig(config, onChange, (current) => ({
       ...current,
@@ -522,9 +537,10 @@ export function RegisterCard({
             <div className="space-y-1">
               <h2 className="text-lg font-semibold tracking-tight">运行状态</h2>
               <p className="text-sm text-stone-500">运行成功后会把 access token 直接写入现有号池，并刷新 quota / status。</p>
+              <p className="text-xs leading-5 text-stone-500">{statusSummary}</p>
             </div>
             <Badge variant={config.enabled ? "success" : "secondary"} className="rounded-md">
-              {config.enabled ? "运行中" : "已停止"}
+              {statusLabel}
             </Badge>
           </div>
 

@@ -104,10 +104,10 @@ def _otp_failure_detail(response: object | None, fallback: str) -> str:
     return f"{fallback}: {message}" if message else fallback
 
 
-def _is_password_verify_challenge_expired(response: object | None) -> bool:
+def _password_verify_error_text(response: object | None) -> str:
     data = _response_json(response) if response is not None else {}
     error_data = data.get("error") if isinstance(data.get("error"), dict) else {}
-    text = " ".join(
+    return " ".join(
         str(part or "").strip().lower()
         for part in (
             error_data.get("code"),
@@ -116,14 +116,27 @@ def _is_password_verify_challenge_expired(response: object | None) -> bool:
         )
         if str(part or "").strip()
     )
+
+
+def _is_password_verify_authorize_retryable(response: object | None) -> bool:
+    text = _password_verify_error_text(response)
     return any(
         marker in text
         for marker in (
             "challenge expired",
             "challenge_expired",
             "registration_login_challenge_expired",
+            "invalid_auth_step",
+            "invalid authorization step",
         )
     )
+
+
+def _password_verify_retry_message(response: object | None) -> str:
+    text = _password_verify_error_text(response)
+    if "invalid_auth_step" in text or "invalid authorization step" in text:
+        return "登录授权步骤失效，刷新授权后重试一次"
+    return "登录密码挑战已过期，刷新授权后重试一次"
 
 
 def _make_trace_headers() -> dict[str, str]:
@@ -543,8 +556,8 @@ class PlatformRegistrar:
             if response is not None and response.status_code == 200:
                 break
             failure = error or f"password_verify_http_{getattr(response, 'status_code', 'unknown')}{_response_error_summary(response)}"
-            if attempt == 0 and response is not None and response.status_code == 400 and _is_password_verify_challenge_expired(response):
-                self._step("登录密码挑战已过期，刷新授权后重试一次", "warning")
+            if attempt == 0 and response is not None and response.status_code == 400 and _is_password_verify_authorize_retryable(response):
+                self._step(_password_verify_retry_message(response), "warning")
                 continue
             raise RuntimeError(failure)
         if response is None or response.status_code != 200:

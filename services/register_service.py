@@ -16,6 +16,9 @@ from services.register.mail_provider import validate_mail_config
 
 REGISTER_FILE = DATA_DIR / "register.json"
 REGISTER_MODES = {"total", "quota", "available"}
+REGISTER_FAILURE_BACKOFF_TRIGGER = 2
+REGISTER_FAILURE_BACKOFF_BASE_SECONDS = 5.0
+REGISTER_FAILURE_BACKOFF_MAX_SECONDS = 60.0
 
 
 def _now_text() -> str:
@@ -89,6 +92,13 @@ def _default_config() -> dict[str, Any]:
         "stats": _default_stats(threads),
         "logs": [],
     }
+
+
+def _failure_backoff_seconds(consecutive_failures: int) -> float:
+    if consecutive_failures < REGISTER_FAILURE_BACKOFF_TRIGGER:
+        return 0.0
+    exponent = consecutive_failures - REGISTER_FAILURE_BACKOFF_TRIGGER
+    return min(REGISTER_FAILURE_BACKOFF_MAX_SECONDS, REGISTER_FAILURE_BACKOFF_BASE_SECONDS * (2**exponent))
 
 
 def _normalize_provider(raw: object) -> dict[str, Any] | None:
@@ -313,15 +323,20 @@ class RegisterService:
             self._append_log_locked(f"[任务{index}] {_clean_text(text)}", level)
             self._save_locked()
 
-    def _target_reached_locked(self, submitted: int) -> bool:
+    def _target_status_locked(self, submitted: int) -> tuple[bool, str]:
         metrics = self._pool_metrics()
         self._config["stats"].update(metrics)
         mode = self._config["mode"]
         if mode == "quota":
-            return metrics["current_quota"] >= int(self._config["target_quota"])
+            current = metrics["current_quota"]
+            target = int(self._config["target_quota"])
+            return current >= target, f"当前总额度 {current} / 目标额度 {target}"
         if mode == "available":
-            return metrics["current_available"] >= int(self._config["target_available"])
-        return submitted >= int(self._config["total"])
+            current = metrics["current_available"]
+            target = int(self._config["target_available"])
+            return current >= target, f"当前可用账号 {current} / 目标可用账号 {target}"
+        target = int(self._config["total"])
+        return submitted >= target, f"已提交任务 {submitted} / 目标总数 {target}"
 
     def get(self) -> dict[str, Any]:
         with self._lock:
@@ -388,28 +403,47 @@ class RegisterService:
             self._config["stats"]["running"] = 0
             self._refresh_stats_locked()
             self._save_locked()
+        waiting_logged = False
+        consecutive_failures = 0
+        pending_backoff_seconds = 0.0
         with ThreadPoolExecutor(max_workers=max(1, int(self._config["threads"]))) as executor:
             futures: dict[object, int] = {}
             while True:
                 with self._lock:
                     threads = max(1, int(self._config["threads"]))
                     enabled = self._config["enabled"]
-                    while enabled and not self._target_reached_locked(submitted) and len(futures) < threads:
+                    mode = self._config["mode"]
+                    target_reached, target_summary = self._target_status_locked(submitted)
+                    while enabled and not target_reached and len(futures) < threads:
                         submitted += 1
                         index = submitted
                         config_snapshot = self._snapshot_locked()
                         futures[executor.submit(self._executor, config_snapshot, lambda text, level="info", current=index: self._executor_log(current, text, level))] = index
+                        target_reached, target_summary = self._target_status_locked(submitted)
+                    if futures and waiting_logged and enabled and mode != "total":
+                        self._append_log_locked(f"{target_summary}，低于目标，runner 已恢复补号。", "info")
+                        waiting_logged = False
                     self._config["stats"]["done"] = done
                     self._config["stats"]["success"] = success
                     self._config["stats"]["fail"] = fail
                     self._config["stats"]["running"] = len(futures)
                     self._refresh_stats_locked()
                     self._save_locked()
-                    mode = self._config["mode"]
                     enabled = self._config["enabled"]
-                if not futures and (not enabled or mode == "total"):
+                if not futures and (not enabled or (mode == "total" and pending_backoff_seconds <= 0)):
                     break
                 if not futures:
+                    if enabled and pending_backoff_seconds > 0:
+                        delay = pending_backoff_seconds
+                        pending_backoff_seconds = 0.0
+                        if stop_event.wait(delay):
+                            break
+                        continue
+                    if enabled and not waiting_logged and target_reached:
+                        with self._lock:
+                            self._append_log_locked(f"{target_summary}，runner 进入巡检等待；跌破目标后会自动恢复补号。", "info")
+                            self._save_locked()
+                        waiting_logged = True
                     if stop_event.wait(max(1, int(self._config.get("check_interval") or 5))):
                         break
                     continue
@@ -426,6 +460,8 @@ class RegisterService:
                         self._account_service.refresh_accounts([access_token])
                         done += 1
                         success += 1
+                        consecutive_failures = 0
+                        pending_backoff_seconds = 0.0
                         with self._lock:
                             self._append_log_locked(f"[任务{index}] 注册成功: {email or access_token[:12]}", "success")
                             self._config["stats"]["done"] = done
@@ -436,8 +472,16 @@ class RegisterService:
                     except Exception as exc:
                         done += 1
                         fail += 1
+                        consecutive_failures += 1
+                        backoff_seconds = _failure_backoff_seconds(consecutive_failures)
+                        pending_backoff_seconds = max(pending_backoff_seconds, backoff_seconds)
                         with self._lock:
                             self._append_log_locked(f"[任务{index}] 注册失败: {exc}", "danger")
+                            if backoff_seconds > 0:
+                                self._append_log_locked(
+                                    f"连续失败 {consecutive_failures} 次，可能触发上游或临时邮箱限流；runner 将等待 {backoff_seconds:.0f} 秒后重试。",
+                                    "warning",
+                                )
                             self._config["stats"]["done"] = done
                             self._config["stats"]["success"] = success
                             self._config["stats"]["fail"] = fail

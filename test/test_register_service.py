@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import services.register_service as register_service_module
 from services.register import mail_provider
 from services.register.openai_register import PlatformRegistrar
 from services.register_service import RegisterService
@@ -170,6 +171,58 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertEqual(["token-1"], accounts_service.refreshed_tokens)
             self.assertTrue(any("模拟注册成功" in item["text"] for item in finished["logs"]))
 
+    def test_target_modes_log_waiting_when_goal_is_already_met(self) -> None:
+        cases = [
+            ("quota", {"target_quota": 5}, "当前总额度 5 / 目标额度 5"),
+            ("available", {"target_available": 2}, "当前可用账号 2 / 目标可用账号 2"),
+        ]
+
+        for mode, updates, expected_log in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp_dir:
+                executor = mock.Mock(side_effect=AssertionError("executor should stay idle when target is already met"))
+                service = RegisterService(
+                    Path(tmp_dir) / "register.json",
+                    accounts_service=_FakeAccountsService(),
+                    executor=executor,
+                )
+                service.update(
+                    {
+                        "mode": mode,
+                        "threads": 1,
+                        "check_interval": 1,
+                        "mail": {
+                            "providers": [
+                                {
+                                    "type": "tempmail_lol",
+                                    "enabled": True,
+                                    "api_key": "demo-key",
+                                }
+                            ]
+                        },
+                        **updates,
+                    }
+                )
+
+                started = service.start()
+                self.assertTrue(started["enabled"])
+
+                for _ in range(50):
+                    snapshot = service.get()
+                    if any(expected_log in item["text"] for item in snapshot["logs"]):
+                        break
+                    time.sleep(0.02)
+                else:
+                    self.fail(f"target wait log not found for mode={mode}")
+
+                snapshot = service.get()
+                self.assertTrue(snapshot["enabled"])
+                self.assertEqual(0, snapshot["stats"]["done"])
+                self.assertTrue(any("进入巡检等待" in item["text"] for item in snapshot["logs"]))
+                executor.assert_not_called()
+                service.stop()
+                if service._runner is not None:
+                    service._runner.join(timeout=1)
+
     def test_service_auto_restores_enabled_runner_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             store_file = Path(tmp_dir) / "register.json"
@@ -223,6 +276,45 @@ class RegisterServiceTests(unittest.TestCase):
                 release_executor.set()
                 if resumed._runner is not None:
                     resumed._runner.join(timeout=1)
+
+    def test_consecutive_failures_trigger_runner_backoff_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            executor = mock.Mock(side_effect=RuntimeError("temporary upstream failure"))
+            service = RegisterService(
+                Path(tmp_dir) / "register.json",
+                accounts_service=_FakeAccountsService(),
+                executor=executor,
+            )
+            service.update(
+                {
+                    "mode": "total",
+                    "total": 3,
+                    "threads": 1,
+                    "mail": {
+                        "providers": [
+                            {
+                                "type": "tempmail_lol",
+                                "enabled": True,
+                                "api_key": "demo-key",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            with (
+                mock.patch.object(register_service_module, "REGISTER_FAILURE_BACKOFF_BASE_SECONDS", 0.01),
+                mock.patch.object(register_service_module, "REGISTER_FAILURE_BACKOFF_MAX_SECONDS", 0.02),
+            ):
+                service.start()
+                if service._runner is not None:
+                    service._runner.join(timeout=1)
+
+            snapshot = service.get()
+            self.assertFalse(snapshot["enabled"])
+            self.assertEqual(3, snapshot["stats"]["fail"])
+            self.assertTrue(any("连续失败 2 次" in item["text"] for item in snapshot["logs"]))
+            self.assertEqual(3, executor.call_count)
 
     def test_start_accepts_moemail_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -534,6 +626,46 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
         self.assertEqual(4, request_mock.call_count)
         exchange_mock.assert_called_once()
         self.log.assert_any_call("登录密码挑战已过期，刷新授权后重试一次", "warning")
+
+    def test_password_verify_retries_once_when_authorization_step_is_invalid(self) -> None:
+        authorize_response = _FakeResponse(200, {})
+        invalid_step_response = _FakeResponse(
+            400,
+            {"error": {"code": "invalid_auth_step", "message": "Invalid authorization step."}},
+        )
+        success_response = _FakeResponse(
+            200,
+            {"continue_url": "https://platform.openai.com/auth/callback?code=demo"},
+        )
+        request_mock = mock.Mock(
+            side_effect=[
+                (authorize_response, None),
+                (invalid_step_response, None),
+                (authorize_response, None),
+                (success_response, None),
+            ]
+        )
+
+        with (
+            mock.patch(
+                "services.register.openai_register.request_with_local_retry",
+                request_mock,
+            ),
+            mock.patch(
+                "services.register.openai_register.exchange_platform_tokens",
+                return_value={"access_token": "access", "refresh_token": "refresh", "id_token": "id"},
+            ) as exchange_mock,
+        ):
+            tokens = self.registrar._login_and_exchange_tokens(
+                "demo@example.com",
+                "Password1!",
+                {"provider": "tempmail_lol", "address": "demo@example.com"},
+            )
+
+        self.assertEqual("access", tokens["access_token"])
+        self.assertEqual(4, request_mock.call_count)
+        exchange_mock.assert_called_once()
+        self.log.assert_any_call("登录授权步骤失效，刷新授权后重试一次", "warning")
 
 
 class MailProviderSecurityTests(unittest.TestCase):
