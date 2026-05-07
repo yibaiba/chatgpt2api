@@ -318,6 +318,52 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertTrue(any("连续失败 2 次" in item["text"] for item in snapshot["logs"]))
             self.assertEqual(3, executor.call_count)
 
+    def test_failure_backoff_blocks_immediate_refill_with_multiple_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            executor = mock.Mock(side_effect=RuntimeError("temporary upstream failure"))
+            service = RegisterService(
+                Path(tmp_dir) / "register.json",
+                accounts_service=_FakeAccountsService(),
+                executor=executor,
+            )
+            service.update(
+                {
+                    "mode": "total",
+                    "total": 5,
+                    "threads": 3,
+                    "mail": {
+                        "providers": [
+                            {
+                                "type": "tempmail_lol",
+                                "enabled": True,
+                                "api_key": "demo-key",
+                            }
+                        ]
+                    },
+                }
+            )
+
+            with (
+                mock.patch.object(register_service_module, "REGISTER_FAILURE_BACKOFF_BASE_SECONDS", 0.2),
+                mock.patch.object(register_service_module, "REGISTER_FAILURE_BACKOFF_MAX_SECONDS", 0.2),
+            ):
+                service.start()
+                for _ in range(50):
+                    if executor.call_count >= 3:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(3, executor.call_count)
+                time.sleep(0.05)
+                self.assertEqual(3, executor.call_count)
+                for _ in range(50):
+                    if executor.call_count >= 4:
+                        break
+                    time.sleep(0.01)
+                self.assertGreaterEqual(executor.call_count, 4)
+                service.stop()
+                if service._runner is not None:
+                    service._runner.join(timeout=1)
+
     def test_start_accepts_moemail_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             accounts_service = _FakeAccountsService()
@@ -768,6 +814,39 @@ class MailProviderSecurityTests(unittest.TestCase):
                     provider.create_mailbox()
             finally:
                 provider.close()
+
+    def test_tempmail_provider_retries_transient_502_before_succeeding(self) -> None:
+        session = mock.Mock()
+        session.headers = {}
+        session.request.side_effect = [
+            _FakeResponse(502, {"detail": "bad gateway"}, text='{"detail":"bad gateway"}'),
+            _FakeResponse(502, {"detail": "bad gateway"}, text='{"detail":"bad gateway"}'),
+            _FakeResponse(201, {"address": "demo@example.com", "token": "token-1"}),
+        ]
+        with (
+            mock.patch("services.register.mail_provider.Session", return_value=session),
+            mock.patch("services.register.mail_provider.time.sleep") as sleep_mock,
+        ):
+            provider = mail_provider.TempMailLolProvider(
+                {
+                    "type": "tempmail_lol",
+                    "api_key": "demo-key",
+                },
+                {
+                    "request_timeout": 30,
+                    "wait_timeout": 30,
+                    "wait_interval": 2,
+                    "user_agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                mailbox = provider.create_mailbox("demo-user")
+            finally:
+                provider.close()
+
+        self.assertEqual("demo@example.com", mailbox["address"])
+        self.assertEqual(3, session.request.call_count)
+        self.assertEqual(2, sleep_mock.call_count)
 
 
 class MailProviderFactoryTests(unittest.TestCase):

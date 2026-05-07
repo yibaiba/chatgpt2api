@@ -13,6 +13,9 @@ from typing import Any, Callable, TypeVar
 from curl_cffi.requests import Session
 
 ResultT = TypeVar("ResultT")
+TEMPMAIL_TRANSIENT_HTTP_STATUSES = {502, 503, 504}
+TEMPMAIL_REQUEST_RETRY_ATTEMPTS = 3
+TEMPMAIL_REQUEST_RETRY_DELAY_SECONDS = 1.0
 
 _provider_lock = Lock()
 _provider_index = 0
@@ -244,21 +247,29 @@ class TempMailLolProvider(BaseMailProvider):
         return text, False
 
     def _request(self, method: str, path: str, *, params: dict | None = None, payload: dict | None = None, expected: tuple[int, ...] = (200,)) -> dict[str, Any]:
-        response = self.session.request(
-            method.upper(),
-            f"https://api.tempmail.lol/v2{path}",
-            params=params,
-            json=payload,
-            timeout=self.conf["request_timeout"],
-        )
-        if response.status_code not in expected:
+        response = None
+        for attempt in range(1, TEMPMAIL_REQUEST_RETRY_ATTEMPTS + 1):
+            response = self.session.request(
+                method.upper(),
+                f"https://api.tempmail.lol/v2{path}",
+                params=params,
+                json=payload,
+                timeout=self.conf["request_timeout"],
+            )
+            if response.status_code in expected:
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise RuntimeError(f"TempMail.lol {method} {path} returned a non-object response")
+                return data
             if response.status_code == 429 and "rate limited (free)" in response.text.lower():
                 raise RuntimeError("TempMail.lol free tier is rate limited right now; wait a moment or provide an API key")
-            raise RuntimeError(f"TempMail.lol request failed: {method} {path}, HTTP {response.status_code}, body={response.text[:300]}")
-        data = response.json()
-        if not isinstance(data, dict):
-            raise RuntimeError(f"TempMail.lol {method} {path} returned a non-object response")
-        return data
+            if response.status_code in TEMPMAIL_TRANSIENT_HTTP_STATUSES and attempt < TEMPMAIL_REQUEST_RETRY_ATTEMPTS:
+                time.sleep(TEMPMAIL_REQUEST_RETRY_DELAY_SECONDS * attempt)
+                continue
+            break
+        raise RuntimeError(
+            f"TempMail.lol request failed: {method} {path}, HTTP {getattr(response, 'status_code', 'unknown')}, body={getattr(response, 'text', '')[:300]}"
+        )
 
     def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {}

@@ -414,7 +414,8 @@ class RegisterService:
                     enabled = self._config["enabled"]
                     mode = self._config["mode"]
                     target_reached, target_summary = self._target_status_locked(submitted)
-                    while enabled and not target_reached and len(futures) < threads:
+                    launch_limit = 0 if pending_backoff_seconds > 0 else (1 if consecutive_failures >= REGISTER_FAILURE_BACKOFF_TRIGGER else threads)
+                    while enabled and not target_reached and len(futures) < launch_limit:
                         submitted += 1
                         index = submitted
                         config_snapshot = self._snapshot_locked()
