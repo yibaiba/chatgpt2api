@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""Trellis UserPromptSubmit hook: inject per-turn workflow breadcrumb.
+"""Trellis per-turn breadcrumb hook (UserPromptSubmit / BeforeAgent equivalent).
 
-Runs on every user prompt. Reads the active task (.trellis/.current-task)
-and emits a short <workflow-state> block reminding the main AI what task
-is active and its expected flow. Breadcrumb text is pulled from
-workflow.md [workflow-state:STATUS] tag blocks (single source of truth
-for users who fork the Trellis workflow), with hardcoded fallbacks so
-the hook never breaks when workflow.md is missing or malformed.
+Runs on every user prompt. Resolves the active task through Trellis'
+session-aware active task resolver and emits a short <workflow-state>
+block reminding the main AI what task is active and its expected flow.
+
+The emitted ``hookEventName`` field is platform-aware: most hosts expect
+``UserPromptSubmit`` (Claude Code naming, also accepted by Cursor / Qoder /
+CodeBuddy / Droid / Codex / Copilot wiring), but Gemini CLI 0.40.x renamed
+its per-turn event to ``BeforeAgent`` and its schema validator rejects the
+legacy name. ``_detect_platform`` picks the right value at runtime.
+Breadcrumb text is pulled exclusively from workflow.md
+[workflow-state:STATUS] tag blocks — workflow.md is the single source of
+truth. There are no fallback dicts in this script: when workflow.md is
+missing or a tag is absent, the breadcrumb degrades to a generic
+"Refer to workflow.md for current step." line so users see (and fix)
+the broken state instead of the hook silently masking it.
 
 Shared across all hook-capable platforms (Claude, Cursor, Codex, Qoder,
 CodeBuddy, Droid, Gemini, Copilot). Kiro is not wired (no per-turn
@@ -15,12 +24,7 @@ writeSharedHooks() at init time.
 
 Silent exit 0 cases (no output):
   - No .trellis/ directory found (not a Trellis project)
-  - No .current-task file, or it's empty
   - task.json malformed or missing status
-
-Unknown status (no tag + no hardcoded fallback) emits a generic
-breadcrumb rather than silent-exiting, so custom statuses surface in
-the UI instead of appearing as "randomly broken".
 """
 from __future__ import annotations
 
@@ -29,7 +33,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -54,48 +58,63 @@ def find_trellis_root(start: Path) -> Optional[Path]:
 # Active task discovery
 # ---------------------------------------------------------------------------
 
-def _normalize_task_ref(task_ref: str) -> str:
-    """Normalize .current-task path ref.
+def _detect_platform(input_data: dict) -> str | None:
+    if isinstance(input_data.get("cursor_version"), str):
+        return "cursor"
+    env_map = {
+        "CLAUDE_PROJECT_DIR": "claude",
+        "CURSOR_PROJECT_DIR": "cursor",
+        "CODEBUDDY_PROJECT_DIR": "codebuddy",
+        "FACTORY_PROJECT_DIR": "droid",
+        "GEMINI_PROJECT_DIR": "gemini",
+        "QODER_PROJECT_DIR": "qoder",
+        "KIRO_PROJECT_DIR": "kiro",
+        "COPILOT_PROJECT_DIR": "copilot",
+    }
+    for env_name, platform in env_map.items():
+        if os.environ.get(env_name):
+            return platform
+    script_parts = set(Path(sys.argv[0]).parts)
+    if ".claude" in script_parts:
+        return "claude"
+    if ".cursor" in script_parts:
+        return "cursor"
+    if ".codex" in script_parts:
+        return "codex"
+    if ".gemini" in script_parts:
+        return "gemini"
+    if ".qoder" in script_parts:
+        return "qoder"
+    if ".codebuddy" in script_parts:
+        return "codebuddy"
+    if ".factory" in script_parts:
+        return "droid"
+    if ".kiro" in script_parts:
+        return "kiro"
+    return None
 
-    Accepts:
-    - Absolute paths (left as-is)
-    - Windows-style backslashes (converted to forward slash)
-    - Legacy relative refs like "tasks/foo" (prefixed with .trellis/)
-    """
-    normalized = task_ref.strip()
-    if not normalized:
-        return ""
-    path_obj = Path(normalized)
-    if path_obj.is_absolute():
-        return str(path_obj)
-    normalized = normalized.replace("\\", "/")
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    if normalized.startswith("tasks/"):
-        normalized = f".trellis/{normalized}"
-    return normalized
+
+def _resolve_active_task(root: Path, input_data: dict):
+    scripts_dir = root / ".trellis" / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from common.active_task import resolve_active_task  # type: ignore[import-not-found]
+
+    return resolve_active_task(root, input_data, platform=_detect_platform(input_data))
 
 
-def get_active_task(root: Path) -> Optional[Tuple[str, str]]:
-    """Return (task_id, status) from the current active task, else None.
-
-    Reads .trellis/.current-task (a path relative to root, e.g.
-    ".trellis/tasks/04-17-foo") then that task's task.json.
-    Normalizes backslashes so Windows paths work on Unix and vice versa.
-    """
-    ref_file = root / ".trellis" / ".current-task"
-    if not ref_file.is_file():
+def get_active_task(root: Path, input_data: dict) -> Optional[tuple[str, str, str]]:
+    """Return (task_id, status, source) from the current active task."""
+    active = _resolve_active_task(root, input_data)
+    if not active.task_path:
         return None
-    try:
-        raw = ref_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    task_ref = _normalize_task_ref(raw)
-    if not task_ref:
-        return None
 
-    path_obj = Path(task_ref)
-    task_dir = path_obj if path_obj.is_absolute() else root / path_obj
+    task_dir = Path(active.task_path)
+    if not task_dir.is_absolute():
+        task_dir = root / task_dir
+    if active.stale:
+        return task_dir.name, f"stale_{active.source_type}", active.source
+
     task_json = task_dir / "task.json"
     if not task_json.is_file():
         return None
@@ -108,7 +127,7 @@ def get_active_task(root: Path) -> Optional[Tuple[str, str]]:
     status = data.get("status", "")
     if not isinstance(status, str) or not status:
         return None
-    return task_id, status
+    return task_id, status, active.source
 
 
 # ---------------------------------------------------------------------------
@@ -122,51 +141,24 @@ _TAG_RE = re.compile(
     re.DOTALL,
 )
 
-# Hardcoded defaults for built-in Trellis statuses. Used when workflow.md is
-# missing, malformed, or lacks the tag for this status.
-#
-# `no_task` is a pseudo-status emitted when .current-task is missing — it keeps
-# the Next-Action reminder flowing per-turn even without an active task.
-_FALLBACK_BREADCRUMBS = {
-    "no_task": (
-        "No active task. If the user describes multi-step work, load "
-        "trellis-brainstorm skill to clarify requirements and create a task "
-        "via `python3 ./.trellis/scripts/task.py create`. Simple one-off "
-        "questions or trivial edits don't need a task — just answer directly."
-    ),
-    "planning": (
-        "Complete prd.md via trellis-brainstorm skill; "
-        "then run task.py start."
-    ),
-    "in_progress": (
-        "Flow: implement → check → update-spec → finish\n"
-        "Check conversation history + git status to determine current step; "
-        "do NOT skip check."
-    ),
-    "completed": (
-        "User commits changes; then run task.py archive."
-    ),
-}
-
-
 def load_breadcrumbs(root: Path) -> dict[str, str]:
     """Parse workflow.md for [workflow-state:STATUS] blocks.
 
-    Returns {status: body_text}. Missing tags fall back to hardcoded
-    defaults so the hook always has something to say for built-in
-    statuses. Custom statuses without tags fall to generic breadcrumb
-    downstream (see build_breadcrumb).
+    Returns {status: body_text}. workflow.md is the single source of
+    truth — there are no fallback dicts in this script. Missing tags
+    (or a missing/unreadable workflow.md) fall back to a generic line
+    in build_breadcrumb so users see the broken state and fix
+    workflow.md, rather than the hook silently masking the issue.
     """
-    result = dict(_FALLBACK_BREADCRUMBS)
-
     workflow = root / ".trellis" / "workflow.md"
     if not workflow.is_file():
-        return result
+        return {}
     try:
         content = workflow.read_text(encoding="utf-8")
     except OSError:
-        return result
+        return {}
 
+    result: dict[str, str] = {}
     for match in _TAG_RE.finditer(content):
         status = match.group(1)
         body = match.group(2).strip()
@@ -176,18 +168,24 @@ def load_breadcrumbs(root: Path) -> dict[str, str]:
 
 
 def build_breadcrumb(
-    task_id: Optional[str], status: str, templates: dict[str, str]
+    task_id: Optional[str],
+    status: str,
+    templates: dict[str, str],
+    source: str | None = None,
 ) -> str:
     """Build the <workflow-state>...</workflow-state> block.
 
-    - Known status (in templates or fallback) → detailed template body
-    - Unknown status (no tag + no fallback) → generic "refer to workflow.md"
+    - Known status (tag present in workflow.md) → detailed template body
+    - Unknown status (no tag, or workflow.md missing) → generic
+      "Refer to workflow.md for current step." line
     - `no_task` pseudo-status (task_id is None) → header omits task info
     """
     body = templates.get(status)
     if body is None:
         body = "Refer to workflow.md for current step."
     header = f"Status: {status}" if task_id is None else f"Task: {task_id} ({status})"
+    if source:
+        header = f"{header}\nSource: {source}"
     return f"<workflow-state>\n{header}\n{body}\n</workflow-state>"
 
 
@@ -196,6 +194,9 @@ def build_breadcrumb(
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    if os.environ.get("TRELLIS_HOOKS") == "0" or os.environ.get("TRELLIS_DISABLE_HOOKS") == "1":
+        return 0
+
     try:
         data = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -209,17 +210,25 @@ def main() -> int:
         return 0  # not a Trellis project
 
     templates = load_breadcrumbs(root)
-    task = get_active_task(root)
+    task = get_active_task(root, data)
     if task is None:
         # No active task — still emit a breadcrumb nudging AI toward
         # trellis-brainstorm + task.py create when user describes real work.
         breadcrumb = build_breadcrumb(None, "no_task", templates)
     else:
-        breadcrumb = build_breadcrumb(*task, templates=templates)
+        task_id, status, source = task
+        breadcrumb = build_breadcrumb(task_id, status, templates, source)
+
+    # Gemini CLI 0.40.x rejects "UserPromptSubmit" — its per-turn event is
+    # named "BeforeAgent". Other platforms (Claude/Cursor/Qoder/CodeBuddy/
+    # Droid/Codex/Copilot) accept the original Claude-style name.
+    hook_event_name = (
+        "BeforeAgent" if _detect_platform(data) == "gemini" else "UserPromptSubmit"
+    )
 
     output = {
         "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
+            "hookEventName": hook_event_name,
             "additionalContext": breadcrumb,
         }
     }
