@@ -746,6 +746,29 @@ class OpenAIRegisterErrorReportingTests(unittest.TestCase):
             finally:
                 registrar.close()
 
+    def test_register_logs_mailbox_creation_before_platform_authorize(self) -> None:
+        with (
+            mock.patch(
+                "services.register.openai_register.mail_provider.create_mailbox",
+                return_value={"provider": "tempmail_lol", "address": "demo@example.com"},
+            ),
+            mock.patch.object(self.registrar, "_platform_authorize") as authorize_mock,
+            mock.patch.object(self.registrar, "_register_user"),
+            mock.patch.object(self.registrar, "_send_otp"),
+            mock.patch("services.register.openai_register.mail_provider.wait_for_code", return_value="123456"),
+            mock.patch.object(self.registrar, "_validate_otp"),
+            mock.patch.object(self.registrar, "_create_account"),
+            mock.patch.object(
+                self.registrar,
+                "_login_and_exchange_tokens",
+                return_value={"access_token": "access", "refresh_token": "refresh", "id_token": "id"},
+            ),
+        ):
+            self.registrar.register({"mail": {"providers": []}})
+
+        self.log.assert_any_call("已创建临时邮箱: demo@example.com (tempmail_lol)", "info")
+        authorize_mock.assert_called_once_with("demo@example.com")
+
 
 class ProxyPoolSelectionTests(unittest.TestCase):
     def test_proxy_pool_prefers_ipv6_entries(self) -> None:

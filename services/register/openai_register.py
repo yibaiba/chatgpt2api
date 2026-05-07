@@ -598,9 +598,11 @@ class PlatformRegistrar:
 
     def register(self, config: dict[str, Any]) -> dict[str, str]:
         mailbox = mail_provider.create_mailbox(config["mail"])
+        provider_name = str(mailbox.get("provider") or "unknown").strip() or "unknown"
         email = str(mailbox.get("address") or "").strip()
         if not email:
             raise RuntimeError("mail provider did not return an email address")
+        self._step(f"已创建临时邮箱: {email} ({provider_name})")
         password = _random_password()
         first_name, last_name = _random_name()
         self._platform_authorize(email)
