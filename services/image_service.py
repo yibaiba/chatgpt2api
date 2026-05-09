@@ -2067,6 +2067,54 @@ def _run_codex_image_task(
     }
 
 
+_INPAINT_MAX_UPLOAD_SIZE = 1792  # ChatGPT API 支持的最大边长（px）
+
+
+def _preprocess_inpaint_inputs(orig_bytes: bytes, mask_bytes: bytes) -> tuple[bytes, bytes]:
+    """上传 inpaint 原图和遮罩前的预处理：
+    1. 若最大边 > 1792px，按比例缩小两者，防止 API 内部坐标错位。
+    2. 原图保持 RGBA（若有透明通道）或 RGB。
+    返回 (处理后的 orig_bytes, 处理后的 mask_bytes)。
+    """
+    with Image.open(io.BytesIO(orig_bytes)) as orig_img, \
+         Image.open(io.BytesIO(mask_bytes)) as mask_img:
+        max_dim = max(orig_img.size)
+        if max_dim <= _INPAINT_MAX_UPLOAD_SIZE:
+            return orig_bytes, mask_bytes
+        ratio = _INPAINT_MAX_UPLOAD_SIZE / max_dim
+        new_size = (max(1, int(orig_img.width * ratio)), max(1, int(orig_img.height * ratio)))
+        resized_orig = orig_img.resize(new_size, Image.LANCZOS)
+        resized_mask = mask_img.resize(new_size, Image.LANCZOS)
+        orig_buf = io.BytesIO()
+        resized_orig.save(orig_buf, format="PNG")
+        mask_buf = io.BytesIO()
+        resized_mask.save(mask_buf, format="PNG")
+        return orig_buf.getvalue(), mask_buf.getvalue()
+
+
+def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, mask_bytes: bytes) -> bytes:
+    """合成兜底：用 mask 将 inpaint 结果叠合到原图。
+    mask A=255（遮罩区）→ 使用 inpaint 结果像素（AI 修改的区域）。
+    mask A=0   （保留区）→ 使用原图像素（严格保留，不受 API 任何影响）。
+    中间值 → alpha 混合过渡。
+    若 inpaint 结果与原图尺寸不同，先缩放 inpaint 结果到原图尺寸。
+    """
+    with Image.open(io.BytesIO(inpaint_bytes)) as inpaint_img, \
+         Image.open(io.BytesIO(orig_bytes)) as orig_img, \
+         Image.open(io.BytesIO(mask_bytes)) as mask_img:
+        if inpaint_img.size != orig_img.size:
+            inpaint_img = inpaint_img.resize(orig_img.size, Image.LANCZOS)
+        if mask_img.size != orig_img.size:
+            mask_img = mask_img.resize(orig_img.size, Image.LANCZOS)
+        mask_alpha = mask_img.split()[3] if mask_img.mode == "RGBA" else mask_img.convert("L")
+        orig_rgba = orig_img.convert("RGBA")
+        inpaint_rgba = inpaint_img.convert("RGBA")
+        composited = Image.composite(inpaint_rgba, orig_rgba, mask_alpha)
+        buf = io.BytesIO()
+        composited.save(buf, format="PNG")
+        return buf.getvalue()
+
+
 def _normalize_image_for_output(image: Image.Image, output_format: str) -> Image.Image:
     normalized_format = str(output_format or "png").strip().lower() or "png"
     if normalized_format == "jpeg":
@@ -2790,21 +2838,25 @@ def inpaint_image_result(
 
         # 上传原始图片（multimodal）→ 产生 file_0000000073cc... 格式，HAR 验证 original_file_id 必须为此格式
         orig_bytes, orig_name, orig_mime = original_image
-        orig_width, orig_height = _get_image_dimensions(orig_bytes)
-        original_file_id = _upload_image(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
-        print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id}")
+
+        # 预处理：大图缩小至 1792px 以内，防止 API 内部坐标错位；mask 同步缩放。
+        # 保留预处理后的字节，用于最终合成兜底。
+        upload_orig_bytes, upload_mask_bytes = _preprocess_inpaint_inputs(orig_bytes, mask_data)
+
+        orig_width, orig_height = _get_image_dimensions(upload_orig_bytes)
+        original_file_id = _upload_image(session, access_token, device_id, upload_orig_bytes, orig_name, orig_mime)
+        print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id} size={orig_width}x{orig_height}")
         original_edit_image = EditInputImage(
-            file_id=original_file_id, data=orig_bytes, file_name=orig_name,
+            file_id=original_file_id, data=upload_orig_bytes, file_name=orig_name,
             mime_type=orig_mime, width=orig_width, height=orig_height,
         )
 
         # 上传遮罩（dalle_agent）
-        # HAR 抓包确认：官方 ChatGPT 上传 RGBA PNG，alpha 通道承载 mask 权重：
+        # 官方 ChatGPT 上传 RGBA PNG，alpha 通道承载 mask 权重：
         #   A=255 → 编辑区，A=0 → 保留区，中间值 → 羽化过渡区
         # 前端已按此格式导出（R=G=B=255, A=edit_weight），直接上传，不做转换。
         # 旧逻辑 convert("L") 会忽略 alpha，导致全图变白再反转为全黑，笔刷信息丢失。
-        mask_data_to_upload = mask_data
-        mask_file_id = _upload_mask(session, access_token, device_id, mask_data_to_upload)
+        mask_file_id = _upload_mask(session, access_token, device_id, upload_mask_bytes)
         print(f"[image-inpaint-upstream] uploaded mask_file_id={mask_file_id}")
 
         # 上传参考图（可选，multimodal）
@@ -2909,15 +2961,21 @@ def inpaint_image_result(
         if not download_url:
             raise ImageGenerationError("failed to get download url")
 
-        result_data = _build_image_result_data(
-            prompt,
-            response_format,
-            "inpaint",
-            image_options=image_options,
-            session=session,
-            download_url=download_url,
-            base_url=base_url,
-        )
+        # 下载 inpaint 结果并做合成兜底：
+        # 用 mask 把结果叠合到（预处理后的）原图，确保非遮罩区严格等于原图像素。
+        # 即使 API 对大图/透明图的非遮罩区处理不完美，此步骤也能修正。
+        raw_inpaint_bytes = _fetch_image_bytes(session, download_url)
+        composited_bytes = _composite_inpaint_onto_original(raw_inpaint_bytes, upload_orig_bytes, upload_mask_bytes)
+
+        image_bytes, mime_type = _process_output_image(composited_bytes, image_options)
+        output_format = str(
+            (image_options.output_format if image_options is not None else "png") or "png"
+        ).strip().lower() or "png"
+        result_data: dict = {"revised_prompt": prompt, "generation_route": "inpaint", "mime_type": mime_type}
+        if response_format == "url":
+            result_data["url"] = _save_processed_image(image_bytes, output_format, base_url)
+        else:
+            result_data["b64_json"] = base64.b64encode(image_bytes).decode("ascii")
         result_data["conversation_id"] = actual_conversation_id
         result_data["last_message_id"] = str(parsed.get("last_message_id") or "")
         print(
