@@ -42,11 +42,11 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
   const [refImages, setRefImages] = useState<{ file: File; preview: string }[]>([]);
   const refInputRef = useRef<HTMLInputElement>(null);
 
-  /** 从 File 对象追加参考图（通用，最多到 4 张）*/
+  /** 从 File 对象追加参考图（通用，最多到 6 张）*/
   const appendRefFiles = useCallback((files: File[]) => {
     if (!files.length) return;
     setRefImages((prev) => {
-      const remaining = 4 - prev.length;
+      const remaining = 6 - prev.length;
       const toAdd = files.slice(0, remaining).map((f) => ({
         file: f,
         preview: URL.createObjectURL(f),
@@ -64,7 +64,7 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
   /** 从历史生成图（dataUrl）追加参考图 */
   const handlePickAvailableImage = useCallback((img: AvailableImage) => {
     setRefImages((prev) => {
-      if (prev.length >= 4) return prev;
+      if (prev.length >= 6) return prev;
       // 已选过则不重复添加（同 dataUrl）
       if (prev.some((r) => r.preview === img.dataUrl)) return prev;
       // dataUrl 直接当 preview，同时用它构造 File
@@ -377,8 +377,8 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
         {/* 参考图上传区 */}
         <div className="flex shrink-0 flex-col gap-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-stone-500">参考图（可选，最多 4 张）</span>
-            {refImages.length < 4 && (
+            <span className="text-xs text-stone-500">参考图（可选，最多 6 张）</span>
+            {refImages.length < 6 && (
               <>
                 <input
                   ref={refInputRef}
@@ -404,7 +404,7 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
           </div>
 
           {/* 从已生成图中选择 */}
-          {availableImages.length > 0 && refImages.length < 4 && (
+          {availableImages.length > 0 && refImages.length < 6 && (
             <div className="flex flex-col gap-1.5">
               <span className="text-xs text-stone-400">从已生成图中选择：</span>
               <div className="flex flex-wrap gap-1.5">
@@ -415,7 +415,7 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
                       key={img.id}
                       type="button"
                       onClick={() => handlePickAvailableImage(img)}
-                      disabled={submitting || (selected) || refImages.length >= 4}
+                      disabled={submitting || (selected) || refImages.length >= 6}
                       className={`relative size-14 shrink-0 overflow-hidden rounded-md border-2 transition-all ${
                         selected
                           ? "border-sky-500 opacity-60 cursor-default"
