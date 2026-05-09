@@ -19,6 +19,7 @@ from services.account_service import account_service
 from services import proof_of_work
 from services.system_settings import system_settings_service
 from services.utils import CODEX_IMAGE_MODEL, ImageRequestOptions, parse_exact_image_size
+from services.config import config
 
 
 BASE_URL = "https://chatgpt.com"
@@ -671,7 +672,7 @@ def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[
     image_parts = [
         {
             "content_type": "image_asset_pointer",
-            "asset_pointer": f"file-service://{image.file_id}",
+            "asset_pointer": f"sediment://{image.file_id}",
             "size_bytes": len(image.data),
             "width": image.width,
             "height": image.height,
@@ -683,10 +684,11 @@ def _build_picture_v2_edit_input_payload(images: list[EditInputImage]) -> tuple[
             "id": image.file_id,
             "size": len(image.data),
             "name": image.file_name,
-            "mimeType": image.mime_type,
             "mime_type": image.mime_type,
             "width": image.width,
             "height": image.height,
+            "source": "local",
+            "is_big_paste": False,
         }
         for image in images
     ]
@@ -1582,19 +1584,25 @@ def _save_processed_image(image_bytes: bytes, output_format: str, base_url: str 
     return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
 
 
+def _get_configured_upstream_model() -> str:
+    """从 config 中读取 image_upstream_model，默认 auto"""
+    return str(config.data.get("image_upstream_model") or "auto").strip() or "auto"
+
+
 def _resolve_upstream_model(access_token: str, requested_model: str) -> tuple[str, bool]:
     """返回 (upstream_model, use_thinking_mode)"""
     requested_model = str(requested_model or "").strip() or "gpt-image-1"
     is_free_account = _is_free_account(access_token)
+    configured = _get_configured_upstream_model()
 
     if requested_model == CODEX_IMAGE_MODEL:
         return CODEX_IMAGE_MODEL, False
     if requested_model == "gpt-image-think":
-        # 带思考的图片生成：使用 gpt-5-3（付费账户）或 auto（免费）
-        upstream = "auto" if is_free_account else "gpt-5-3"
+        # 带思考的图片生成：付费账户使用配置模型，免费账户强制 auto
+        upstream = "auto" if is_free_account else configured
         return upstream, True
     if requested_model in {"gpt-image-1", "gpt-image-2", "gpt-image"}:
-        return "gpt-5-3", False
+        return configured, False
     return (str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL), False
 
 
@@ -1603,7 +1611,7 @@ def _resolve_upstream_edit_model(requested_model: str) -> str:
     if requested_model == CODEX_IMAGE_MODEL:
         return CODEX_IMAGE_MODEL
     if requested_model in {"gpt-image-1", "gpt-image-2", "gpt-image-think", "gpt-image"}:
-        return "gpt-5-3"
+        return _get_configured_upstream_model()
     return requested_model or DEFAULT_MODEL
 
 
