@@ -2799,13 +2799,11 @@ def inpaint_image_result(
         )
 
         # 上传遮罩（dalle_agent）
-        # 上游 ChatGPT 内部 API 遮罩约定：黑色=编辑区，白色=保留区
-        # 前端导出：白色=用户涂抹（待编辑），黑色=保留 → 需要反转极性
-        _mask_img = Image.open(io.BytesIO(mask_data)).convert("L")
-        _inverted = _mask_img.point(lambda p: 255 - p)
-        _buf = io.BytesIO()
-        _inverted.save(_buf, format="PNG")
-        mask_data_to_upload = _buf.getvalue()
+        # HAR 抓包确认：官方 ChatGPT 上传 RGBA PNG，alpha 通道承载 mask 权重：
+        #   A=255 → 编辑区，A=0 → 保留区，中间值 → 羽化过渡区
+        # 前端已按此格式导出（R=G=B=255, A=edit_weight），直接上传，不做转换。
+        # 旧逻辑 convert("L") 会忽略 alpha，导致全图变白再反转为全黑，笔刷信息丢失。
+        mask_data_to_upload = mask_data
         mask_file_id = _upload_mask(session, access_token, device_id, mask_data_to_upload)
         print(f"[image-inpaint-upstream] uploaded mask_file_id={mask_file_id}")
 
