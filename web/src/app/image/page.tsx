@@ -75,6 +75,8 @@ const RESULTS_SCROLL_RETRY_DELAYS_MS = [80, 240, 600, 1200, 2400] as const;
 const RESULTS_SCROLL_SETTLE_DELAY_MS = 2400;
 const DRAFT_CONVERSATION_TITLE = "新对话";
 const activeConversationQueueIds = new Set<string>();
+// 跟踪由外部流程（如 handleMaskEditorSubmit）直接管理的 turn，防止 runConversationQueue 抢占处理
+const externallyManagedTurnIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
   const trimmed = prompt.trim();
@@ -913,6 +915,11 @@ export default function ImagePage() {
   const handleReuseAsReference = useCallback(
     async (payload: { conversationId?: string; id?: string; dataUrl: string }) => {
       try {
+        // 验证 dataUrl 包含有效的 base64 内容
+        const base64Content = payload.dataUrl.split(",")[1] ?? "";
+        if (!base64Content) {
+          throw new Error("该图片数据不完整，无法加入参考图（可能来自不同账号或已过期）");
+        }
         if (payload.conversationId) {
           setSelectedConversationId(payload.conversationId);
         }
@@ -950,6 +957,9 @@ export default function ImagePage() {
       const conversationId = selectedConversationId ?? createId();
       const turnId = createId();
       const placeholderImageId = createId();
+
+      // 标记该 turn 为外部托管，防止 runConversationQueue 竞争处理
+      externallyManagedTurnIds.add(turnId);
 
       // 在当前对话（或新建对话）添加一个"进行中"的 turn
       setConversations((prev) => {
@@ -1031,6 +1041,9 @@ export default function ImagePage() {
           next[idx] = conv;
           return next;
         });
+      } finally {
+        // 无论成功或失败，取消外部托管标记，让队列可以处理其他 turn
+        externallyManagedTurnIds.delete(turnId);
       }
     },
     [maskEditorImageFile, selectedConversationId, imageModel],
@@ -1114,7 +1127,9 @@ export default function ImagePage() {
       }
 
       const snapshot = conversationsRef.current.find((conversation) => conversation.id === conversationId);
-      const queuedTurn = snapshot?.turns.find(hasPendingTurnWork);
+      const queuedTurn = snapshot?.turns.find(
+        (turn) => hasPendingTurnWork(turn) && !externallyManagedTurnIds.has(turn.id),
+      );
       if (!snapshot || !queuedTurn) {
         return;
       }

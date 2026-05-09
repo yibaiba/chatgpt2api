@@ -320,8 +320,13 @@ export function ImageResults({
                               className="h-7 w-7 rounded-full border-stone-200 bg-white px-0 text-stone-700 hover:bg-stone-50 sm:h-8 sm:w-auto sm:px-3"
                               onClick={() => {
                                 const dataUrl = buildImageDataUrl(image);
+                                const base64Part = dataUrl.split(",")[1] ?? "";
+                                if (!base64Part) {
+                                  // b64_json 为空，无法编辑
+                                  return;
+                                }
                                 // dataUrl → File
-                                const byteString = atob(dataUrl.split(",")[1]);
+                                const byteString = atob(base64Part);
                                 const ab = new ArrayBuffer(byteString.length);
                                 const ia = new Uint8Array(ab);
                                 for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
