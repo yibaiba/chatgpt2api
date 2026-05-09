@@ -914,9 +914,11 @@ def _build_inpaint_picture_v2_body(
     mask_file_id: str,
     original_gen_id: str,
     ref_images: Optional[list[EditInputImage]] = None,
+    original_image: Optional["EditInputImage"] = None,
 ) -> dict:
     """构建 inpainting 对话 payload。
-    当无参考图时 content_type=text；有参考图时 content_type=multimodal_text。
+    content 中始终包含原图的 image_asset_pointer，让模型知道编辑哪张图。
+    有参考图时追加参考图；无参考图时仅包含原图。
     """
     dalle_operation = {
         "type": "inpainting",
@@ -931,13 +933,29 @@ def _build_inpaint_picture_v2_body(
         "serialization_metadata": {"custom_symbol_offsets": []},
         "dalle": {"from_client": {"operation": dalle_operation}},
     }
+    # 始终把原图以 image_asset_pointer 放入 content，模型需要看到图片才能编辑
+    orig_part: Optional[dict] = None
+    if original_image:
+        orig_part = {
+            "content_type": "image_asset_pointer",
+            "asset_pointer": f"file-service://{original_image.file_id}",
+            "size_bytes": len(original_image.data),
+            "width": original_image.width,
+            "height": original_image.height,
+        }
     if ref_images:
         image_parts, attachments = _build_picture_v2_edit_input_payload(ref_images)
+        leading = [orig_part] if orig_part else []
         content: dict = {
             "content_type": "multimodal_text",
-            "parts": [*image_parts, prompt],
+            "parts": [*leading, *image_parts, prompt],
         }
         metadata["attachments"] = attachments
+    elif orig_part:
+        content = {
+            "content_type": "multimodal_text",
+            "parts": [orig_part, prompt],
+        }
     else:
         content = {"content_type": "text", "parts": [prompt]}
 
@@ -1083,6 +1101,7 @@ def _send_inpaint_conversation(
     original_gen_id: str,
     conduit_token: str,
     ref_images: Optional[list[EditInputImage]] = None,
+    original_image: Optional[EditInputImage] = None,
 ):
     session_id = str(uuid.uuid4())
     turn_trace_id = str(uuid.uuid4())
@@ -1105,7 +1124,8 @@ def _send_inpaint_conversation(
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
     body = _build_inpaint_picture_v2_body(
-        prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id, ref_images
+        prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id,
+        ref_images=ref_images, original_image=original_image,
     )
     return _request_image_stream(
         lambda: session.post(
@@ -1134,6 +1154,7 @@ def _run_inpaint_mode(
     original_gen_id: str,
     ref_images: Optional[list[EditInputImage]] = None,
     attachment_mime_types: Optional[list[str]] = None,
+    original_image: Optional[EditInputImage] = None,
 ) -> dict:
     # inpaint prepare 不传 attachment_mime_types（HAR 验证：entry 73 无此字段）
     conduit_token = _prepare_picture_conversation(
@@ -1161,6 +1182,7 @@ def _run_inpaint_mode(
         original_gen_id,
         conduit_token,
         ref_images=ref_images,
+        original_image=original_image,
     )
     return _parse_sse(response)
 
@@ -1453,6 +1475,22 @@ def _extract_image_ids(mapping: dict) -> list[str]:
     return file_ids
 
 
+def _extract_conversation_text(mapping: dict) -> str:
+    """从对话 mapping 中提取 assistant 的最新文字响应。"""
+    for node in mapping.values():
+        msg = (node or {}).get("message") or {}
+        role = (msg.get("author") or {}).get("role", "")
+        if role != "assistant":
+            continue
+        content = msg.get("content") or {}
+        if content.get("content_type") == "text":
+            parts = content.get("parts") or []
+            for part in parts:
+                if isinstance(part, str) and part.strip():
+                    return part.strip()
+    return ""
+
+
 def _poll_image_ids(
     session: Session,
     access_token: str,
@@ -1496,6 +1534,33 @@ def _poll_image_ids(
             elapsed = int(time.time() - started)
             print(f"[poll-image] conv={conversation_id[:8]}... found {len(output_file_ids)} image(s) after {elapsed}s ({poll_count} polls)")
             return output_file_ids
+        if poll_count == 1:
+            # debug: 打印第一次轮询拿到的原始 file_ids 和过滤情况
+            print(f"[poll-image-debug] raw_file_ids={file_ids} input_ids={list(normalized_input_file_ids)}")
+            # 打印所有 mapping node 的 message author/content 结构（排查 asset_pointer 格式）
+            mapping_nodes = payload.get("mapping") or {}
+            print(f"[poll-image-debug] mapping nodes count={len(mapping_nodes)}")
+            for k, v in mapping_nodes.items():
+                msg = (v or {}).get("message") or {}
+                author = (msg.get("author") or {}).get("role", "?")
+                content = msg.get("content") or {}
+                ct = content.get("content_type", "?")
+                parts = content.get("parts") or []
+                print(f"[poll-image-debug] node={k[:8]}... role={author} content_type={ct} parts={len(parts)}")
+                for part in parts[:3]:
+                    if isinstance(part, dict):
+                        ap = part.get("asset_pointer", "")
+                        pt = part.get("content_type", part.get("type", ""))
+                        print(f"[poll-image-debug]   dict_part type={pt!r} asset_pointer={ap!r}")
+                    elif isinstance(part, str) and part:
+                        print(f"[poll-image-debug]   str_part={part[:120]!r}")
+        # 检查对话是否已完成但返回文字（错误/拒绝）而非图片
+        final_text = _extract_conversation_text(payload.get("mapping") or {})
+        if final_text:
+            elapsed = int(time.time() - started)
+            print(f"[poll-image] conv={conversation_id[:8]}... text_response after {elapsed}s: {final_text[:200]!r}")
+            # 如果对话有文字响应但没有图片，说明生成失败
+            return []
         if poll_count % 10 == 0:
             elapsed = int(time.time() - started)
             print(f"[poll-image] conv={conversation_id[:8]}... still waiting, elapsed={elapsed}s polls={poll_count}")
@@ -2585,6 +2650,15 @@ def inpaint_image_result(
         orig_width, orig_height = _get_image_dimensions(orig_bytes)
         original_file_id = _upload_image(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
         print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id}")
+        # 构造 EditInputImage，用于在 conversation content 中引用原图（让模型知道编辑哪张图）
+        original_edit_image = EditInputImage(
+            file_id=original_file_id,
+            data=orig_bytes,
+            file_name=orig_name,
+            mime_type=orig_mime,
+            width=orig_width,
+            height=orig_height,
+        )
 
         # 上传遮罩（dalle_agent）
         mask_file_id = _upload_mask(session, access_token, device_id, mask_data)
@@ -2638,6 +2712,7 @@ def inpaint_image_result(
             gen_id,
             ref_images=uploaded_ref_images if uploaded_ref_images else None,
             attachment_mime_types=inpaint_attachment_mime_types,
+            original_image=original_edit_image,
         )
 
         actual_conversation_id, file_ids, response_text = _collect_edit_output(
