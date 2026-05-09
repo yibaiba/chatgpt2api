@@ -970,15 +970,17 @@ export default function ImagePage() {
       if (!imageFile) return;
       setMaskEditorOpen(false);
 
-      // 找到当前选中对话，并在其中新增一轮 inpainting
       const conversationId = selectedConversationId ?? createId();
       const turnId = createId();
       const placeholderImageId = createId();
 
-      // 标记该 turn 为外部托管，防止 runConversationQueue 竞争处理
-      externallyManagedTurnIds.add(turnId);
+      // 把 File 对象转为 dataUrl 存入 turn，让队列可以在任意时间点读取
+      const [origDataUrl, maskDataUrl, ...refDataUrls] = await Promise.all([
+        readFileAsDataUrl(imageFile),
+        readFileAsDataUrl(maskFile),
+        ...refImages.map((f) => readFileAsDataUrl(f)),
+      ]);
 
-      // 在当前对话（或新建对话）添加一个"进行中"的 turn
       setConversations((prev) => {
         const existingIdx = prev.findIndex((c) => c.id === conversationId);
         const inpaintTurn = {
@@ -988,7 +990,11 @@ export default function ImagePage() {
           prompt,
           status: "queued" as const,
           createdAt: new Date().toISOString(),
-          referenceImages: [],
+          referenceImages: refImages.map((f, i) => ({
+            name: f.name,
+            type: f.type,
+            dataUrl: refDataUrls[i] ?? "",
+          })),
           count: 1,
           images: [{ id: placeholderImageId, status: "loading" as const }],
           aspectRatio: undefined,
@@ -997,6 +1003,11 @@ export default function ImagePage() {
           background: undefined,
           outputFormat: undefined,
           compression: undefined,
+          // inpaint 专用：原图与遮罩图，供 runConversationQueue 读取
+          inpaintOriginalImage: { name: imageFile.name, type: imageFile.type, dataUrl: origDataUrl },
+          inpaintMaskImage: { name: maskFile.name, type: maskFile.type, dataUrl: maskDataUrl },
+          inpaintConversationId: maskEditorConversationId || undefined,
+          inpaintParentMessageId: maskEditorLastMessageId || undefined,
         };
         if (existingIdx >= 0) {
           const updated = { ...prev[existingIdx] };
@@ -1009,83 +1020,8 @@ export default function ImagePage() {
       });
       setSelectedConversationId(conversationId);
 
-      try {
-        const session = await getCachedOrSyncAuthSession();
-        if (!session) throw new Error("未登录");
-
-        const job = await createImageInpaintJob(imageFile, maskFile, prompt, imageModel, {
-          refImages: refImages.length > 0 ? refImages : undefined,
-          conversationId: maskEditorConversationId || undefined,
-          parentMessageId: maskEditorLastMessageId || undefined,
-        });
-
-        // Job 已提交，立即从 queued 改为 generating，避免 UI 显示"等待前序任务"
-        setConversations((prev) => {
-          const idx = prev.findIndex((c) => c.id === conversationId);
-          if (idx < 0) return prev;
-          const conv = { ...prev[idx] };
-          const turnIdx = conv.turns.findIndex((t) => t.id === turnId);
-          if (turnIdx < 0) return prev;
-          const updatedTurn = { ...conv.turns[turnIdx] };
-          updatedTurn.status = "generating";
-          const turns = [...conv.turns];
-          turns[turnIdx] = updatedTurn;
-          conv.turns = turns;
-          const next = [...prev];
-          next[idx] = conv;
-          return next;
-        });
-
-        const result = await waitForImageJob(job);
-
-        const resultImages = (result?.data ?? []) as GeneratedImageResponse["data"];
-        setConversations((prev) => {
-          const idx = prev.findIndex((c) => c.id === conversationId);
-          if (idx < 0) return prev;
-          const conv = { ...prev[idx] };
-          const turnIdx = conv.turns.findIndex((t) => t.id === turnId);
-          if (turnIdx < 0) return prev;
-          const updatedTurn = { ...conv.turns[turnIdx] };
-          updatedTurn.status = "success";
-          updatedTurn.images = resultImages.map((item, i) => ({
-            id: i === 0 ? placeholderImageId : createId(),
-            status: "success" as const,
-            b64_json: item.b64_json || "",
-            generation_route: item.generation_route,
-            conversation_id: item.conversation_id || undefined,
-            last_message_id: item.last_message_id || undefined,
-          }));
-          const turns = [...conv.turns];
-          turns[turnIdx] = updatedTurn;
-          conv.turns = turns;
-          const next = [...prev];
-          next[idx] = conv;
-          return next;
-        });
-        toast.success("遮罩编辑完成");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "遮罩编辑失败";
-        toast.error(message);
-        setConversations((prev) => {
-          const idx = prev.findIndex((c) => c.id === conversationId);
-          if (idx < 0) return prev;
-          const conv = { ...prev[idx] };
-          const turnIdx = conv.turns.findIndex((t) => t.id === turnId);
-          if (turnIdx < 0) return prev;
-          const updatedTurn = { ...conv.turns[turnIdx] };
-          updatedTurn.status = "error";
-          updatedTurn.images = [{ id: placeholderImageId, status: "error" as const, error: message }];
-          const turns = [...conv.turns];
-          turns[turnIdx] = updatedTurn;
-          conv.turns = turns;
-          const next = [...prev];
-          next[idx] = conv;
-          return next;
-        });
-      } finally {
-        // 无论成功或失败，取消外部托管标记，让队列可以处理其他 turn
-        externallyManagedTurnIds.delete(turnId);
-      }
+      // 入队后触发队列，和文生图/图生图走同一套流程
+      void runConversationQueueRef.current(conversationId);
     },
     [maskEditorImageFile, selectedConversationId, imageModel, maskEditorConversationId, maskEditorLastMessageId],
   );
@@ -1212,8 +1148,9 @@ export default function ImagePage() {
           compression: queuedTurn.compression,
         });
         const submittedPrompt = queuedTurn.prompt.trim();
+        const isInpaintTurn = queuedTurn.mode === "edit" && !!queuedTurn.inpaintMaskImage;
 
-        if (queuedTurn.mode === "edit" && referenceFiles.length === 0) {
+        if (queuedTurn.mode === "edit" && !isInpaintTurn && referenceFiles.length === 0) {
           throw new Error("未找到可用于继续编辑的参考图");
         }
 
@@ -1242,10 +1179,28 @@ export default function ImagePage() {
             let jobId = pendingImage.job_id?.trim() || "";
 
             if (!jobId) {
-              const job =
-                queuedTurn.mode === "edit"
-                  ? await createImageEditJob(referenceFiles, submittedPrompt, submittedModel, imageJobOptions)
-                  : await createImageGenerationJob(submittedPrompt, submittedModel, imageJobOptions);
+              let job: Awaited<ReturnType<typeof createImageGenerationJob>>;
+              if (isInpaintTurn && queuedTurn.inpaintOriginalImage && queuedTurn.inpaintMaskImage) {
+                const origFile = dataUrlToFile(
+                  queuedTurn.inpaintOriginalImage.dataUrl,
+                  queuedTurn.inpaintOriginalImage.name || "original.png",
+                  queuedTurn.inpaintOriginalImage.type,
+                );
+                const maskFile = dataUrlToFile(
+                  queuedTurn.inpaintMaskImage.dataUrl,
+                  queuedTurn.inpaintMaskImage.name || "mask.png",
+                  queuedTurn.inpaintMaskImage.type,
+                );
+                job = await createImageInpaintJob(origFile, maskFile, submittedPrompt, submittedModel, {
+                  refImages: referenceFiles.length > 0 ? referenceFiles : undefined,
+                  conversationId: queuedTurn.inpaintConversationId,
+                  parentMessageId: queuedTurn.inpaintParentMessageId,
+                });
+              } else if (queuedTurn.mode === "edit") {
+                job = await createImageEditJob(referenceFiles, submittedPrompt, submittedModel, imageJobOptions);
+              } else {
+                job = await createImageGenerationJob(submittedPrompt, submittedModel, imageJobOptions);
+              }
               jobOrId = job;
               jobId = job.id;
 

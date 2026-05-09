@@ -57,6 +57,11 @@ export type ImageTurn = {
   createdAt: string;
   status: ImageTurnStatus;
   error?: string;
+  // inpaint 专用字段（mode="edit" 且有 maskImage 时表示遮罩编辑任务）
+  inpaintOriginalImage?: StoredReferenceImage;
+  inpaintMaskImage?: StoredReferenceImage;
+  inpaintConversationId?: string;
+  inpaintParentMessageId?: string;
 };
 
 export type ImageConversation = {
