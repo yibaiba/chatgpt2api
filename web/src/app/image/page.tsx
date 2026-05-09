@@ -1018,6 +1018,24 @@ export default function ImagePage() {
           conversationId: maskEditorConversationId || undefined,
           parentMessageId: maskEditorLastMessageId || undefined,
         });
+
+        // Job 已提交，立即从 queued 改为 generating，避免 UI 显示"等待前序任务"
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === conversationId);
+          if (idx < 0) return prev;
+          const conv = { ...prev[idx] };
+          const turnIdx = conv.turns.findIndex((t) => t.id === turnId);
+          if (turnIdx < 0) return prev;
+          const updatedTurn = { ...conv.turns[turnIdx] };
+          updatedTurn.status = "generating";
+          const turns = [...conv.turns];
+          turns[turnIdx] = updatedTurn;
+          conv.turns = turns;
+          const next = [...prev];
+          next[idx] = conv;
+          return next;
+        });
+
         const result = await waitForImageJob(job);
 
         const resultImages = (result?.data ?? []) as GeneratedImageResponse["data"];
