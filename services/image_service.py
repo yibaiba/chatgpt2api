@@ -2097,15 +2097,26 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
     mask A=255（遮罩区）→ 使用 inpaint 结果像素（AI 修改的区域）。
     mask A=0   （保留区）→ 使用原图像素（严格保留，不受 API 任何影响）。
     中间值 → alpha 混合过渡。
-    若 inpaint 结果与原图尺寸不同，先缩放 inpaint 结果到原图尺寸。
+    若 inpaint 结果与原图尺寸不同，等比缩放（scale-to-fill）后中心裁剪，
+    避免直接 resize 造成宽高比失真（如 API 返回正方形图时内容被拉高变形）。
     """
     with Image.open(io.BytesIO(inpaint_bytes)) as inpaint_img, \
          Image.open(io.BytesIO(orig_bytes)) as orig_img, \
          Image.open(io.BytesIO(mask_bytes)) as mask_img:
-        if inpaint_img.size != orig_img.size:
-            inpaint_img = inpaint_img.resize(orig_img.size, Image.LANCZOS)
-        if mask_img.size != orig_img.size:
-            mask_img = mask_img.resize(orig_img.size, Image.LANCZOS)
+        target_w, target_h = orig_img.size
+        if inpaint_img.size != (target_w, target_h):
+            src_w, src_h = inpaint_img.size
+            # scale-to-fill：等比放大至覆盖目标尺寸，不拉伸比例
+            scale = max(target_w / src_w, target_h / src_h)
+            new_w = max(target_w, round(src_w * scale))
+            new_h = max(target_h, round(src_h * scale))
+            inpaint_img = inpaint_img.resize((new_w, new_h), Image.LANCZOS)
+            # 中心裁剪到目标尺寸
+            left = (new_w - target_w) // 2
+            top = (new_h - target_h) // 2
+            inpaint_img = inpaint_img.crop((left, top, left + target_w, top + target_h))
+        if mask_img.size != (target_w, target_h):
+            mask_img = mask_img.resize((target_w, target_h), Image.LANCZOS)
         mask_alpha = mask_img.split()[3] if mask_img.mode == "RGBA" else mask_img.convert("L")
         orig_rgba = orig_img.convert("RGBA")
         inpaint_rgba = inpaint_img.convert("RGBA")
