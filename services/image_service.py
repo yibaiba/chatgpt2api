@@ -2839,6 +2839,9 @@ def inpaint_image_result(
         # 上传原始图片（multimodal）→ 产生 file_0000000073cc... 格式，HAR 验证 original_file_id 必须为此格式
         orig_bytes, orig_name, orig_mime = original_image
 
+        # 记录用户原始分辨率，合成后恢复用
+        orig_native_w, orig_native_h = _get_image_dimensions(orig_bytes)
+
         # 预处理：大图缩小至 1792px 以内，防止 API 内部坐标错位；mask 同步缩放。
         # 保留预处理后的字节，用于最终合成兜底。
         upload_orig_bytes, upload_mask_bytes = _preprocess_inpaint_inputs(orig_bytes, mask_data)
@@ -2966,6 +2969,15 @@ def inpaint_image_result(
         # 即使 API 对大图/透明图的非遮罩区处理不完美，此步骤也能修正。
         raw_inpaint_bytes = _fetch_image_bytes(session, download_url)
         composited_bytes = _composite_inpaint_onto_original(raw_inpaint_bytes, upload_orig_bytes, upload_mask_bytes)
+
+        # 若原图被缩小过（> 1792px），合成后放大回原始分辨率，保留用户上传的完整画质
+        upload_w, upload_h = _get_image_dimensions(upload_orig_bytes)
+        if (orig_native_w, orig_native_h) != (upload_w, upload_h):
+            with Image.open(io.BytesIO(composited_bytes)) as comp_img:
+                restored = comp_img.resize((orig_native_w, orig_native_h), Image.LANCZOS)
+                buf = io.BytesIO()
+                restored.save(buf, format="PNG")
+                composited_bytes = buf.getvalue()
 
         image_bytes, mime_type = _process_output_image(composited_bytes, image_options)
         output_format = str(
