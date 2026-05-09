@@ -245,32 +245,40 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     const img = imageRef.current;
     if (!canvas || !img) return null;
 
-    // 合成最终 mask：黑色背景 + 白色涂抹区域
-    // API 约定：白色 = 待编辑区域，黑色 = 保留区域
+    // Step 1：对用户笔刷 canvas 做羽化（blur）处理，使边缘自然过渡。
+    // 羽化半径与图片宽度成正比，保证在不同分辨率下视觉一致。
+    const blurRadius = Math.max(4, Math.round(canvas.width / 120));
+    const blurred = document.createElement("canvas");
+    blurred.width = canvas.width;
+    blurred.height = canvas.height;
+    const blurCtx = blurred.getContext("2d");
+    if (!blurCtx) return null;
+    blurCtx.filter = `blur(${blurRadius}px)`;
+    blurCtx.drawImage(canvas, 0, 0);
+    blurCtx.filter = "none";
+
+    // Step 2：合成最终 mask。
+    // API 约定：白色 = 待编辑区域，黑色 = 保留区域。
+    // 关键改进：用羽化后的 alpha 值映射为灰度（而非硬二值化），
+    // 让边界区域呈现灰色渐变 → API 在边缘实现自然融合，与官网效果一致。
     const offscreen = document.createElement("canvas");
     offscreen.width = canvas.width;
     offscreen.height = canvas.height;
     const ctx = offscreen.getContext("2d");
     if (!ctx) return null;
 
-    // 黑色背景（保留区域）
     ctx.fillStyle = "black";
     ctx.fillRect(0, 0, offscreen.width, offscreen.height);
 
-    // 读取遮罩 canvas 像素，将有 alpha 的像素（用户涂抹区域）转为白色（编辑区域）
-    const srcCtx = canvas.getContext("2d");
-    if (!srcCtx) return null;
-    const srcData = srcCtx.getImageData(0, 0, canvas.width, canvas.height);
+    const srcData = blurCtx.getImageData(0, 0, canvas.width, canvas.height);
     const dstData = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
     for (let i = 0; i < srcData.data.length; i += 4) {
-      if (srcData.data[i + 3] > 10) {
-        // 用户涂抹的区域 → 白色（API 将此处视为待编辑区域）
-        dstData.data[i] = 255;
-        dstData.data[i + 1] = 255;
-        dstData.data[i + 2] = 255;
-        dstData.data[i + 3] = 255;
-      }
-      // 透明区域保持黑色（保留区域）
+      const alpha = srcData.data[i + 3]; // 羽化后的 alpha（0‒255）
+      // alpha 直接作为灰度强度：核心区域近白，边缘渐变为黑，保留保留区域为纯黑
+      dstData.data[i]     = alpha; // R
+      dstData.data[i + 1] = alpha; // G
+      dstData.data[i + 2] = alpha; // B
+      dstData.data[i + 3] = 255;   // A（始终不透明）
     }
     ctx.putImageData(dstData, 0, 0);
 
