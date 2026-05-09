@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Eraser, ImagePlus, Paintbrush, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -111,10 +111,24 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     toolRef.current = tool;
   }, [tool]);
 
-  // 加载图片并初始化 canvas
+  // 同步重置 canvasReady（open 或 imageDataUrl 变化时，渲染前立即置 false）
+  useLayoutEffect(() => {
+    setCanvasReady(false);
+  }, [open, imageDataUrl]);
+
+  // 同步重置 prompt 和参考图（渲染前立即生效，防止闪烁）
+  useLayoutEffect(() => {
+    if (!open) return;
+    setPrompt(defaultPrompt);
+    setRefImages((prev) => {
+      prev.forEach((r) => URL.revokeObjectURL(r.preview));
+      return [];
+    });
+  }, [open, defaultPrompt]);
+
+  // 异步加载图片并初始化 canvas（setState 在回调中，不触发同步警告）
   useEffect(() => {
     if (!open) return;
-    setCanvasReady(false);
     const img = new Image();
     img.onload = () => {
       imageRef.current = img;
@@ -129,17 +143,6 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     };
     img.src = imageDataUrl;
   }, [open, imageDataUrl]);
-
-  // 重置时同步 prompt 和参考图
-  useEffect(() => {
-    if (open) {
-      setPrompt(defaultPrompt);
-      setRefImages((prev) => {
-        prev.forEach((r) => URL.revokeObjectURL(r.preview));
-        return [];
-      });
-    }
-  }, [open, defaultPrompt]);
 
   const getCanvasPos = useCallback((canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
     const rect = canvas.getBoundingClientRect();
