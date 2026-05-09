@@ -120,6 +120,8 @@ class ImageHistoryService:
         error = self._clean_text(raw.get("error")) or None
         job_id = self._clean_text(raw.get("job_id") or raw.get("jobId")) or None
         generation_route = self._clean_text(raw.get("generation_route") or raw.get("generationRoute")).lower() or None
+        conversation_id = self._clean_text(raw.get("conversation_id") or raw.get("conversationId")) or None
+        last_message_id = self._clean_text(raw.get("last_message_id") or raw.get("lastMessageId")) or None
         raw_status = self._clean_text(raw.get("status")).lower()
         if raw_status not in ALLOWED_IMAGE_STATUSES:
             raw_status = "success" if b64_json else "error" if error else "loading"
@@ -131,6 +133,8 @@ class ImageHistoryService:
             "error": error,
             "job_id": job_id,
             "generation_route": generation_route if generation_route in ALLOWED_GENERATION_ROUTES else None,
+            "conversation_id": conversation_id,
+            "last_message_id": last_message_id,
         }
 
     def _normalize_turn(self, raw: object) -> dict | None:

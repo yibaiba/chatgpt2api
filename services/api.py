@@ -289,6 +289,8 @@ class StoredImagePayload(BaseModel):
     mime_type: str | None = None
     error: str | None = None
     generation_route: str | None = None
+    conversation_id: str | None = None
+    last_message_id: str | None = None
 
 
 class ImageTurnPayload(BaseModel):
