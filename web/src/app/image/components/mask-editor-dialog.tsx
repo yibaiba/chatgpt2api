@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Eraser, ImagePlus, Paintbrush, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,12 +35,35 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
   const [brushSize, setBrushSize] = useState(DEFAULT_BRUSH);
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [submitting, setSubmitting] = useState(false);
-  const [canvasReady, setCanvasReady] = useState(false);
+  const [loadedImageDataUrl, setLoadedImageDataUrl] = useState<string>("");
+  // canvasReady 派生自 loadedImageDataUrl，无需 effect 内同步 setState
+  const canvasReady = open && loadedImageDataUrl === imageDataUrl;
   // 自定义光标位置（相对于画布 wrapper）
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   // 参考图
   const [refImages, setRefImages] = useState<{ file: File; preview: string }[]>([]);
   const refInputRef = useRef<HTMLInputElement>(null);
+  // 追踪 open / defaultPrompt 的前一值，用于渲染期间检测变化（React 19 推荐方式）
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [prevDefaultPrompt, setPrevDefaultPrompt] = useState(defaultPrompt);
+  // 追踪当前 refImages，供关闭时清理 object URL（ref 不触发渲染）
+  const refImagesRef = useRef(refImages);
+  refImagesRef.current = refImages;
+
+  // 渲染期间 setState —— React 19 推荐的「属性变化时重置 state」方式。
+  // 不在 effect 内调用，避免 "Calling setState synchronously within an effect" 警告。
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      setPrompt(defaultPrompt);
+      setPrevDefaultPrompt(defaultPrompt);
+      setRefImages([]);
+    }
+  }
+  if (open && defaultPrompt !== prevDefaultPrompt) {
+    setPrevDefaultPrompt(defaultPrompt);
+    setPrompt(defaultPrompt);
+  }
 
   /** 从 File 对象追加参考图（通用，最多到 6 张）*/
   const appendRefFiles = useCallback((files: File[]) => {
@@ -111,22 +134,16 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     toolRef.current = tool;
   }, [tool]);
 
-  // 同步重置 canvasReady（open 或 imageDataUrl 变化时，渲染前立即置 false）
-  useLayoutEffect(() => {
-    setCanvasReady(false);
-  }, [open, imageDataUrl]);
+  // 对话框关闭时清理 object URL（纯副作用，不调用 setState）
+  useEffect(() => {
+    if (!open) {
+      refImagesRef.current.forEach((r) => {
+        if (r.preview.startsWith("blob:")) URL.revokeObjectURL(r.preview);
+      });
+    }
+  }, [open]);
 
-  // 同步重置 prompt 和参考图（渲染前立即生效，防止闪烁）
-  useLayoutEffect(() => {
-    if (!open) return;
-    setPrompt(defaultPrompt);
-    setRefImages((prev) => {
-      prev.forEach((r) => URL.revokeObjectURL(r.preview));
-      return [];
-    });
-  }, [open, defaultPrompt]);
-
-  // 异步加载图片并初始化 canvas（setState 在回调中，不触发同步警告）
+  // 异步加载图片并初始化 canvas（setState 在 onload 回调中，符合 React 19 规范）
   useEffect(() => {
     if (!open) return;
     const img = new Image();
@@ -139,7 +156,7 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      setCanvasReady(true);
+      setLoadedImageDataUrl(imageDataUrl);
     };
     img.src = imageDataUrl;
   }, [open, imageDataUrl]);
