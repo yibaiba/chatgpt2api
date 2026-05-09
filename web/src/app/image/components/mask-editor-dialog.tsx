@@ -257,28 +257,27 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     blurCtx.drawImage(canvas, 0, 0);
     blurCtx.filter = "none";
 
-    // Step 2：合成最终 mask。
-    // API 约定：白色 = 待编辑区域，黑色 = 保留区域。
-    // 关键改进：用羽化后的 alpha 值映射为灰度（而非硬二值化），
-    // 让边界区域呈现灰色渐变 → API 在边缘实现自然融合，与官网效果一致。
+    // Step 2：合成最终 mask（RGBA 格式，与官方 ChatGPT 一致）。
+    // HAR 抓包确认官方使用 RGBA PNG（color_type=6），alpha 通道承载 mask 权重：
+    //   alpha=255 → 编辑区核心（完全不透明白色）
+    //   alpha=128 → 软边缘过渡区（半透明白色，模型据此在边界自然融合）
+    //   alpha=0   → 保留区（完全透明，模型不修改）
+    // 注意：我们之前输出 RGB 灰度（A 全为 255），模型若读 alpha 则识别为"全图编辑"，
+    // 改为 RGBA 后 alpha 通道直接传递羽化强度，与官方行为完全一致。
     const offscreen = document.createElement("canvas");
     offscreen.width = canvas.width;
     offscreen.height = canvas.height;
     const ctx = offscreen.getContext("2d");
     if (!ctx) return null;
 
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, offscreen.width, offscreen.height);
-
     const srcData = blurCtx.getImageData(0, 0, canvas.width, canvas.height);
     const dstData = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
     for (let i = 0; i < srcData.data.length; i += 4) {
       const alpha = srcData.data[i + 3]; // 羽化后的 alpha（0‒255）
-      // alpha 直接作为灰度强度：核心区域近白，边缘渐变为黑，保留保留区域为纯黑
-      dstData.data[i]     = alpha; // R
-      dstData.data[i + 1] = alpha; // G
-      dstData.data[i + 2] = alpha; // B
-      dstData.data[i + 3] = 255;   // A（始终不透明）
+      dstData.data[i]     = 255;   // R - 白色
+      dstData.data[i + 1] = 255;   // G - 白色
+      dstData.data[i + 2] = 255;   // B - 白色
+      dstData.data[i + 3] = alpha; // A - mask 权重（羽化软边缘由此承载）
     }
     ctx.putImageData(dstData, 0, 0);
 
