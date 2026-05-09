@@ -917,8 +917,10 @@ def _build_inpaint_picture_v2_body(
     original_image: Optional["EditInputImage"] = None,
 ) -> dict:
     """构建 inpainting 对话 payload。
-    content 中始终包含原图的 image_asset_pointer，让模型知道编辑哪张图。
-    有参考图时追加参考图；无参考图时仅包含原图。
+    HAR 验证：
+    - 无参考图：content_type="text"，parts=[prompt]，无 attachments，client_prepare_state="sent"
+    - 有参考图：content_type="multimodal_text"，parts=[ref_parts, prompt]，有 attachments，client_prepare_state="success"
+    原图始终只通过 dalle_operation.original_file_id 传递，不放进 content.parts。
     """
     dalle_operation = {
         "type": "inpainting",
@@ -933,31 +935,20 @@ def _build_inpaint_picture_v2_body(
         "serialization_metadata": {"custom_symbol_offsets": []},
         "dalle": {"from_client": {"operation": dalle_operation}},
     }
-    # 始终把原图以 image_asset_pointer 放入 content，模型需要看到图片才能编辑
-    orig_part: Optional[dict] = None
-    if original_image:
-        orig_part = {
-            "content_type": "image_asset_pointer",
-            "asset_pointer": f"file-service://{original_image.file_id}",
-            "size_bytes": len(original_image.data),
-            "width": original_image.width,
-            "height": original_image.height,
-        }
+
     if ref_images:
+        # 有参考图：multimodal_text，parts=[ref_parts, prompt]，加 attachments
         image_parts, attachments = _build_picture_v2_edit_input_payload(ref_images)
-        leading = [orig_part] if orig_part else []
         content: dict = {
             "content_type": "multimodal_text",
-            "parts": [*leading, *image_parts, prompt],
+            "parts": [*image_parts, prompt],
         }
         metadata["attachments"] = attachments
-    elif orig_part:
-        content = {
-            "content_type": "multimodal_text",
-            "parts": [orig_part, prompt],
-        }
+        client_prepare_state = "success"
     else:
+        # 无参考图：纯文本，只有 prompt，原图信息由 dalle_operation 承载
         content = {"content_type": "text", "parts": [prompt]}
+        client_prepare_state = "sent"
 
     return {
         "action": "next",
@@ -979,8 +970,9 @@ def _build_inpaint_picture_v2_body(
         "system_hints": ["picture_v2"],
         "supports_buffering": True,
         "supported_encodings": ["v1"],
-        # HAR 验证：无 ref_images 时 client_prepare_state="sent"；有 ref_images 时="success"
-        "client_prepare_state": "success" if ref_images else "sent",
+        # inpaint 始终使用 "sent"，与无参考图时保持一致
+        # 使用 "success" 会使服务端忽略 mask（按普通编辑处理）
+        "client_prepare_state": client_prepare_state,
         "paragen_cot_summary_display_override": "allow",
         "force_parallel_switch": "auto",
         "client_contextual_info": {
@@ -1127,6 +1119,15 @@ def _send_inpaint_conversation(
         prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id,
         ref_images=ref_images, original_image=original_image,
     )
+    # [debug-inpaint] 打印 body 关键字段，排查 mask 是否正确传入
+    import json as _json
+    _msg = body.get("messages", [{}])[0]
+    _dalle_op = _msg.get("metadata", {}).get("dalle", {}).get("from_client", {}).get("operation", {})
+    _content = _msg.get("content", {})
+    _parts_types = [p.get("content_type") if isinstance(p, dict) else type(p).__name__ for p in _content.get("parts", [])]
+    print(f"[debug-inpaint] dalle_operation={_json.dumps(_dalle_op)}")
+    print(f"[debug-inpaint] content_type={_content.get('content_type')} parts_count={len(_content.get('parts',[]))} part_types={_parts_types}")
+    print(f"[debug-inpaint] client_prepare_state={body.get('client_prepare_state')}")
     return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/f/conversation",
