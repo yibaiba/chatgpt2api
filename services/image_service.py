@@ -961,7 +961,8 @@ def _build_inpaint_picture_v2_body(
         "system_hints": ["picture_v2"],
         "supports_buffering": True,
         "supported_encodings": ["v1"],
-        "client_prepare_state": "success",
+        # HAR 验证：无 ref_images 时 client_prepare_state="sent"；有 ref_images 时="success"
+        "client_prepare_state": "success" if ref_images else "sent",
         "paragen_cot_summary_display_override": "allow",
         "force_parallel_switch": "auto",
         "client_contextual_info": {
@@ -2579,10 +2580,10 @@ def inpaint_image_result(
     try:
         device_id = _bootstrap(session, fp)
 
-        # 上传原始图片（dalle_agent，与遮罩相同，HAR 验证：original_file_id 需在 dalle 可访问存储中）
+        # 上传原始图片（multimodal）→ 产生 file_0000000073cc... 格式，HAR 验证 original_file_id 必须为此格式
         orig_bytes, orig_name, orig_mime = original_image
         orig_width, orig_height = _get_image_dimensions(orig_bytes)
-        original_file_id = _upload_image_for_dalle(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
+        original_file_id = _upload_image(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
         print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id}")
 
         # 上传遮罩（dalle_agent）
