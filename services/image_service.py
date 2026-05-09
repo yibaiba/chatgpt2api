@@ -2092,34 +2092,131 @@ def _preprocess_inpaint_inputs(orig_bytes: bytes, mask_bytes: bytes) -> tuple[by
         return orig_buf.getvalue(), mask_buf.getvalue()
 
 
+def _scale_to_fill(image: Image.Image, target_size: tuple[int, int]) -> Image.Image:
+    target_w, target_h = target_size
+    src_w, src_h = image.size
+    if (src_w, src_h) == (target_w, target_h):
+        return image.copy()
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w = max(target_w, round(src_w * scale))
+    new_h = max(target_h, round(src_h * scale))
+    resized = image.resize((new_w, new_h), Image.LANCZOS)
+    left = max(0, (new_w - target_w) // 2)
+    top = max(0, (new_h - target_h) // 2)
+    return resized.crop((left, top, left + target_w, top + target_h))
+
+
+def _expand_box_to_aspect_ratio(
+    box: tuple[int, int, int, int],
+    target_aspect: float,
+    bounds_size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    bounds_w, bounds_h = bounds_size
+    left, top, right, bottom = box
+    box_w = max(1.0, float(right - left))
+    box_h = max(1.0, float(bottom - top))
+    center_x = (left + right) / 2.0
+    center_y = (top + bottom) / 2.0
+    current_aspect = box_w / box_h
+
+    target_w = box_w
+    target_h = box_h
+    if current_aspect < target_aspect:
+        target_w = box_h * target_aspect
+    else:
+        target_h = box_w / target_aspect
+
+    if target_w > bounds_w:
+        target_w = float(bounds_w)
+        target_h = target_w / target_aspect
+    if target_h > bounds_h:
+        target_h = float(bounds_h)
+        target_w = target_h * target_aspect
+
+    target_w = min(float(bounds_w), max(1.0, target_w))
+    target_h = min(float(bounds_h), max(1.0, target_h))
+
+    new_left = round(center_x - target_w / 2.0)
+    new_top = round(center_y - target_h / 2.0)
+    new_right = new_left + round(target_w)
+    new_bottom = new_top + round(target_h)
+
+    if new_left < 0:
+        new_right -= new_left
+        new_left = 0
+    if new_right > bounds_w:
+        overflow = new_right - bounds_w
+        new_left -= overflow
+        new_right = bounds_w
+    if new_top < 0:
+        new_bottom -= new_top
+        new_top = 0
+    if new_bottom > bounds_h:
+        overflow = new_bottom - bounds_h
+        new_top -= overflow
+        new_bottom = bounds_h
+
+    new_left = max(0, new_left)
+    new_top = max(0, new_top)
+    new_right = min(bounds_w, max(new_left + 1, new_right))
+    new_bottom = min(bounds_h, max(new_top + 1, new_bottom))
+    return new_left, new_top, new_right, new_bottom
+
+
+def _project_inpaint_onto_canvas(
+    inpaint_img: Image.Image,
+    mask_alpha: Image.Image,
+    canvas_size: tuple[int, int],
+) -> tuple[Image.Image, str, tuple[int, int, int, int] | None]:
+    canvas_w, canvas_h = canvas_size
+    mask_bbox = mask_alpha.getbbox()
+    if mask_bbox is None:
+        return Image.new("RGBA", canvas_size, (0, 0, 0, 0)), "empty-mask", None
+
+    if mask_bbox == (0, 0, canvas_w, canvas_h):
+        return _scale_to_fill(inpaint_img, canvas_size).convert("RGBA"), "full-frame", mask_bbox
+
+    raw_aspect = inpaint_img.width / max(1, inpaint_img.height)
+    target_box = _expand_box_to_aspect_ratio(mask_bbox, raw_aspect, canvas_size)
+    target_w = max(1, target_box[2] - target_box[0])
+    target_h = max(1, target_box[3] - target_box[1])
+
+    projected = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    projected_patch = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGBA")
+    projected.paste(projected_patch, (target_box[0], target_box[1]))
+    return projected, "mask-bbox", target_box
+
+
 def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, mask_bytes: bytes) -> bytes:
     """合成兜底：用 mask 将 inpaint 结果叠合到原图。
     mask A=255（遮罩区）→ 使用 inpaint 结果像素（AI 修改的区域）。
     mask A=0   （保留区）→ 使用原图像素（严格保留，不受 API 任何影响）。
     中间值 → alpha 混合过渡。
-    若 inpaint 结果与原图尺寸不同，等比缩放（scale-to-fill）后中心裁剪，
-    避免直接 resize 造成宽高比失真（如 API 返回正方形图时内容被拉高变形）。
+    若 inpaint 结果与原图尺寸不同，优先按 mask 外接框进行局部回贴，
+    避免把局部编辑画布错误映射到整张原图坐标系。
     """
     with Image.open(io.BytesIO(inpaint_bytes)) as inpaint_img, \
          Image.open(io.BytesIO(orig_bytes)) as orig_img, \
          Image.open(io.BytesIO(mask_bytes)) as mask_img:
         target_w, target_h = orig_img.size
-        if inpaint_img.size != (target_w, target_h):
-            src_w, src_h = inpaint_img.size
-            # scale-to-fill：等比放大至覆盖目标尺寸，不拉伸比例
-            scale = max(target_w / src_w, target_h / src_h)
-            new_w = max(target_w, round(src_w * scale))
-            new_h = max(target_h, round(src_h * scale))
-            inpaint_img = inpaint_img.resize((new_w, new_h), Image.LANCZOS)
-            # 中心裁剪到目标尺寸
-            left = (new_w - target_w) // 2
-            top = (new_h - target_h) // 2
-            inpaint_img = inpaint_img.crop((left, top, left + target_w, top + target_h))
         if mask_img.size != (target_w, target_h):
             mask_img = mask_img.resize((target_w, target_h), Image.LANCZOS)
         mask_alpha = mask_img.split()[3] if mask_img.mode == "RGBA" else mask_img.convert("L")
         orig_rgba = orig_img.convert("RGBA")
-        inpaint_rgba = inpaint_img.convert("RGBA")
+        if inpaint_img.size == (target_w, target_h):
+            inpaint_rgba = inpaint_img.convert("RGBA")
+            projection_mode = "full-frame"
+            projection_box = (0, 0, target_w, target_h)
+        else:
+            inpaint_rgba, projection_mode, projection_box = _project_inpaint_onto_canvas(
+                inpaint_img,
+                mask_alpha,
+                (target_w, target_h),
+            )
+        print(
+            f"[image-inpaint-compose] raw={inpaint_img.width}x{inpaint_img.height} "
+            f"target={target_w}x{target_h} mode={projection_mode} box={projection_box}"
+        )
         composited = Image.composite(inpaint_rgba, orig_rgba, mask_alpha)
         buf = io.BytesIO()
         composited.save(buf, format="PNG")
