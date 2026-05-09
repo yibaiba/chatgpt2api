@@ -1534,26 +1534,6 @@ def _poll_image_ids(
             elapsed = int(time.time() - started)
             print(f"[poll-image] conv={conversation_id[:8]}... found {len(output_file_ids)} image(s) after {elapsed}s ({poll_count} polls)")
             return output_file_ids
-        if poll_count == 1:
-            # debug: 打印第一次轮询拿到的原始 file_ids 和过滤情况
-            print(f"[poll-image-debug] raw_file_ids={file_ids} input_ids={list(normalized_input_file_ids)}")
-            # 打印所有 mapping node 的 message author/content 结构（排查 asset_pointer 格式）
-            mapping_nodes = payload.get("mapping") or {}
-            print(f"[poll-image-debug] mapping nodes count={len(mapping_nodes)}")
-            for k, v in mapping_nodes.items():
-                msg = (v or {}).get("message") or {}
-                author = (msg.get("author") or {}).get("role", "?")
-                content = msg.get("content") or {}
-                ct = content.get("content_type", "?")
-                parts = content.get("parts") or []
-                print(f"[poll-image-debug] node={k[:8]}... role={author} content_type={ct} parts={len(parts)}")
-                for part in parts[:3]:
-                    if isinstance(part, dict):
-                        ap = part.get("asset_pointer", "")
-                        pt = part.get("content_type", part.get("type", ""))
-                        print(f"[poll-image-debug]   dict_part type={pt!r} asset_pointer={ap!r}")
-                    elif isinstance(part, str) and part:
-                        print(f"[poll-image-debug]   str_part={part[:120]!r}")
         # 检查对话是否已完成但返回文字（错误/拒绝）而非图片
         final_text = _extract_conversation_text(payload.get("mapping") or {})
         if final_text:
