@@ -122,6 +122,22 @@ function normalizeReferenceImage(image: StoredReferenceImage): StoredReferenceIm
   };
 }
 
+function normalizeOptionalReferenceImage(raw: unknown): StoredReferenceImage | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Record<string, unknown>;
+  const dataUrl = typeof candidate.dataUrl === "string" ? candidate.dataUrl : "";
+  if (!dataUrl) {
+    return undefined;
+  }
+  return {
+    name: typeof candidate.name === "string" && candidate.name ? candidate.name : "reference.png",
+    type: typeof candidate.type === "string" && candidate.type ? candidate.type : "image/png",
+    dataUrl,
+  };
+}
+
 function dataUrlMimeType(dataUrl: string) {
   const match = dataUrl.match(/^data:(.*?);base64,/);
   return match?.[1] || "image/png";
@@ -188,6 +204,10 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
         ? turn.status
         : derivedStatus,
     error: typeof turn.error === "string" ? turn.error : undefined,
+    inpaintOriginalImage: normalizeOptionalReferenceImage(turn.inpaintOriginalImage),
+    inpaintMaskImage: normalizeOptionalReferenceImage(turn.inpaintMaskImage),
+    inpaintConversationId: typeof turn.inpaintConversationId === "string" ? turn.inpaintConversationId : undefined,
+    inpaintParentMessageId: typeof turn.inpaintParentMessageId === "string" ? turn.inpaintParentMessageId : undefined,
   };
 }
 

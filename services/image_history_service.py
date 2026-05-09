@@ -181,6 +181,10 @@ class ImageHistoryService:
             "createdAt": self._clean_text(raw.get("createdAt") or raw.get("created_at")) or _now_iso(),
             "status": raw_status,
             "error": self._clean_text(raw.get("error")) or None,
+            "inpaintOriginalImage": self._normalize_reference_image(raw.get("inpaintOriginalImage")),
+            "inpaintMaskImage": self._normalize_reference_image(raw.get("inpaintMaskImage")),
+            "inpaintConversationId": self._clean_text(raw.get("inpaintConversationId")) or None,
+            "inpaintParentMessageId": self._clean_text(raw.get("inpaintParentMessageId")) or None,
         }
 
     def _normalize_owner(self, raw: object) -> dict | None:
