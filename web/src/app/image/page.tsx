@@ -260,6 +260,7 @@ export default function ImagePage() {
   const [maskEditorImageDataUrl, setMaskEditorImageDataUrl] = useState("");
   const [maskEditorImageFile, setMaskEditorImageFile] = useState<File | null>(null);
   const [maskEditorDefaultPrompt, setMaskEditorDefaultPrompt] = useState("");
+  const [maskEditorAvailableImages, setMaskEditorAvailableImages] = useState<{ dataUrl: string; id: string }[]>([]);
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const effectiveSelectedConversationId = useMemo(() => {
@@ -942,9 +943,21 @@ export default function ImagePage() {
       setMaskEditorImageDataUrl(payload.imageDataUrl);
       setMaskEditorImageFile(payload.imageFile);
       setMaskEditorDefaultPrompt(payload.prompt);
+      // 收集当前对话里所有成功生成的图供参考图选择
+      const available = (selectedConversation?.turns ?? []).flatMap((turn) =>
+        turn.status === "success"
+          ? turn.images
+              .filter((img) => img.status === "success" && img.b64_json)
+              .map((img) => ({
+                id: img.id,
+                dataUrl: `data:${img.mime_type || "image/png"};base64,${img.b64_json ?? ""}`,
+              }))
+          : [],
+      );
+      setMaskEditorAvailableImages(available);
       setMaskEditorOpen(true);
     },
-    [],
+    [selectedConversation],
   );
 
   const handleMaskEditorSubmit = useCallback(
@@ -1661,6 +1674,7 @@ export default function ImagePage() {
         open={maskEditorOpen}
         imageDataUrl={maskEditorImageDataUrl}
         defaultPrompt={maskEditorDefaultPrompt}
+        availableImages={maskEditorAvailableImages}
         onClose={() => setMaskEditorOpen(false)}
         onSubmit={handleMaskEditorSubmit}
       />

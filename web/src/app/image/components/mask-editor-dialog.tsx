@@ -7,10 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+type AvailableImage = { dataUrl: string; id: string };
+
 type MaskEditorDialogProps = {
   open: boolean;
   imageDataUrl: string;
   defaultPrompt?: string;
+  /** 当前对话已生成的图，可直接选为参考图 */
+  availableImages?: AvailableImage[];
   onClose: () => void;
   onSubmit: (maskFile: File, prompt: string, refImages: File[]) => void | Promise<void>;
 };
@@ -19,7 +23,7 @@ const MIN_BRUSH = 8;
 const MAX_BRUSH = 80;
 const DEFAULT_BRUSH = 28;
 
-export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClose, onSubmit }: MaskEditorDialogProps) {
+export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", availableImages = [], onClose, onSubmit }: MaskEditorDialogProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -38,8 +42,8 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
   const [refImages, setRefImages] = useState<{ file: File; preview: string }[]>([]);
   const refInputRef = useRef<HTMLInputElement>(null);
 
-  const handleRefImageAdd = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
+  /** 从 File 对象追加参考图（通用，最多到 4 张）*/
+  const appendRefFiles = useCallback((files: File[]) => {
     if (!files.length) return;
     setRefImages((prev) => {
       const remaining = 4 - prev.length;
@@ -49,8 +53,50 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
       }));
       return [...prev, ...toAdd];
     });
-    e.target.value = "";
   }, []);
+
+  const handleRefImageAdd = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    appendRefFiles(files);
+    e.target.value = "";
+  }, [appendRefFiles]);
+
+  /** 从历史生成图（dataUrl）追加参考图 */
+  const handlePickAvailableImage = useCallback((img: AvailableImage) => {
+    setRefImages((prev) => {
+      if (prev.length >= 4) return prev;
+      // 已选过则不重复添加（同 dataUrl）
+      if (prev.some((r) => r.preview === img.dataUrl)) return prev;
+      // dataUrl 直接当 preview，同时用它构造 File
+      const byteString = atob(img.dataUrl.split(",")[1] ?? "");
+      const mimeMatch = /data:(.*?);base64/.exec(img.dataUrl);
+      const mime = mimeMatch?.[1] ?? "image/png";
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.codePointAt(i) ?? 0;
+      const file = new File([ab], `ref-${img.id}.png`, { type: mime });
+      return [...prev, { file, preview: img.dataUrl }];
+    });
+  }, []);
+
+  /** Ctrl+V / Cmd+V 粘贴图片 */
+  const handlePaste = useCallback((e: React.ClipboardEvent | ClipboardEvent) => {
+    if (!open) return;
+    const items = Array.from((e as ClipboardEvent).clipboardData?.items ?? []);
+    const imageItems = items.filter((item) => item.type.startsWith("image/"));
+    if (!imageItems.length) return;
+    e.preventDefault();
+    const files = imageItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null);
+    appendRefFiles(files);
+  }, [open, appendRefFiles]);
+
+  // 监听全局粘贴（对话框打开时）
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: ClipboardEvent) => handlePaste(e);
+    document.addEventListener("paste", handler);
+    return () => document.removeEventListener("paste", handler);
+  }, [open, handlePaste]);
 
   const handleRefImageRemove = useCallback((preview: string) => {
     setRefImages((prev) => {
@@ -350,11 +396,47 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
                   disabled={submitting}
                 >
                   <ImagePlus className="size-3.5" />
-                  添加
+                  上传
                 </Button>
               </>
             )}
+            <span className="text-xs text-stone-400">或 Ctrl+V 粘贴</span>
           </div>
+
+          {/* 从已生成图中选择 */}
+          {availableImages.length > 0 && refImages.length < 4 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-stone-400">从已生成图中选择：</span>
+              <div className="flex flex-wrap gap-1.5">
+                {availableImages.map((img) => {
+                  const selected = refImages.some((r) => r.preview === img.dataUrl);
+                  return (
+                    <button
+                      key={img.id}
+                      type="button"
+                      onClick={() => handlePickAvailableImage(img)}
+                      disabled={submitting || (selected) || refImages.length >= 4}
+                      className={`relative size-14 shrink-0 overflow-hidden rounded-md border-2 transition-all ${
+                        selected
+                          ? "border-sky-500 opacity-60 cursor-default"
+                          : "border-transparent hover:border-sky-400 cursor-pointer"
+                      }`}
+                      aria-label={selected ? "已选择" : "选为参考图"}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={img.dataUrl} alt="历史图" className="size-full object-cover" />
+                      {selected && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-sky-500/20">
+                          <span className="text-[10px] font-medium text-sky-700">已选</span>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {refImages.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {refImages.map((r) => (
