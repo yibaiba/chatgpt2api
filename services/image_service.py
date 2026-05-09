@@ -2187,6 +2187,22 @@ def _project_inpaint_onto_canvas(
     return projected, "mask-bbox", target_box
 
 
+def _looks_like_full_frame_variant(
+    raw_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> bool:
+    raw_w, raw_h = raw_size
+    target_w, target_h = target_size
+    raw_area = raw_w * raw_h
+    target_area = target_w * target_h
+    if target_area <= 0:
+        return False
+    area_ratio = raw_area / target_area
+    # 经验规则：若返回图面积与目标图接近，通常是“整图方版/裁切版”，
+    # 不应按局部 patch 回贴；真正的局部 patch 往往明显更小。
+    return 0.72 <= area_ratio <= 1.45
+
+
 def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, mask_bytes: bytes) -> bytes:
     """合成兜底：用 mask 将 inpaint 结果叠合到原图。
     mask A=255（遮罩区）→ 使用 inpaint 结果像素（AI 修改的区域）。
@@ -2206,6 +2222,10 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
         if inpaint_img.size == (target_w, target_h):
             inpaint_rgba = inpaint_img.convert("RGBA")
             projection_mode = "full-frame"
+            projection_box = (0, 0, target_w, target_h)
+        elif _looks_like_full_frame_variant(inpaint_img.size, (target_w, target_h)):
+            inpaint_rgba = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGBA")
+            projection_mode = "full-frame-variant"
             projection_box = (0, 0, target_w, target_h)
         else:
             inpaint_rgba, projection_mode, projection_box = _project_inpaint_onto_canvas(
