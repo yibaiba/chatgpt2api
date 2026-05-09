@@ -969,7 +969,7 @@ export default function ImagePage() {
           mode: "edit" as ImageConversationMode,
           model: imageModel,
           prompt,
-          status: "queued" as const,
+          status: "generating" as const,
           createdAt: new Date().toISOString(),
           referenceImages: [],
           count: 1,
