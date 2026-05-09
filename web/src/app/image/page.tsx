@@ -1135,26 +1135,26 @@ export default function ImagePage() {
       }
 
       activeConversationQueueIds.add(conversationId);
-      if (queuedTurn.status !== "generating" || queuedTurn.error) {
-        await updateConversation(conversationId, (current) => {
-          const conversation = current ?? snapshot;
-          return {
-            ...conversation,
-            updatedAt: new Date().toISOString(),
-            turns: conversation.turns.map((turn) =>
-              turn.id === queuedTurn.id
-                ? {
-                    ...turn,
-                    status: "generating",
-                    error: undefined,
-                  }
-                : turn,
-            ),
-          };
-        });
-      }
 
       try {
+        if (queuedTurn.status !== "generating" || queuedTurn.error) {
+          await updateConversation(conversationId, (current) => {
+            const conversation = current ?? snapshot;
+            return {
+              ...conversation,
+              updatedAt: new Date().toISOString(),
+              turns: conversation.turns.map((turn) =>
+                turn.id === queuedTurn.id
+                  ? {
+                      ...turn,
+                      status: "generating",
+                      error: undefined,
+                    }
+                  : turn,
+              ),
+            };
+          });
+        }
         const referenceFiles = queuedTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${queuedTurn.id}-${index + 1}.png`, image.type),
         );
