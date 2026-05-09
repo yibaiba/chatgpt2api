@@ -218,32 +218,32 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     const img = imageRef.current;
     if (!canvas || !img) return null;
 
-    // 合成最终 mask：白色背景（保留区域）+ 黑色涂层区域（待编辑区域）
-    // API 约定：黑色 = 要被编辑的区域，白色 = 保持不变的区域
+    // 合成最终 mask：黑色背景 + 白色涂抹区域
+    // API 约定：白色 = 待编辑区域，黑色 = 保留区域
     const offscreen = document.createElement("canvas");
     offscreen.width = canvas.width;
     offscreen.height = canvas.height;
     const ctx = offscreen.getContext("2d");
     if (!ctx) return null;
 
-    // 白色背景（默认保留区域）
-    ctx.fillStyle = "white";
+    // 黑色背景（保留区域）
+    ctx.fillStyle = "black";
     ctx.fillRect(0, 0, offscreen.width, offscreen.height);
 
-    // 读取遮罩 canvas 像素，将有 alpha 的像素（用户涂抹区域）转为黑色（编辑区域）
+    // 读取遮罩 canvas 像素，将有 alpha 的像素（用户涂抹区域）转为白色（编辑区域）
     const srcCtx = canvas.getContext("2d");
     if (!srcCtx) return null;
     const srcData = srcCtx.getImageData(0, 0, canvas.width, canvas.height);
     const dstData = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
     for (let i = 0; i < srcData.data.length; i += 4) {
       if (srcData.data[i + 3] > 10) {
-        // 用户涂抹的区域 → 黑色（API 将此处视为待编辑区域）
-        dstData.data[i] = 0;
-        dstData.data[i + 1] = 0;
-        dstData.data[i + 2] = 0;
+        // 用户涂抹的区域 → 白色（API 将此处视为待编辑区域）
+        dstData.data[i] = 255;
+        dstData.data[i + 1] = 255;
+        dstData.data[i + 2] = 255;
         dstData.data[i + 3] = 255;
       }
-      // 透明区域保持白色（保留区域，已在背景填充）
+      // 透明区域保持黑色（保留区域）
     }
     ctx.putImageData(dstData, 0, 0);
 
