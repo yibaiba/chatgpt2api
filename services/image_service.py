@@ -392,6 +392,7 @@ def _prepare_picture_conversation(
     prompt: str,
     model: str,
     attachment_mime_types: Optional[list[str]] = None,
+    conversation_id: str = "",
 ) -> Optional[str]:
     session_id = str(uuid.uuid4())
     turn_trace_id = str(uuid.uuid4())
@@ -429,6 +430,8 @@ def _prepare_picture_conversation(
         "supported_encodings": ["v1"],
         "client_contextual_info": {"app_name": "chatgpt.com"},
     }
+    if conversation_id:
+        body["conversation_id"] = conversation_id
     if attachment_mime_types:
         body["attachment_mime_types"] = attachment_mime_types
     try:
@@ -444,8 +447,9 @@ def _prepare_picture_conversation(
         if response.ok:
             payload = response.json() or {}
             return payload.get("conduit_token") or None
-    except Exception:
-        pass
+        print(f"[prepare-picture] failed status={response.status_code} conv_id={conversation_id[:8] if conversation_id else 'new'} body={response.text[:200]!r}")
+    except Exception as exc:
+        print(f"[prepare-picture] exception conv_id={conversation_id[:8] if conversation_id else 'new'}: {exc}")
     return None
 
 
@@ -1145,6 +1149,120 @@ def _send_inpaint_conversation(
     )
 
 
+def _bootstrap_image_conversation(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token: Optional[str],
+    original_image: "EditInputImage",
+    model: str,
+) -> tuple[str, str]:
+    """两步法 inpaint 的第一步：上传原图，建立对话上下文。
+    返回 (conversation_id, last_message_id)，供后续 inpaint 请求使用。
+    不含 dalle_operation / picture_v2 提示，避免模型触发 DALL-E 生成；
+    模型只需简短文字响应确认图片即可，速度快（通常 2-5s）。
+    """
+    # 使用 _prepare_picture_conversation 获取 conduit_token（已验证能正常返回）
+    # prepare 端点用于路由，不影响实际对话中的 system_hints 行为
+    bootstrap_parent_id = "client-created-root"
+    conduit_token = _prepare_picture_conversation(
+        session, access_token, device_id,
+        bootstrap_parent_id, "I need to edit this image.", model,
+    )
+    if not conduit_token:
+        raise ImageGenerationError("bootstrap: failed to get conduit_token from prepare")
+
+    user_msg_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "openai-sentinel-chat-requirements-token": chat_token,
+        "x-conduit-token": conduit_token,
+    }
+    if proof_token:
+        headers["openai-sentinel-proof-token"] = proof_token
+
+    # 构建包含原图的多模态消息，不含 dalle_operation / system_hints picture_v2
+    # 目的：仅建立对话上下文，让后续 inpaint 能访问原图
+    image_parts, attachments = _build_picture_v2_edit_input_payload([original_image])
+    content = {
+        "content_type": "multimodal_text",
+        "parts": [*image_parts, "I need to edit this image."],
+    }
+    metadata = {
+        "selected_github_repos": [],
+        "selected_all_github_repos": False,
+        "system_hints": [],
+        "serialization_metadata": {"custom_symbol_offsets": []},
+        "attachments": attachments,
+    }
+    body = {
+        "action": "next",
+        "messages": [
+            {
+                "id": user_msg_id,
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": content,
+                "metadata": metadata,
+            }
+        ],
+        "parent_message_id": bootstrap_parent_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": False,
+        "system_hints": [],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "success",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+    response = _request_image_stream(
+        lambda: session.post(
+            BASE_URL + "/backend-api/f/conversation",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=60,
+        ),
+        retries=1,
+        fallback_error="bootstrap inpaint conversation failed",
+    )
+    parsed = _parse_sse(response)
+    conv_id = str(parsed.get("conversation_id") or "")
+    last_msg_id = str(parsed.get("last_message_id") or user_msg_id)
+    if not conv_id:
+        raise ImageGenerationError("bootstrap: SSE returned no conversation_id")
+    print(f"[image-inpaint-bootstrap] conv={conv_id[:8]}... last_msg={last_msg_id[:8] if last_msg_id else '?'}...")
+    return conv_id, last_msg_id
+
+
 def _run_inpaint_mode(
     session,
     access_token: str,
@@ -1164,6 +1282,7 @@ def _run_inpaint_mode(
 ) -> dict:
     # 纯遮罩时 prepare 不传 attachment_mime_types（HAR-1 entry 73 验证）
     # 有参考图时需传 attachment_mime_types（HAR-2 entry 22/23 验证）
+    # 续接已有对话（bootstrap 模式）时需传 conversation_id
     conduit_token = _prepare_picture_conversation(
         session,
         access_token,
@@ -1172,6 +1291,7 @@ def _run_inpaint_mode(
         prompt,
         upstream_model,
         attachment_mime_types=attachment_mime_types if attachment_mime_types else None,
+        conversation_id=conversation_id,
     )
     if not conduit_token:
         raise ImageGenerationError("inpaint mode: f/conversation/prepare returned no conduit_token")
@@ -1513,6 +1633,7 @@ def _poll_image_ids(
     conversation_id: str,
     input_file_ids: set[str] | None = None,
     timeout: float = 360,
+    force_poll_past_text: bool = False,
 ) -> list[str]:
     started = time.time()
     normalized_input_file_ids = input_file_ids or set()
@@ -1565,6 +1686,12 @@ def _poll_image_ids(
                     print(f"[poll-image] conv={conversation_id[:8]}... detected dalle tool call, waiting for async image...")
                 time.sleep(3)
                 continue
+            if force_poll_past_text:
+                # 已知有异步 DALL-E 任务（image_gen_task_id 存在），模型文字回复不代表任务失败
+                if poll_count % 5 == 1:
+                    print(f"[poll-image] conv={conversation_id[:8]}... async DALL-E task in progress, ignoring text response, keep polling...")
+                time.sleep(3)
+                continue
             # 对话有真实文字响应但没有图片，说明生成失败
             return []
         if poll_count % 10 == 0:
@@ -1605,12 +1732,16 @@ def _collect_edit_output(
     file_ids = _filter_output_file_ids(parsed.get("file_ids") or [], input_file_ids)
     response_text = str(parsed.get("text") or "").strip()
     if actual_conversation_id and not file_ids:
+        # 若 SSE 流中捕获到 image_gen_task_id，说明有异步 DALL-E 任务正在运行
+        # 此时即使模型返回了对话式文字也不代表失败，应继续轮询直到图片出现
+        has_async_task = bool(parsed.get("image_gen_task_id"))
         file_ids = _poll_image_ids(
             session,
             access_token,
             device_id,
             actual_conversation_id,
             input_file_ids,
+            force_poll_past_text=has_async_task,
         )
     return actual_conversation_id, file_ids, response_text
 
@@ -2708,7 +2839,28 @@ def inpaint_image_result(
         if actual_conversation_id_for_inpaint:
             print(f"[image-inpaint-upstream] using existing conv={actual_conversation_id_for_inpaint[:8]}... parent={actual_parent_message_id[:8]}...")
         else:
-            print(f"[image-inpaint-upstream] no conversation_id provided, standalone mode: including original image in content")
+            # 两步法：先建立包含原图的对话（bootstrap），再在该对话中发 inpaint 请求。
+            # 完全模拟 ChatGPT web UI 的遮罩编辑流程，确保 DALL-E 能正确使用 mask。
+            print(f"[image-inpaint-upstream] no conversation_id, bootstrapping conversation with original image...")
+            actual_conversation_id_for_inpaint, actual_parent_message_id = _bootstrap_image_conversation(
+                session, access_token, device_id,
+                chat_token, proof_token,
+                original_edit_image, upstream_model,
+            )
+            # 获取新的 chat_token / proof_token 用于后续 inpaint 请求
+            chat_token, pow_info = _chat_requirements(session, access_token, device_id)
+            proof_token = None
+            if pow_info.get("required"):
+                proof_token = _generate_proof_token(
+                    seed=str(pow_info["seed"]),
+                    difficulty=str(pow_info["difficulty"]),
+                    user_agent=USER_AGENT,
+                    proof_config=_pow_config(USER_AGENT),
+                )
+            print(
+                f"[image-inpaint-upstream] bootstrap done, "
+                f"conv={actual_conversation_id_for_inpaint[:8]}... parent={actual_parent_message_id[:8] if actual_parent_message_id else '?'}..."
+            )
 
         input_file_ids = {original_file_id, mask_file_id}
         if uploaded_ref_images:
@@ -2716,13 +2868,11 @@ def inpaint_image_result(
 
         # 收集附件 MIME 类型传递给 prepare
         # HAR 验证：纯遮罩（有 conv_id）prepare 无此字段（entry 73），有参考图时只传参考图 MIME（entry 22/23）
-        # 独立模式（无 conv_id，无参考图）：将原图加入 content，prepare 需知晓原图 MIME
+        # 两步法（bootstrap + inpaint）：inpaint 请求有 conv_id，无需传原图 MIME
         if uploaded_ref_images:
             inpaint_attachment_mime_types: Optional[list[str]] = list(dict.fromkeys(
                 [img.mime_type for img in uploaded_ref_images]
             )) or None
-        elif not actual_conversation_id_for_inpaint:
-            inpaint_attachment_mime_types = [orig_mime]
         else:
             inpaint_attachment_mime_types = None
 
@@ -2741,7 +2891,7 @@ def inpaint_image_result(
             ref_images=uploaded_ref_images if uploaded_ref_images else None,
             attachment_mime_types=inpaint_attachment_mime_types,
             conversation_id=actual_conversation_id_for_inpaint,
-            original_image=original_edit_image,
+            original_image=None,  # 两步法：原图已在 bootstrap 对话中，inpaint 请求不再重复附带
         )
 
         actual_conversation_id, file_ids, response_text = _collect_edit_output(
