@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eraser, Paintbrush, RotateCcw } from "lucide-react";
+import { Eraser, ImagePlus, Paintbrush, RotateCcw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,7 +12,7 @@ type MaskEditorDialogProps = {
   imageDataUrl: string;
   defaultPrompt?: string;
   onClose: () => void;
-  onSubmit: (maskFile: File, prompt: string) => void | Promise<void>;
+  onSubmit: (maskFile: File, prompt: string, refImages: File[]) => void | Promise<void>;
 };
 
 const MIN_BRUSH = 8;
@@ -34,6 +34,31 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
   const [canvasReady, setCanvasReady] = useState(false);
   // 自定义光标位置（相对于画布 wrapper）
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  // 参考图
+  const [refImages, setRefImages] = useState<{ file: File; preview: string }[]>([]);
+  const refInputRef = useRef<HTMLInputElement>(null);
+
+  const handleRefImageAdd = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setRefImages((prev) => {
+      const remaining = 4 - prev.length;
+      const toAdd = files.slice(0, remaining).map((f) => ({
+        file: f,
+        preview: URL.createObjectURL(f),
+      }));
+      return [...prev, ...toAdd];
+    });
+    e.target.value = "";
+  }, []);
+
+  const handleRefImageRemove = useCallback((preview: string) => {
+    setRefImages((prev) => {
+      const target = prev.find((r) => r.preview === preview);
+      if (target) URL.revokeObjectURL(target.preview);
+      return prev.filter((r) => r.preview !== preview);
+    });
+  }, []);
 
   // 同步 toolRef 以避免闭包陈旧引用
   useEffect(() => {
@@ -59,9 +84,15 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
     img.src = imageDataUrl;
   }, [open, imageDataUrl]);
 
-  // 重置时同步 prompt
+  // 重置时同步 prompt 和参考图
   useEffect(() => {
-    if (open) setPrompt(defaultPrompt);
+    if (open) {
+      setPrompt(defaultPrompt);
+      setRefImages((prev) => {
+        prev.forEach((r) => URL.revokeObjectURL(r.preview));
+        return [];
+      });
+    }
   }, [open, defaultPrompt]);
 
   const getCanvasPos = useCallback((canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
@@ -183,11 +214,11 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
     if (!maskFile) return;
     setSubmitting(true);
     try {
-      await onSubmit(maskFile, prompt.trim());
+      await onSubmit(maskFile, prompt.trim(), refImages.map((r) => r.file));
     } finally {
       setSubmitting(false);
     }
-  }, [prompt, exportMaskAsFile, onSubmit]);
+  }, [prompt, exportMaskAsFile, onSubmit, refImages]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -296,6 +327,53 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", onClo
         <p className="shrink-0 text-xs text-stone-500">
           用笔刷涂抹要修改的区域（<span className="font-medium text-sky-600">蓝色高亮 = 编辑区域</span>），然后输入描述并点击生成。
         </p>
+
+        {/* 参考图上传区 */}
+        <div className="flex shrink-0 flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-stone-500">参考图（可选，最多 4 张）</span>
+            {refImages.length < 4 && (
+              <>
+                <input
+                  ref={refInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleRefImageAdd}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 text-xs"
+                  onClick={() => refInputRef.current?.click()}
+                  disabled={submitting}
+                >
+                  <ImagePlus className="size-3.5" />
+                  添加
+                </Button>
+              </>
+            )}
+          </div>
+          {refImages.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {refImages.map((r) => (
+                <div key={r.preview} className="group relative size-16 shrink-0 overflow-hidden rounded-md border border-stone-200">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={r.preview} alt="参考图" className="size-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => handleRefImageRemove(r.preview)}
+                    className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-label="删除参考图"
+                  >
+                    <X className="size-2.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Prompt 输入 */}
         <div className="flex shrink-0 flex-col gap-2">

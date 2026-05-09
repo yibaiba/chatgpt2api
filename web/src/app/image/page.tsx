@@ -948,7 +948,7 @@ export default function ImagePage() {
   );
 
   const handleMaskEditorSubmit = useCallback(
-    async (maskFile: File, prompt: string) => {
+    async (maskFile: File, prompt: string, refImages: File[]) => {
       const imageFile = maskEditorImageFile;
       if (!imageFile) return;
       setMaskEditorOpen(false);
@@ -969,7 +969,7 @@ export default function ImagePage() {
           mode: "edit" as ImageConversationMode,
           model: imageModel,
           prompt,
-          status: "generating" as const,
+          status: "queued" as const,
           createdAt: new Date().toISOString(),
           referenceImages: [],
           count: 1,
@@ -996,7 +996,9 @@ export default function ImagePage() {
         const session = await getCachedOrSyncAuthSession();
         if (!session) throw new Error("未登录");
 
-        const job = await createImageInpaintJob(imageFile, maskFile, prompt, imageModel, {});
+        const job = await createImageInpaintJob(imageFile, maskFile, prompt, imageModel, {
+          refImages: refImages.length > 0 ? refImages : undefined,
+        });
         const result = await waitForImageJob(job);
 
         const resultImages = (result?.data ?? []) as GeneratedImageResponse["data"];
