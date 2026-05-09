@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Clock3, CornerDownLeft, LoaderCircle, Sparkles } from "lucide-react";
+import { Clock3, CornerDownLeft, LoaderCircle, Paintbrush, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { ImageGenerationRoute, ImageModel } from "@/lib/api";
@@ -35,6 +35,7 @@ type ImageResultsProps = {
   showConversationOwner?: boolean;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onReuseAsReference: (payload: { conversationId?: string; id?: string; dataUrl: string }) => void | Promise<void>;
+  onInpaint: (payload: { imageDataUrl: string; prompt: string; imageFile: File }) => void | Promise<void>;
   onReusePrompt: (payload: {
     conversationId?: string;
     prompt: string;
@@ -56,6 +57,7 @@ export function ImageResults({
   showConversationOwner = false,
   onOpenLightbox,
   onReuseAsReference,
+  onInpaint,
   onReusePrompt,
   formatConversationTime,
 }: ImageResultsProps) {
@@ -311,6 +313,33 @@ export function ImageResults({
                                 </span>
                               ) : null}
                             </div>
+                            <div className="flex items-center gap-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 w-7 rounded-full border-stone-200 bg-white px-0 text-stone-700 hover:bg-stone-50 sm:h-8 sm:w-auto sm:px-3"
+                              onClick={() => {
+                                const dataUrl = buildImageDataUrl(image);
+                                // dataUrl → File
+                                const byteString = atob(dataUrl.split(",")[1]);
+                                const ab = new ArrayBuffer(byteString.length);
+                                const ia = new Uint8Array(ab);
+                                for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+                                const mimeMatch = dataUrl.match(/^data:([^;]+);/);
+                                const mime = mimeMatch ? mimeMatch[1] : "image/png";
+                                const ext = mime.split("/")[1] || "png";
+                                const imageFile = new File([ab], `image.${ext}`, { type: mime });
+                                void onInpaint({
+                                  imageDataUrl: dataUrl,
+                                  prompt: turn.prompt,
+                                  imageFile,
+                                });
+                              }}
+                              aria-label="遮罩编辑"
+                            >
+                              <Paintbrush className="size-4" />
+                              <span className="hidden sm:inline">遮罩编辑</span>
+                            </Button>
                             <Button
                               variant="outline"
                               size="sm"
@@ -327,6 +356,7 @@ export function ImageResults({
                               <Sparkles className="size-4" />
                               <span className="hidden sm:inline">加入编辑</span>
                             </Button>
+                            </div>
                           </div>
                         </div>
                       );

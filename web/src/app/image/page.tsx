@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
+import { MaskEditorDialog } from "@/app/image/components/mask-editor-dialog";
 import { ImageLightbox } from "@/components/image-lightbox";
 import {
   Dialog,
@@ -23,6 +24,7 @@ import type { AuthSession, ImageHistoryPersistenceMode, UserRole } from "@/lib/a
 import {
   createImageEditJob,
   createImageGenerationJob,
+  createImageInpaintJob,
   fetchAccounts,
   waitForImageJob,
   type Account,
@@ -250,6 +252,12 @@ export default function ImagePage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "one"; id: string } | { type: "all" } | null>(null);
   const [isNearPageBottom, setIsNearPageBottom] = useState(true);
   const [didLoadStoredAspectRatio, setDidLoadStoredAspectRatio] = useState(false);
+
+  // 遮罩编辑 dialog 状态
+  const [maskEditorOpen, setMaskEditorOpen] = useState(false);
+  const [maskEditorImageDataUrl, setMaskEditorImageDataUrl] = useState("");
+  const [maskEditorImageFile, setMaskEditorImageFile] = useState<File | null>(null);
+  const [maskEditorDefaultPrompt, setMaskEditorDefaultPrompt] = useState("");
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const effectiveSelectedConversationId = useMemo(() => {
@@ -922,6 +930,112 @@ export default function ImagePage() {
     [appendReferenceImages, focusComposer, handleImageModeChange],
   );
 
+  const handleInpaint = useCallback(
+    (payload: { imageDataUrl: string; prompt: string; imageFile: File }) => {
+      setMaskEditorImageDataUrl(payload.imageDataUrl);
+      setMaskEditorImageFile(payload.imageFile);
+      setMaskEditorDefaultPrompt(payload.prompt);
+      setMaskEditorOpen(true);
+    },
+    [],
+  );
+
+  const handleMaskEditorSubmit = useCallback(
+    async (maskFile: File, prompt: string) => {
+      const imageFile = maskEditorImageFile;
+      if (!imageFile) return;
+      setMaskEditorOpen(false);
+
+      // 找到当前选中对话，并在其中新增一轮 inpainting
+      const conversationId = selectedConversationId ?? createId();
+      const turnId = createId();
+      const placeholderImageId = createId();
+
+      // 在当前对话（或新建对话）添加一个"进行中"的 turn
+      setConversations((prev) => {
+        const existingIdx = prev.findIndex((c) => c.id === conversationId);
+        const inpaintTurn = {
+          id: turnId,
+          mode: "edit" as ImageConversationMode,
+          model: imageModel,
+          prompt,
+          status: "queued" as const,
+          createdAt: new Date().toISOString(),
+          referenceImages: [],
+          count: 1,
+          images: [{ id: placeholderImageId, status: "loading" as const }],
+          aspectRatio: undefined,
+          outputQuality: undefined,
+          renderQuality: undefined,
+          background: undefined,
+          outputFormat: undefined,
+          compression: undefined,
+        };
+        if (existingIdx >= 0) {
+          const updated = { ...prev[existingIdx] };
+          updated.turns = [...updated.turns, inpaintTurn];
+          const next = [...prev];
+          next[existingIdx] = updated;
+          return next;
+        }
+        return prev;
+      });
+      setSelectedConversationId(conversationId);
+
+      try {
+        const session = await getCachedOrSyncAuthSession();
+        if (!session) throw new Error("未登录");
+
+        const job = await createImageInpaintJob(imageFile, maskFile, prompt, imageModel, {});
+        const result = await waitForImageJob(job);
+
+        const resultImages = (result?.data ?? []) as GeneratedImageResponse["data"];
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === conversationId);
+          if (idx < 0) return prev;
+          const conv = { ...prev[idx] };
+          const turnIdx = conv.turns.findIndex((t) => t.id === turnId);
+          if (turnIdx < 0) return prev;
+          const updatedTurn = { ...conv.turns[turnIdx] };
+          updatedTurn.status = "success";
+          updatedTurn.images = resultImages.map((item, i) => ({
+            id: i === 0 ? placeholderImageId : createId(),
+            status: "success" as const,
+            b64_json: item.b64_json || "",
+            generation_route: item.generation_route,
+          }));
+          const turns = [...conv.turns];
+          turns[turnIdx] = updatedTurn;
+          conv.turns = turns;
+          const next = [...prev];
+          next[idx] = conv;
+          return next;
+        });
+        toast.success("遮罩编辑完成");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "遮罩编辑失败";
+        toast.error(message);
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === conversationId);
+          if (idx < 0) return prev;
+          const conv = { ...prev[idx] };
+          const turnIdx = conv.turns.findIndex((t) => t.id === turnId);
+          if (turnIdx < 0) return prev;
+          const updatedTurn = { ...conv.turns[turnIdx] };
+          updatedTurn.status = "error";
+          updatedTurn.images = [{ id: placeholderImageId, status: "error" as const, error: message }];
+          const turns = [...conv.turns];
+          turns[turnIdx] = updatedTurn;
+          conv.turns = turns;
+          const next = [...prev];
+          next[idx] = conv;
+          return next;
+        });
+      }
+    },
+    [maskEditorImageFile, selectedConversationId, imageModel],
+  );
+
   const handleReusePrompt = useCallback(
     async (payload: {
       conversationId?: string;
@@ -1422,6 +1536,7 @@ export default function ImagePage() {
                 showConversationOwner={showConversationOwner}
                 onOpenLightbox={openLightbox}
                 onReuseAsReference={handleReuseAsReference}
+                onInpaint={handleInpaint}
                 onReusePrompt={handleReusePrompt}
                 formatConversationTime={formatConversationTime}
               />
@@ -1523,6 +1638,14 @@ export default function ImagePage() {
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}
         onIndexChange={setLightboxIndex}
+      />
+
+      <MaskEditorDialog
+        open={maskEditorOpen}
+        imageDataUrl={maskEditorImageDataUrl}
+        defaultPrompt={maskEditorDefaultPrompt}
+        onClose={() => setMaskEditorOpen(false)}
+        onSubmit={handleMaskEditorSubmit}
       />
     </>
   );

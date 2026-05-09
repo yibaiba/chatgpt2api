@@ -263,6 +263,7 @@ export type SettingsConfig = {
   sensitive_word_filter_enabled?: boolean;
   sensitive_words?: string[];
   image_history_persistence_mode?: ImageHistoryPersistenceMode | string;
+  image_upstream_model?: string;
   [key: string]: unknown;
 };
 
@@ -571,6 +572,49 @@ export async function editImage(
   options: ImageJobRequestOptions = {},
 ) {
   const job = await createImageEditJob(files, prompt, model, options);
+  return waitForImageJob(job);
+}
+
+export async function createImageInpaintJob(
+  originalFile: File,
+  maskFile: File,
+  prompt: string,
+  model: ImageModel = "gpt-image-2",
+  options: ImageJobRequestOptions & { originalGenId?: string; refImages?: File[] } = {},
+) {
+  const formData = new FormData();
+  formData.append("image", originalFile);
+  formData.append("mask", maskFile);
+  formData.append("prompt", prompt);
+  formData.append("model", model);
+  if (options.size) formData.append("size", options.size);
+  if (options.quality) formData.append("quality", options.quality);
+  if (options.background) formData.append("background", options.background);
+  if (options.output_format) formData.append("output_format", options.output_format);
+  if (typeof options.compression === "number") formData.append("compression", String(options.compression));
+  if (options.originalGenId) formData.append("original_gen_id", options.originalGenId);
+  if (options.refImages) {
+    options.refImages.forEach((rf) => formData.append("ref_image", rf));
+  }
+
+  const { job } = await httpRequest<ImageJobResponse<GeneratedImageResponse>>(
+    "/api/image-jobs/inpaint",
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+  return job;
+}
+
+export async function inpaintImage(
+  originalFile: File,
+  maskFile: File,
+  prompt: string,
+  model: ImageModel = "gpt-image-2",
+  options: ImageJobRequestOptions & { originalGenId?: string; refImages?: File[] } = {},
+) {
+  const job = await createImageInpaintJob(originalFile, maskFile, prompt, model, options);
   return waitForImageJob(job);
 }
 

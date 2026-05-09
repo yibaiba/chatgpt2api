@@ -185,6 +185,7 @@ class ConfigStore:
             fallback=False,
         )
         public_data["image_account_concurrency"] = self.image_account_concurrency
+        public_data["image_upstream_model"] = str(public_data.get("image_upstream_model") or "auto").strip() or "auto"
         public_data["sensitive_word_filter_enabled"] = self._normalize_bool(
             public_data.get("sensitive_word_filter_enabled"),
             fallback=False,
@@ -414,6 +415,7 @@ class ConfigStore:
         )
         next_data["sensitive_words"] = self._normalize_sensitive_words(next_data.get("sensitive_words"))
         next_data["global_system_prompt"] = str(next_data.get("global_system_prompt") or "").strip()
+        next_data["image_upstream_model"] = str(next_data.get("image_upstream_model") or "auto").strip() or "auto"
         next_data["storage_backend"] = self._normalize_storage_backend(next_data.get("storage_backend"))
         normalized_sqlite_path = self._canonical_storage_sqlite_path(next_data.get("storage_sqlite_path"))
         if normalized_sqlite_path:

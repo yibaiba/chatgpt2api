@@ -78,6 +78,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     storage_sqlite_path: normalizedStorageSqlitePath,
     storage_env_override_active: Boolean(config.storage_env_override_active),
     image_history_persistence_mode: imageHistoryPersistenceMode,
+    image_upstream_model: typeof config.image_upstream_model === "string" ? config.image_upstream_model : "auto",
   };
 }
 
@@ -158,6 +159,7 @@ type SettingsStore = {
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
   setImageHistoryPersistenceMode: (value: ImageHistoryPersistenceMode) => void;
+  setImageUpstreamModel: (value: string) => void;
 
   loadPools: (silent?: boolean) => Promise<void>;
   openAddDialog: () => void;
@@ -256,6 +258,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         base_url: String(config.base_url || "").trim(),
         image_history_persistence_mode:
           config.image_history_persistence_mode === "server" ? "server" : "browser",
+        image_upstream_model: String(config.image_upstream_model || "auto").trim() || "auto",
       });
       set({
         config: normalizeConfig(data.config),
@@ -431,6 +434,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           image_history_persistence_mode: value,
+        },
+      };
+    });
+  },
+
+  setImageUpstreamModel: (value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      return {
+        config: {
+          ...state.config,
+          image_upstream_model: value,
         },
       };
     });

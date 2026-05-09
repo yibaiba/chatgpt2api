@@ -391,6 +391,7 @@ def _prepare_picture_conversation(
     parent_message_id: str,
     prompt: str,
     model: str,
+    attachment_mime_types: Optional[list[str]] = None,
 ) -> Optional[str]:
     session_id = str(uuid.uuid4())
     turn_trace_id = str(uuid.uuid4())
@@ -428,6 +429,8 @@ def _prepare_picture_conversation(
         "supported_encodings": ["v1"],
         "client_contextual_info": {"app_name": "chatgpt.com"},
     }
+    if attachment_mime_types:
+        body["attachment_mime_types"] = attachment_mime_types
     try:
         response = _retry(
             lambda: session.post(
@@ -575,6 +578,74 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
     )
     if not process_resp.ok:
         raise ImageGenerationError(f"file process failed: {process_resp.status_code}")
+    return file_id
+
+
+def _upload_mask(session: Session, access_token: str, device_id: str, mask_data: bytes) -> str:
+    """上传遮罩 PNG，使用 dalle_agent use_case（与普通图片上传不同）"""
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_name": "mask.png",
+                "file_size": len(mask_data),
+                "use_case": "dalle_agent",
+                "timezone_offset_min": -480,
+                "reset_rate_limits": False,
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise ImageGenerationError(f"mask upload init failed: {response.status_code} {response.text[:200]}")
+    payload = response.json()
+    upload_url = payload.get("upload_url") or ""
+    file_id = payload.get("file_id") or ""
+    if not upload_url or not file_id:
+        raise ImageGenerationError("mask upload init returned no upload_url or file_id")
+
+    put_resp = _retry(
+        lambda: session.put(
+            upload_url,
+            headers={
+                "Content-Type": "image/png",
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-version": "2020-04-08",
+            },
+            data=mask_data,
+            timeout=60,
+        ),
+        retries=3,
+    )
+    if not (200 <= put_resp.status_code < 300):
+        raise ImageGenerationError(f"mask upload PUT failed: {put_resp.status_code}")
+
+    process_resp = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files/process_upload_stream",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_id": file_id,
+                "use_case": "dalle_agent",
+                "index_for_retrieval": False,
+                "file_name": "mask.png",
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not process_resp.ok:
+        raise ImageGenerationError(f"mask process failed: {process_resp.status_code}")
     return file_id
 
 
@@ -767,6 +838,77 @@ def _build_regular_picture_v2_body(
     }
 
 
+def _build_inpaint_picture_v2_body(
+    prompt: str,
+    parent_message_id: str,
+    model: str,
+    original_file_id: str,
+    mask_file_id: str,
+    original_gen_id: str,
+    ref_images: Optional[list[EditInputImage]] = None,
+) -> dict:
+    """构建 inpainting 对话 payload。
+    当无参考图时 content_type=text；有参考图时 content_type=multimodal_text。
+    """
+    dalle_operation = {
+        "type": "inpainting",
+        "original_file_id": original_file_id,
+        "mask_file_id": mask_file_id,
+        "original_gen_id": original_gen_id,
+    }
+    metadata: dict = {
+        "selected_github_repos": [],
+        "selected_all_github_repos": False,
+        "system_hints": ["picture_v2"],
+        "serialization_metadata": {"custom_symbol_offsets": []},
+        "dalle": {"from_client": {"operation": dalle_operation}},
+    }
+    if ref_images:
+        image_parts, attachments = _build_picture_v2_edit_input_payload(ref_images)
+        content: dict = {
+            "content_type": "multimodal_text",
+            "parts": [*image_parts, prompt],
+        }
+        metadata["attachments"] = attachments
+    else:
+        content = {"content_type": "text", "parts": [prompt]}
+
+    return {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "create_time": time.time(),
+                "content": content,
+                "metadata": metadata,
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "timezone_offset_min": -480,
+        "timezone": "Asia/Shanghai",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "enable_message_followups": True,
+        "system_hints": ["picture_v2"],
+        "supports_buffering": True,
+        "supported_encodings": ["v1"],
+        "client_prepare_state": "success",
+        "paragen_cot_summary_display_override": "allow",
+        "force_parallel_switch": "auto",
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+            "app_name": "chatgpt.com",
+        },
+    }
+
+
 def _send_regular_generation_conversation(
     session: Session,
     access_token: str,
@@ -856,6 +998,102 @@ def _send_regular_edit_conversation(
         retries=2,
         fallback_error="f/conversation failed",
     )
+
+
+def _send_inpaint_conversation(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token: Optional[str],
+    parent_message_id: str,
+    prompt: str,
+    model: str,
+    original_file_id: str,
+    mask_file_id: str,
+    original_gen_id: str,
+    conduit_token: str,
+    ref_images: Optional[list[EditInputImage]] = None,
+):
+    session_id = str(uuid.uuid4())
+    turn_trace_id = str(uuid.uuid4())
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "zh-CN",
+        "oai-session-id": session_id,
+        "oai-client-build-number": _cached_build_number,
+        "oai-client-version": _cached_client_version,
+        "origin": BASE_URL,
+        "referer": BASE_URL + "/",
+        "x-oai-turn-trace-id": turn_trace_id,
+        "openai-sentinel-chat-requirements-token": chat_token,
+        "x-conduit-token": conduit_token,
+    }
+    if proof_token:
+        headers["openai-sentinel-proof-token"] = proof_token
+    body = _build_inpaint_picture_v2_body(
+        prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id, ref_images
+    )
+    return _request_image_stream(
+        lambda: session.post(
+            BASE_URL + "/backend-api/f/conversation",
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=180,
+        ),
+        retries=2,
+        fallback_error="inpaint f/conversation failed",
+    )
+
+
+def _run_inpaint_mode(
+    session,
+    access_token: str,
+    device_id: str,
+    chat_token: str,
+    proof_token,
+    parent_message_id: str,
+    prompt: str,
+    upstream_model: str,
+    original_file_id: str,
+    mask_file_id: str,
+    original_gen_id: str,
+    ref_images: Optional[list[EditInputImage]] = None,
+    attachment_mime_types: Optional[list[str]] = None,
+) -> dict:
+    conduit_token = _prepare_picture_conversation(
+        session,
+        access_token,
+        device_id,
+        parent_message_id,
+        prompt,
+        upstream_model,
+        attachment_mime_types=attachment_mime_types,
+    )
+    if not conduit_token:
+        raise ImageGenerationError("inpaint mode: f/conversation/prepare returned no conduit_token")
+
+    response = _send_inpaint_conversation(
+        session,
+        access_token,
+        device_id,
+        chat_token,
+        proof_token,
+        parent_message_id,
+        prompt,
+        upstream_model,
+        original_file_id,
+        mask_file_id,
+        original_gen_id,
+        conduit_token,
+        ref_images=ref_images,
+    )
+    return _parse_sse(response)
 
 
 def _send_conversation(
@@ -1033,6 +1271,8 @@ def _parse_sse(response) -> dict:
     conversation_id = ""
     latest_text = ""
     resume_conduit_token = ""
+    image_gen_task_id = ""
+    async_status_seen = False
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -1042,8 +1282,10 @@ def _parse_sse(response) -> dict:
         if not line.startswith("data:"):
             continue
         payload = line[5:].strip()
-        if payload in ("", "[DONE]"):
+        if payload == "[DONE]":
             break
+        if not payload:
+            continue
         if not conversation_id:
             matched_conversation_id = re.search(r'"conversation_id"\s*:\s*"([^"]+)"', payload)
             if matched_conversation_id:
@@ -1083,6 +1325,15 @@ def _parse_sse(response) -> dict:
         data = obj.get("v")
         if isinstance(data, dict):
             conversation_id = str(data.get("conversation_id") or conversation_id)
+            # 从 tool message metadata 中提取 image_gen_task_id
+            msg = data.get("message") or {}
+            msg_meta = msg.get("metadata") or {}
+            task_id = str(msg_meta.get("image_gen_task_id") or "")
+            if task_id and not image_gen_task_id:
+                image_gen_task_id = task_id
+        # 检测异步状态
+        if obj.get("type") == "conversation_async_status":
+            async_status_seen = True
         message = obj.get("message") or {}
         content = message.get("content") or {}
         if content.get("content_type") == "text":
@@ -1091,11 +1342,15 @@ def _parse_sse(response) -> dict:
                 part_text = str(parts[0] or "").strip()
                 if part_text:
                     latest_text = part_text
+    if image_gen_task_id or async_status_seen:
+        print(f"[parse-sse] conv={conversation_id[:8] if conversation_id else '?'}... async=True task_id={image_gen_task_id or 'n/a'} file_ids_in_stream={len(file_ids)}")
     return {
         "conversation_id": conversation_id,
         "file_ids": file_ids,
         "text": latest_text,
         "resume_conduit_token": resume_conduit_token,
+        "image_gen_task_id": image_gen_task_id,
+        "async_mode": async_status_seen,
     }
 
 
@@ -1135,10 +1390,12 @@ def _poll_image_ids(
     device_id: str,
     conversation_id: str,
     input_file_ids: set[str] | None = None,
+    timeout: float = 360,
 ) -> list[str]:
     started = time.time()
     normalized_input_file_ids = input_file_ids or set()
-    while time.time() - started < 180:
+    poll_count = 0
+    while time.time() - started < timeout:
         response = _retry(
             lambda: session.get(
                 f"{BASE_URL}/backend-api/conversation/{conversation_id}",
@@ -1152,7 +1409,11 @@ def _poll_image_ids(
             retries=2,
             retry_on_status=(429, 502, 503, 504),
         )
+        poll_count += 1
         if response.status_code != 200:
+            if poll_count % 10 == 0:
+                elapsed = int(time.time() - started)
+                print(f"[poll-image] conv={conversation_id[:8]}... poll={poll_count} elapsed={elapsed}s status={response.status_code}")
             time.sleep(3)
             continue
         try:
@@ -1163,8 +1424,15 @@ def _poll_image_ids(
         file_ids = _extract_image_ids(payload.get("mapping") or {})
         output_file_ids = _filter_output_file_ids(file_ids, normalized_input_file_ids)
         if output_file_ids:
+            elapsed = int(time.time() - started)
+            print(f"[poll-image] conv={conversation_id[:8]}... found {len(output_file_ids)} image(s) after {elapsed}s ({poll_count} polls)")
             return output_file_ids
+        if poll_count % 10 == 0:
+            elapsed = int(time.time() - started)
+            print(f"[poll-image] conv={conversation_id[:8]}... still waiting, elapsed={elapsed}s polls={poll_count}")
         time.sleep(3)
+    elapsed = int(time.time() - started)
+    print(f"[poll-image] conv={conversation_id[:8]}... timeout after {elapsed}s ({poll_count} polls), no image found")
     return []
 
 
@@ -1792,6 +2060,7 @@ def _run_regular_edit_mode(
     upstream_model: str,
     images: list[EditInputImage],
 ) -> dict:
+    attachment_mime_types = list(dict.fromkeys(img.mime_type for img in images))
     conduit_token = _prepare_picture_conversation(
         session,
         access_token,
@@ -1799,6 +2068,7 @@ def _run_regular_edit_mode(
         parent_message_id,
         prompt,
         upstream_model,
+        attachment_mime_types=attachment_mime_types,
     )
     if not conduit_token:
         raise ImageGenerationError("regular image mode: f/conversation/prepare returned no conduit_token")
@@ -1950,7 +2220,7 @@ def generate_image_result(
                     device_id,
                     chat_token,
                     proof_token,
-                    parent_message_id,
+                    "client-created-root",
                     prompt,
                     upstream_model,
                 )
@@ -1965,7 +2235,7 @@ def generate_image_result(
                         device_id,
                         chat_token,
                         proof_token,
-                        parent_message_id,
+                        "client-created-root",
                         prompt,
                         upstream_model,
                         conversation_id,
@@ -2126,7 +2396,7 @@ def edit_image_result(
                 proof_config=_pow_config(USER_AGENT),
             )
         conversation_id = _conversation_init(session, access_token, device_id)
-        parent_message_id = str(uuid.uuid4())
+        parent_message_id = "client-created-root"
         parsed = None
         actual_conversation_id = ""
         file_ids: list[str] = []
@@ -2199,3 +2469,144 @@ def edit_image_result(
         raise
     finally:
         session.close()
+
+
+def inpaint_image_result(
+    access_token: str,
+    prompt: str,
+    original_image: tuple[bytes, str, str],
+    mask_data: bytes,
+    model: str = DEFAULT_MODEL,
+    response_format: str = "b64_json",
+    base_url: str = None,
+    *,
+    original_gen_id: str = "",
+    ref_images: list[tuple[bytes, str, str]] | None = None,
+    image_options: ImageRequestOptions | None = None,
+) -> dict:
+    """图片局部重绘（inpainting）。
+    original_image: (bytes, file_name, mime_type) 原始图片
+    mask_data: PNG 格式遮罩（白色=编辑区域，黑色=保留区域）
+    original_gen_id: 可选，原图生成 UUID；不提供则自动生成
+    ref_images: 可选参考图列表
+    """
+    prompt = str(prompt or "").strip()
+    access_token = str(access_token or "").strip()
+    if not prompt:
+        raise ImageGenerationError("prompt is required")
+    if not access_token:
+        raise ImageGenerationError("token is required")
+    if not original_image or not original_image[0]:
+        raise ImageGenerationError("original image is required")
+    if not mask_data:
+        raise ImageGenerationError("mask is required")
+
+    upstream_model = _resolve_upstream_edit_model(model)
+    print(
+        f"[image-inpaint-upstream] start token={access_token[:12]}... "
+        f"requested_model={model} upstream_model={upstream_model}"
+    )
+
+    session, fp = _new_session(access_token)
+    try:
+        device_id = _bootstrap(session, fp)
+
+        # 上传原始图片（multimodal）
+        orig_bytes, orig_name, orig_mime = original_image
+        orig_width, orig_height = _get_image_dimensions(orig_bytes)
+        original_file_id = _upload_image(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
+        print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id}")
+
+        # 上传遮罩（dalle_agent）
+        mask_file_id = _upload_mask(session, access_token, device_id, mask_data)
+        print(f"[image-inpaint-upstream] uploaded mask_file_id={mask_file_id}")
+
+        # 上传参考图（可选，multimodal）
+        uploaded_ref_images: list[EditInputImage] = []
+        if ref_images:
+            for ref_bytes, ref_name, ref_mime in ref_images:
+                ref_id = _upload_image(session, access_token, device_id, ref_bytes, ref_name, ref_mime)
+                ref_w, ref_h = _get_image_dimensions(ref_bytes)
+                uploaded_ref_images.append(EditInputImage(
+                    file_id=ref_id, data=ref_bytes, file_name=ref_name, mime_type=ref_mime,
+                    width=ref_w, height=ref_h,
+                ))
+                print(f"[image-inpaint-upstream] uploaded ref_file_id={ref_id}")
+
+        gen_id = str(original_gen_id or "").strip() or str(uuid.uuid4())
+
+        chat_token, pow_info = _chat_requirements(session, access_token, device_id)
+        proof_token = None
+        if pow_info.get("required"):
+            proof_token = _generate_proof_token(
+                seed=str(pow_info["seed"]),
+                difficulty=str(pow_info["difficulty"]),
+                user_agent=USER_AGENT,
+                proof_config=_pow_config(USER_AGENT),
+            )
+
+        parent_message_id = "client-created-root"
+        input_file_ids = {original_file_id, mask_file_id}
+        if uploaded_ref_images:
+            input_file_ids.update(img.file_id for img in uploaded_ref_images)
+
+        # 收集附件 MIME 类型（原图 + 参考图）传递给 prepare
+        inpaint_attachment_mime_types = list(dict.fromkeys(
+            [orig_mime] + [img.mime_type for img in uploaded_ref_images]
+        ))
+
+        parsed = _run_inpaint_mode(
+            session,
+            access_token,
+            device_id,
+            chat_token,
+            proof_token,
+            parent_message_id,
+            prompt,
+            upstream_model,
+            original_file_id,
+            mask_file_id,
+            gen_id,
+            ref_images=uploaded_ref_images if uploaded_ref_images else None,
+            attachment_mime_types=inpaint_attachment_mime_types,
+        )
+
+        actual_conversation_id, file_ids, response_text = _collect_edit_output(
+            session,
+            access_token,
+            device_id,
+            parsed,
+            input_file_ids,
+        )
+        if not file_ids:
+            if response_text:
+                raise ImageGenerationError(image_stream_error_message(response_text))
+            raise ImageGenerationError("no image returned from inpaint upstream")
+
+        first_file_id = str(file_ids[0])
+        download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
+        if not download_url:
+            raise ImageGenerationError("failed to get download url")
+
+        result_data = _build_image_result_data(
+            prompt,
+            response_format,
+            "inpaint",
+            image_options=image_options,
+            session=session,
+            download_url=download_url,
+            base_url=base_url,
+        )
+        print(
+            f"[image-inpaint-upstream] success token={access_token[:12]}... format={response_format}"
+        )
+        return {
+            "created": time.time_ns() // 1_000_000_000,
+            "data": [result_data],
+        }
+    except Exception as exc:
+        print(f"[image-inpaint-upstream] fail token={access_token[:12]}... error={exc}")
+        raise
+    finally:
+        session.close()
+

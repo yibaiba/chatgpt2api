@@ -33,6 +33,7 @@ export function ConfigCard() {
   const setSensitiveWordsText = useSettingsStore((state) => state.setSensitiveWordsText);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
   const setImageHistoryPersistenceMode = useSettingsStore((state) => state.setImageHistoryPersistenceMode);
+  const setImageUpstreamModel = useSettingsStore((state) => state.setImageUpstreamModel);
   const saveConfig = useSettingsStore((state) => state.saveConfig);
 
   if (isLoadingConfig) {
@@ -135,7 +136,25 @@ export function ConfigCard() {
               限制单个账号同时处理的图片请求数；默认 1，可在多并发排队场景下降低误判“无可用图片额度”。
             </p>
           </div>
-
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">图片上游模型</label>
+            <Select
+              value={String(config?.image_upstream_model || "auto")}
+              onValueChange={(value) => setImageUpstreamModel(value)}
+            >
+              <SelectTrigger className="h-11 rounded-xl border-stone-200 bg-white">
+                <SelectValue placeholder="选择图片上游模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">自动（推荐，让官方路由最优模型）</SelectItem>
+                <SelectItem value="gpt-5-5">gpt-5-5（质量最佳，官网同款）</SelectItem>
+                <SelectItem value="gpt-5-3">gpt-5-3（旧版）</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-stone-500">
+              控制 gpt-image-1/2 生图时使用的上游对话模型；gpt-5-5 对中文提示词的理解更好，生成质量更高。
+            </p>
+          </div>
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm font-medium text-stone-700">账号自动清理</label>
             <label className="flex items-start gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">

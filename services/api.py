@@ -861,6 +861,43 @@ def create_app() -> FastAPI:
             print(f"[image-job] edit failed job={job_id} error={exc}")
             update_image_job(job_id, status="error", error=str(exc) or "编辑图片失败")
 
+    def run_inpaint_image_job(
+            job_id: str,
+            identity: dict,
+            reserved_count: int,
+            prompt: str,
+            original_image: tuple[bytes, str, str],
+            mask_data: bytes,
+            model: str,
+            image_options: ImageRequestOptions,
+            response_format: str,
+            base_url: str | None,
+            original_gen_id: str,
+            ref_images: list[tuple[bytes, str, str]] | None,
+    ) -> None:
+        try:
+            update_image_job(job_id, status="running")
+            result = chatgpt_service.inpaint_with_pool(
+                prompt,
+                original_image,
+                mask_data,
+                model,
+                response_format=response_format,
+                base_url=base_url,
+                original_gen_id=original_gen_id,
+                ref_images=ref_images,
+                image_options=image_options,
+            )
+            auth_service.settle_images_for_identity(identity, reserved_count, count_generated_images(result))
+            update_image_job(job_id, status="success", result=result)
+        except ImageGenerationError as exc:
+            auth_service.settle_images_for_identity(identity, reserved_count, 0)
+            update_image_job(job_id, status="error", error=str(exc))
+        except Exception as exc:
+            auth_service.settle_images_for_identity(identity, reserved_count, 0)
+            print(f"[image-job] inpaint failed job={job_id} error={exc}")
+            update_image_job(job_id, status="error", error=str(exc) or "遮罩编辑失败")
+
     @router.get("/v1/models")
     async def list_models():
         return {
@@ -1312,6 +1349,90 @@ def create_app() -> FastAPI:
         ).start()
         return {"job": serialize_image_job(job)}
 
+    @router.post("/api/image-jobs/inpaint")
+    async def create_image_inpaint_job(
+            request: Request,
+            authorization: str | None = Header(default=None),
+            image: UploadFile = File(...),
+            mask: UploadFile = File(...),
+            prompt: str = Form(...),
+            model: str = Form(default="gpt-image-2"),
+            size: str | None = Form(default=None),
+            quality: str | None = Form(default=None),
+            background: str | None = Form(default=None),
+            output_format: str | None = Form(default=None),
+            compression: int | None = Form(default=None),
+            response_format: str = Form(default="b64_json"),
+            original_gen_id: str | None = Form(default=None),
+            ref_image: list[UploadFile] | None = File(default=None),
+    ):
+        identity = require_session(request, authorization)
+
+        try:
+            image_options = build_image_request_options(
+                model=model,
+                size=size,
+                quality=quality,
+                background=background,
+                output_format=output_format,
+                compression=compression,
+            )
+            normalized_response_format = normalize_image_response_format(response_format)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+        base_url = require_image_base_url() if normalized_response_format == "url" else None
+        original_data = await image.read()
+        if not original_data:
+            raise HTTPException(status_code=400, detail={"error": "image file is empty"})
+        mask_data = await mask.read()
+        if not mask_data:
+            raise HTTPException(status_code=400, detail={"error": "mask file is empty"})
+
+        original_image_tuple = (original_data, image.filename or "image.png", image.content_type or "image/png")
+        ref_images: list[tuple[bytes, str, str]] | None = None
+        if ref_image:
+            ref_images = []
+            for rf in ref_image:
+                rf_data = await rf.read()
+                if rf_data:
+                    ref_images.append((rf_data, rf.filename or "ref.png", rf.content_type or "image/png"))
+            if not ref_images:
+                ref_images = None
+
+        normalized_prompt = build_image_prompt(prompt, image_options)
+        ensure_prompt_not_blocked(
+            normalized_prompt,
+            enabled=bool(getattr(config, "sensitive_word_filter_enabled", False)),
+            sensitive_words=getattr(config, "sensitive_words", []),
+        )
+        try:
+            auth_service.reserve_images_for_identity(identity, 1)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+
+        job = create_image_job(identity)
+        Thread(
+            target=run_inpaint_image_job,
+            args=(
+                job["id"],
+                dict(identity),
+                1,
+                normalized_prompt,
+                original_image_tuple,
+                mask_data,
+                model,
+                image_options,
+                normalized_response_format,
+                base_url,
+                str(original_gen_id or ""),
+                ref_images,
+            ),
+            name=f"image-inpaint-job-{job['id']}",
+            daemon=True,
+        ).start()
+        return {"job": serialize_image_job(job)}
+
     @router.get("/api/image-jobs/{job_id}")
     async def get_image_job(job_id: str, request: Request, authorization: str | None = Header(default=None)):
         identity = require_session(request, authorization)
@@ -1373,6 +1494,7 @@ def create_app() -> FastAPI:
             authorization: str | None = Header(default=None),
             image: list[UploadFile] | None = File(default=None),
             image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
+            mask: UploadFile | None = File(default=None),
             prompt: str = Form(...),
             model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
@@ -1382,6 +1504,7 @@ def create_app() -> FastAPI:
             output_format: str | None = Form(default=None),
             compression: int | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
+            original_gen_id: str | None = Form(default=None),
     ):
         identity = require_session(request, authorization)
         if n < 1 or n > 4:
@@ -1415,6 +1538,40 @@ def create_app() -> FastAPI:
             auth_service.reserve_images_for_identity(identity, n)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
+
+        # inpainting 模式：当提供 mask 且 n=1 时走 inpaint 流程
+        if mask is not None:
+            if n != 1:
+                auth_service.settle_images_for_identity(identity, n, 0)
+                raise HTTPException(status_code=400, detail={"error": "inpainting only supports n=1"})
+            mask_data = await mask.read()
+            if not mask_data:
+                auth_service.settle_images_for_identity(identity, n, 0)
+                raise HTTPException(status_code=400, detail={"error": "mask file is empty"})
+            original_image = images[0]  # (bytes, file_name, mime_type)
+            ref_images = images[1:] if len(images) > 1 else None
+            try:
+                result = await run_in_threadpool(
+                    chatgpt_service.inpaint_with_pool,
+                    normalized_prompt,
+                    original_image,
+                    mask_data,
+                    model,
+                    normalized_response_format,
+                    base_url,
+                    original_gen_id=str(original_gen_id or ""),
+                    ref_images=ref_images,
+                    image_options=image_options,
+                )
+            except ImageGenerationError as exc:
+                auth_service.settle_images_for_identity(identity, n, 0)
+                raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            except Exception:
+                auth_service.settle_images_for_identity(identity, n, 0)
+                raise
+            auth_service.settle_images_for_identity(identity, n, count_generated_images(result))
+            return result
+
         try:
             result = await run_in_threadpool(
                 chatgpt_service.edit_with_pool,
