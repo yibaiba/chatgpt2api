@@ -1044,8 +1044,10 @@ class ChatGPTService:
                     original_gen_id=original_gen_id,
                     ref_images=ref_images,
                     image_options=image_options,
-                    conversation_id=conversation_id,
-                    parent_message_id=parent_message_id,
+                    # 账号池模式：conversation_id 属于生成时的账号，跨账号使用会导致 404
+                    # 原图已重新上传（original_file_id 是当前账号的），无需续接原会话
+                    conversation_id="",
+                    parent_message_id="",
                 )
                 account = self._mark_image_request_result(request_token, success=True, model=model)
                 print(
