@@ -1119,15 +1119,6 @@ def _send_inpaint_conversation(
         prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id,
         ref_images=ref_images, original_image=original_image,
     )
-    # [debug-inpaint] 打印 body 关键字段，排查 mask 是否正确传入
-    import json as _json
-    _msg = body.get("messages", [{}])[0]
-    _dalle_op = _msg.get("metadata", {}).get("dalle", {}).get("from_client", {}).get("operation", {})
-    _content = _msg.get("content", {})
-    _parts_types = [p.get("content_type") if isinstance(p, dict) else type(p).__name__ for p in _content.get("parts", [])]
-    print(f"[debug-inpaint] dalle_operation={_json.dumps(_dalle_op)}")
-    print(f"[debug-inpaint] content_type={_content.get('content_type')} parts_count={len(_content.get('parts',[]))} part_types={_parts_types}")
-    print(f"[debug-inpaint] client_prepare_state={body.get('client_prepare_state')}")
     return _request_image_stream(
         lambda: session.post(
             BASE_URL + "/backend-api/f/conversation",
