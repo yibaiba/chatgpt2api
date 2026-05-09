@@ -15,6 +15,7 @@ from services.image_service import (
     ImageGenerationError,
     edit_image_result,
     generate_image_result,
+    inpaint_image_result,
     is_rate_limited_image_error,
     is_retryable_image_output_error,
     is_token_invalid_error,
@@ -86,12 +87,12 @@ class ChatGPTService:
     def _is_codex_image_model(model: str) -> bool:
         return str(model or "").strip() == CODEX_IMAGE_MODEL
 
-    def _get_image_request_token(self, model: str) -> str:
+    def _get_image_request_token(self, model: str, excluded_tokens: set[str] | None = None) -> str:
         if self._is_codex_image_model(model):
             getter = getattr(self.account_service, "get_codex_image_access_token", None)
             if callable(getter):
                 return getter()
-        return self.account_service.get_available_access_token()
+        return self.account_service.get_available_access_token(excluded_tokens=excluded_tokens)
 
     def _mark_image_request_result(self, access_token: str, success: bool, model: str) -> dict | None:
         if self._is_codex_image_model(model):
@@ -1000,6 +1001,67 @@ class ChatGPTService:
             "created": created,
             "data": image_items,
         }
+
+    def inpaint_with_pool(
+        self,
+        prompt: str,
+        original_image: tuple[bytes, str, str],
+        mask_data: bytes,
+        model: str,
+        response_format: str = "b64_json",
+        base_url: str | None = None,
+        *,
+        original_gen_id: str = "",
+        ref_images: list[tuple[bytes, str, str]] | None = None,
+        image_options: ImageRequestOptions | None = None,
+    ):
+        _INPAINT_MAX_RETRIES = 3
+        tried_tokens: set[str] = set()
+        last_error: str = "inpaint failed"
+
+        for attempt in range(1, _INPAINT_MAX_RETRIES + 1):
+            try:
+                request_token = self._get_image_request_token(model, excluded_tokens=tried_tokens)
+            except RuntimeError as exc:
+                raise ImageGenerationError(last_error or str(exc)) from exc
+
+            tried_tokens.add(request_token)
+            print(
+                f"[image-inpaint] attempt={attempt}/{_INPAINT_MAX_RETRIES} "
+                f"token={request_token[:12]}... model={model}"
+            )
+            try:
+                result = inpaint_image_result(
+                    request_token,
+                    prompt,
+                    original_image,
+                    mask_data,
+                    model,
+                    response_format=response_format,
+                    base_url=base_url,
+                    original_gen_id=original_gen_id,
+                    ref_images=ref_images,
+                    image_options=image_options,
+                )
+                account = self._mark_image_request_result(request_token, success=True, model=model)
+                print(
+                    f"[image-inpaint] success attempt={attempt} token={request_token[:12]}... "
+                    f"quota={account.get('quota') if account else 'unknown'}"
+                )
+                return result
+            except ImageGenerationError as exc:
+                self._mark_image_request_result(request_token, success=False, model=model)
+                last_error = str(exc)
+                # 「no image returned」通常表示该账号不支持编辑功能，换号重试
+                if "no image returned" in last_error and attempt < _INPAINT_MAX_RETRIES:
+                    print(
+                        f"[image-inpaint] account doesn't support inpainting, "
+                        f"retrying with different account (attempt {attempt}/{_INPAINT_MAX_RETRIES})"
+                    )
+                    continue
+                raise
+
+        raise ImageGenerationError(last_error)
 
     def create_image_completion(self, body: dict[str, object]) -> dict[str, object]:
         if not is_image_chat_request(body):
