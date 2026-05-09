@@ -581,6 +581,142 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
     return file_id
 
 
+def _upload_image_for_dalle(session: Session, access_token: str, device_id: str, image_data: bytes, file_name: str, mime_type: str) -> str:
+    """上传图片用于 inpaint original_file_id，使用 dalle_agent use_case（与遮罩相同）"""
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_name": file_name,
+                "file_size": len(image_data),
+                "use_case": "dalle_agent",
+                "timezone_offset_min": -480,
+                "reset_rate_limits": False,
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise ImageGenerationError(f"dalle image upload init failed: {response.status_code} {response.text[:200]}")
+    payload = response.json()
+    upload_url = payload.get("upload_url") or ""
+    file_id = payload.get("file_id") or ""
+    if not upload_url or not file_id:
+        raise ImageGenerationError("dalle image upload init returned no upload_url or file_id")
+
+    put_resp = _retry(
+        lambda: session.put(
+            upload_url,
+            headers={
+                "Content-Type": mime_type,
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-version": "2020-04-08",
+            },
+            data=image_data,
+            timeout=60,
+        ),
+        retries=3,
+    )
+    if not (200 <= put_resp.status_code < 300):
+        raise ImageGenerationError(f"dalle image upload PUT failed: {put_resp.status_code}")
+
+    process_resp = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files/process_upload_stream",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_id": file_id,
+                "use_case": "dalle_agent",
+                "index_for_retrieval": False,
+                "file_name": file_name,
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not process_resp.ok:
+        raise ImageGenerationError(f"dalle image process failed: {process_resp.status_code}")
+    return file_id
+
+
+def _upload_image_for_dalle(session: Session, access_token: str, device_id: str, image_data: bytes, file_name: str, mime_type: str) -> str:
+    """上传图片用于 inpaint original_file_id，使用 dalle_agent use_case（与遮罩相同）"""
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_name": file_name,
+                "file_size": len(image_data),
+                "use_case": "dalle_agent",
+                "timezone_offset_min": -480,
+                "reset_rate_limits": False,
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise ImageGenerationError(f"dalle image upload init failed: {response.status_code} {response.text[:200]}")
+    payload = response.json()
+    upload_url = payload.get("upload_url") or ""
+    file_id = payload.get("file_id") or ""
+    if not upload_url or not file_id:
+        raise ImageGenerationError("dalle image upload init returned no upload_url or file_id")
+
+    put_resp = _retry(
+        lambda: session.put(
+            upload_url,
+            headers={
+                "Content-Type": mime_type,
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-version": "2020-04-08",
+            },
+            data=image_data,
+            timeout=60,
+        ),
+        retries=3,
+    )
+    if not (200 <= put_resp.status_code < 300):
+        raise ImageGenerationError(f"dalle image upload PUT failed: {put_resp.status_code}")
+
+    process_resp = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files/process_upload_stream",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_id": file_id,
+                "use_case": "dalle_agent",
+                "index_for_retrieval": False,
+                "file_name": file_name,
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not process_resp.ok:
+        raise ImageGenerationError(f"dalle image process failed: {process_resp.status_code}")
+    return file_id
+
+
 def _upload_mask(session: Session, access_token: str, device_id: str, mask_data: bytes) -> str:
     """上传遮罩 PNG，使用 dalle_agent use_case（与普通图片上传不同）"""
     response = _retry(
@@ -1066,6 +1202,7 @@ def _run_inpaint_mode(
     ref_images: Optional[list[EditInputImage]] = None,
     attachment_mime_types: Optional[list[str]] = None,
 ) -> dict:
+    # inpaint prepare 不传 attachment_mime_types（HAR 验证：entry 73 无此字段）
     conduit_token = _prepare_picture_conversation(
         session,
         access_token,
@@ -1073,7 +1210,6 @@ def _run_inpaint_mode(
         parent_message_id,
         prompt,
         upstream_model,
-        attachment_mime_types=attachment_mime_types,
     )
     if not conduit_token:
         raise ImageGenerationError("inpaint mode: f/conversation/prepare returned no conduit_token")
@@ -2511,10 +2647,10 @@ def inpaint_image_result(
     try:
         device_id = _bootstrap(session, fp)
 
-        # 上传原始图片（multimodal）
+        # 上传原始图片（dalle_agent，与遮罩相同，HAR 验证：original_file_id 需在 dalle 可访问存储中）
         orig_bytes, orig_name, orig_mime = original_image
         orig_width, orig_height = _get_image_dimensions(orig_bytes)
-        original_file_id = _upload_image(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
+        original_file_id = _upload_image_for_dalle(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
         print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id}")
 
         # 上传遮罩（dalle_agent）
