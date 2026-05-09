@@ -1556,6 +1556,13 @@ export default function ImagePage() {
             </div>
           </div>
 
+          <div
+            onWheel={(e) => {
+              const vp = resultsViewportRef.current;
+              if (!vp) return;
+              vp.scrollTop += e.deltaY;
+            }}
+          >
           <ImageComposer
             mode={imageMode}
             model={imageModel}
@@ -1588,6 +1595,7 @@ export default function ImagePage() {
             onReferenceImageReuse={handleReuseAsReference}
             onRemoveReferenceImage={handleRemoveReferenceImage}
           />
+          </div>
         </div>
       </section>
 
