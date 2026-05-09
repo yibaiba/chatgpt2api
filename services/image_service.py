@@ -2681,7 +2681,14 @@ def inpaint_image_result(
         )
 
         # 上传遮罩（dalle_agent）
-        mask_file_id = _upload_mask(session, access_token, device_id, mask_data)
+        # 上游 ChatGPT 内部 API 遮罩约定：黑色=编辑区，白色=保留区
+        # 前端导出：白色=用户涂抹（待编辑），黑色=保留 → 需要反转极性
+        _mask_img = Image.open(io.BytesIO(mask_data)).convert("L")
+        _inverted = _mask_img.point(lambda p: 255 - p)
+        _buf = io.BytesIO()
+        _inverted.save(_buf, format="PNG")
+        mask_data_to_upload = _buf.getvalue()
+        mask_file_id = _upload_mask(session, access_token, device_id, mask_data_to_upload)
         print(f"[image-inpaint-upstream] uploaded mask_file_id={mask_file_id}")
 
         # 上传参考图（可选，multimodal）
