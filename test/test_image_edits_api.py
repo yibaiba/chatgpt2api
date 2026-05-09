@@ -20,9 +20,41 @@ class _FakeThread:
 class _FakeChatGPTService:
     last_call: dict[str, object] | None = None
     generate_error: Exception | None = None
+    inpaint_error: Exception | None = None
 
     def __init__(self, _account_service) -> None:
         return None
+
+    def inpaint_with_pool(
+        self,
+        prompt: str,
+        original_image,
+        mask_data: bytes,
+        model: str,
+        response_format: str = "b64_json",
+        base_url=None,
+        *,
+        original_gen_id: str = "",
+        ref_images=None,
+        image_options=None,
+        conversation_id: str = "",
+        parent_message_id: str = "",
+    ):
+        if type(self).inpaint_error is not None:
+            raise type(self).inpaint_error
+        type(self).last_call = {
+            "kind": "inpaint",
+            "prompt": prompt,
+            "model": model,
+            "response_format": response_format,
+            "original_gen_id": original_gen_id,
+            "conversation_id": conversation_id,
+            "parent_message_id": parent_message_id,
+        }
+        return {
+            "created": 123,
+            "data": [{"b64_json": "ZmFrZQ==", "revised_prompt": prompt}],
+        }
 
     def edit_with_pool(
         self,
@@ -115,6 +147,7 @@ class ImageEditsApiTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeChatGPTService.last_call = None
         _FakeChatGPTService.generate_error = None
+        _FakeChatGPTService.inpaint_error = None
         self.auth_header = {"Authorization": "Bearer test-auth"}
         self.auth_service = _FakeAuthService()
         self.temp_dir = TemporaryDirectory()
@@ -145,6 +178,84 @@ class ImageEditsApiTests(unittest.TestCase):
                 return job
             time.sleep(0.01)
         self.fail("image job did not settle")
+
+    def _fake_image_bytes(self) -> bytes:
+        # 最小 1x1 白色 PNG
+        import base64
+        return base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+        )
+
+    # ------------------------------------------------------------------
+    # inpaint job 测试
+    # ------------------------------------------------------------------
+
+    def test_inpaint_job_completes_through_polling_api(self) -> None:
+        img = self._fake_image_bytes()
+        response = self.client.post(
+            "/api/image-jobs/inpaint",
+            headers=self.auth_header,
+            data={"prompt": "fill with blue", "model": "gpt-image-2"},
+            files={
+                "image": ("orig.png", img, "image/png"),
+                "mask": ("mask.png", img, "image/png"),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        job = self._wait_for_job(response.json()["job"]["id"])
+
+        self.assertEqual("success", job["status"])
+        self.assertEqual("ZmFrZQ==", job["result"]["data"][0]["b64_json"])
+        self.assertEqual([1], self.auth_service.reserved)
+        self.assertEqual([(1, 1)], self.auth_service.settled)
+
+    def test_inpaint_job_does_not_forward_conversation_id(self) -> None:
+        """跨账号 404 修复验证：前端传来的 conversation_id 不应透传给 inpaint 服务。"""
+        img = self._fake_image_bytes()
+        response = self.client.post(
+            "/api/image-jobs/inpaint",
+            headers=self.auth_header,
+            data={
+                "prompt": "fill with blue",
+                "model": "gpt-image-2",
+                "conversation_id": "conv-from-other-account",
+                "parent_message_id": "msg-123",
+            },
+            files={
+                "image": ("orig.png", img, "image/png"),
+                "mask": ("mask.png", img, "image/png"),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        job = self._wait_for_job(response.json()["job"]["id"])
+
+        self.assertEqual("success", job["status"])
+        # inpaint_with_pool 收到的 conversation_id/parent_message_id 必须为空
+        # 否则跨账号时服务端会 404
+        call = _FakeChatGPTService.last_call
+        self.assertIsNotNone(call)
+        self.assertEqual("inpaint", call["kind"])
+        self.assertEqual("", call["conversation_id"], "conversation_id 不应透传给 inpaint 服务")
+        self.assertEqual("", call["parent_message_id"], "parent_message_id 不应透传给 inpaint 服务")
+
+    def test_inpaint_job_error_refunds_reserved_quota(self) -> None:
+        _FakeChatGPTService.inpaint_error = ImageGenerationError("upstream inpaint failed")
+        img = self._fake_image_bytes()
+        response = self.client.post(
+            "/api/image-jobs/inpaint",
+            headers=self.auth_header,
+            data={"prompt": "fill with blue", "model": "gpt-image-2"},
+            files={
+                "image": ("orig.png", img, "image/png"),
+                "mask": ("mask.png", img, "image/png"),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        job = self._wait_for_job(response.json()["job"]["id"])
+
+        self.assertEqual("error", job["status"])
+        self.assertEqual("upstream inpaint failed", job["error"])
+        self.assertEqual([(1, 0)], self.auth_service.settled)
 
     def test_accepts_repeated_image_field(self) -> None:
         response = self.client.post(

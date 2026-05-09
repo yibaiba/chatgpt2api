@@ -891,8 +891,10 @@ def create_app() -> FastAPI:
                 original_gen_id=original_gen_id,
                 ref_images=ref_images,
                 image_options=image_options,
-                conversation_id=conversation_id,
-                parent_message_id=parent_message_id,
+                # 账号池模式：不透传 conversation_id/parent_message_id
+                # 这两个 ID 属于生成时的账号，换账号后服务端查不到会话 → 404
+                conversation_id="",
+                parent_message_id="",
             )
             auth_service.settle_images_for_identity(identity, reserved_count, count_generated_images(result))
             update_image_job(job_id, status="success", result=result)
