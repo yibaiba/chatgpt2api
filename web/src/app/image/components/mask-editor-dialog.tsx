@@ -46,14 +46,15 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
   // 追踪 open / defaultPrompt 的前一值，用于渲染期间检测变化（React 19 推荐方式）
   const [prevOpen, setPrevOpen] = useState(open);
   const [prevDefaultPrompt, setPrevDefaultPrompt] = useState(defaultPrompt);
-  // 追踪当前 refImages，供关闭时清理 object URL（ref 不触发渲染）
+  // 追踪当前 refImages，供关闭时清理 object URL——不在渲染体中赋值（React 19 禁止），
+  // 改为在无 deps useEffect 中同步，保证每次渲染后都是最新值。
   const refImagesRef = useRef(refImages);
-  refImagesRef.current = refImages;
 
   // 渲染期间 setState —— React 19 推荐的「属性变化时重置 state」方式。
   // 不在 effect 内调用，避免 "Calling setState synchronously within an effect" 警告。
   if (open !== prevOpen) {
     setPrevOpen(open);
+    setLoadedImageDataUrl(""); // 重置 canvasReady 派生状态
     if (open) {
       setPrompt(defaultPrompt);
       setPrevDefaultPrompt(defaultPrompt);
@@ -133,6 +134,12 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
   useEffect(() => {
     toolRef.current = tool;
   }, [tool]);
+
+  // 保持 refImagesRef 始终指向最新 refImages（每次渲染后执行，无 deps）
+  // 不能在渲染体中直接赋值（React 19 报 "Cannot update ref during render"）
+  useEffect(() => {
+    refImagesRef.current = refImages;
+  });
 
   // 对话框关闭时清理 object URL（纯副作用，不调用 setState）
   useEffect(() => {
