@@ -312,6 +312,10 @@ class ImageTurnPayload(BaseModel):
     created_at: str = Field(default="", alias="createdAt")
     status: str = "success"
     error: str | None = None
+    inpaint_original_image: StoredReferenceImagePayload | None = Field(default=None, alias="inpaintOriginalImage")
+    inpaint_mask_image: StoredReferenceImagePayload | None = Field(default=None, alias="inpaintMaskImage")
+    inpaint_conversation_id: str | None = Field(default=None, alias="inpaintConversationId")
+    inpaint_parent_message_id: str | None = Field(default=None, alias="inpaintParentMessageId")
 
 
 class ImageConversationPayload(BaseModel):
