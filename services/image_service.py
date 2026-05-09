@@ -2964,13 +2964,13 @@ def inpaint_image_result(
         if not download_url:
             raise ImageGenerationError("failed to get download url")
 
-        # 下载 inpaint 结果并做合成兜底：
-        # 用 mask 把结果叠合到（预处理后的）原图，确保非遮罩区严格等于原图像素。
-        # 即使 API 对大图/透明图的非遮罩区处理不完美，此步骤也能修正。
+        # 下载 inpaint 结果。
+        # ChatGPT inpaint API 在输入正确缩放后应返回完整合成图（AI重绘区 + 保留区）。
+        # 直接使用 API 结果，保留其边缘平滑过渡，不做手动合成兜底。
         raw_inpaint_bytes = _fetch_image_bytes(session, download_url)
-        composited_bytes = _composite_inpaint_onto_original(raw_inpaint_bytes, upload_orig_bytes, upload_mask_bytes)
+        composited_bytes = raw_inpaint_bytes
 
-        # 若原图被缩小过（> 1792px），合成后放大回原始分辨率，保留用户上传的完整画质
+        # 若原图被缩小过（> 1792px），API 结果也是缩小后的尺寸，等比放大回原始分辨率。
         upload_w, upload_h = _get_image_dimensions(upload_orig_bytes)
         if (orig_native_w, orig_native_h) != (upload_w, upload_h):
             with Image.open(io.BytesIO(composited_bytes)) as comp_img:
