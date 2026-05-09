@@ -918,10 +918,12 @@ def _build_inpaint_picture_v2_body(
     conversation_id: str = "",
 ) -> dict:
     """构建 inpainting 对话 payload。
-    HAR 验证：
-    - 无参考图：content_type="text"，parts=[prompt]，无 attachments，client_prepare_state="sent"
-    - 有参考图：content_type="multimodal_text"，parts=[ref_parts, prompt]，有 attachments，client_prepare_state="success"
-    原图始终只通过 dalle_operation.original_file_id 传递，不放进 content.parts。
+    原图（original_image）放入 content parts 作为 image_asset_pointer，给模型视觉上下文，
+    同时也通过 dalle_operation.original_file_id 传递（服务端 inpaint 机制需要）。
+    跨账号时无 conversation_id 也能工作，因为模型通过 content parts 中的原图获得上下文。
+    - 无原图、无参考图：content_type="text"，client_prepare_state="sent"
+    - 有原图（无参考图）：content_type="multimodal_text"，parts=[orig, prompt]，client_prepare_state="success"
+    - 有参考图：content_type="multimodal_text"，parts=[orig, ref_parts, prompt]，client_prepare_state="success"
     """
     dalle_operation = {
         "type": "inpainting",
@@ -937,21 +939,50 @@ def _build_inpaint_picture_v2_body(
         "dalle": {"from_client": {"operation": dalle_operation}},
     }
 
+    # 原图 image_asset_pointer 部分（给模型视觉上下文，跨账号也能工作）
+    orig_parts: list = []
+    orig_attachments: list = []
+    if original_image:
+        orig_part = {
+            "content_type": "image_asset_pointer",
+            "asset_pointer": f"sediment://{original_image.file_id}",
+            "size_bytes": len(original_image.data),
+            "width": original_image.width,
+            "height": original_image.height,
+        }
+        orig_parts = [orig_part]
+        orig_attachments = [{
+            "id": original_image.file_id,
+            "size": len(original_image.data),
+            "name": original_image.file_name,
+            "mimeType": original_image.mime_type,
+            "width": original_image.width,
+            "height": original_image.height,
+        }]
+
     if ref_images:
-        # 有参考图：multimodal_text，parts=[ref_parts, prompt]，加 attachments
-        image_parts, attachments = _build_picture_v2_edit_input_payload(ref_images)
+        # 有参考图：multimodal_text，parts=[原图, ref_parts, prompt]，加 attachments
+        image_parts, ref_attachments = _build_picture_v2_edit_input_payload(ref_images)
         content: dict = {
             "content_type": "multimodal_text",
-            "parts": [*image_parts, prompt],
+            "parts": [*orig_parts, *image_parts, prompt],
         }
-        metadata["attachments"] = attachments
+        metadata["attachments"] = orig_attachments + ref_attachments
+        client_prepare_state = "success"
+    elif orig_parts:
+        # 无参考图但有原图：multimodal_text，parts=[原图, prompt]
+        content = {
+            "content_type": "multimodal_text",
+            "parts": [*orig_parts, prompt],
+        }
+        metadata["attachments"] = orig_attachments
         client_prepare_state = "success"
     else:
-        # 无参考图：纯文本，只有 prompt，原图信息由 dalle_operation 承载
+        # 无图（兜底）：纯文本
         content = {"content_type": "text", "parts": [prompt]}
         client_prepare_state = "sent"
 
-    return {
+    body: dict = {
         "action": "next",
         "messages": [
             {
@@ -971,8 +1002,6 @@ def _build_inpaint_picture_v2_body(
         "system_hints": ["picture_v2"],
         "supports_buffering": True,
         "supported_encodings": ["v1"],
-        # inpaint 始终使用 "sent"，与无参考图时保持一致
-        # 使用 "success" 会使服务端忽略 mask（按普通编辑处理）
         "client_prepare_state": client_prepare_state,
         "paragen_cot_summary_display_override": "allow",
         "force_parallel_switch": "auto",
@@ -987,7 +1016,6 @@ def _build_inpaint_picture_v2_body(
             "app_name": "chatgpt.com",
         },
     }
-    # HAR 验证：inpaint 必须属于原始图片生成所在的对话，否则模型无上下文会返回文字
     if conversation_id:
         body["conversation_id"] = conversation_id
     return body
