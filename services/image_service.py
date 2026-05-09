@@ -2965,22 +2965,15 @@ def inpaint_image_result(
             raise ImageGenerationError("failed to get download url")
 
         # 下载 inpaint 结果。
-        # ChatGPT API 理论上返回完整合成图，但在某些情形下（跨账号池、小 mask 区域等）
-        # 可能只返回 mask patch 而非完整图像。此处做双重保障：
-        #   1. API 返回与上传尺寸相同 → 直接使用（全图合成已由 API 完成）
-        #   2. API 返回尺寸不同（patch 模式）→ 用 mask 手动合成回原图
-        # 手动合成使用羽化 mask（A 值渐变），边缘平滑，不产生割裂感。
+        # ChatGPT API 有时返回完整合成图（同尺寸），有时仅返回 patch（小尺寸）。
+        # 实测发现即使同尺寸，API 也可能只填充遮罩区而其余区域为黑/透明，
+        # 因此不能用尺寸判断是否已完整合成——始终手动合成回原图。
+        # 合成使用羽化 mask（A 值渐变），边缘平滑，不产生割裂感。
         raw_inpaint_bytes = _fetch_image_bytes(session, download_url)
         upload_w, upload_h = _get_image_dimensions(upload_orig_bytes)
         raw_w, raw_h = _get_image_dimensions(raw_inpaint_bytes)
-        if (raw_w, raw_h) == (upload_w, upload_h):
-            # API 返回与上传图同尺寸，信任为完整合成图，直接使用
-            composited_bytes = raw_inpaint_bytes
-            print(f"[image-inpaint-upstream] API returned full image {raw_w}x{raw_h}, using directly")
-        else:
-            # 尺寸不同 → API 仅返回 patch，手动合成回原图
-            print(f"[image-inpaint-upstream] API returned patch {raw_w}x{raw_h} (expected {upload_w}x{upload_h}), compositing with original")
-            composited_bytes = _composite_inpaint_onto_original(raw_inpaint_bytes, upload_orig_bytes, upload_mask_bytes)
+        print(f"[image-inpaint-upstream] API returned {raw_w}x{raw_h} (upload={upload_w}x{upload_h}), compositing with original")
+        composited_bytes = _composite_inpaint_onto_original(raw_inpaint_bytes, upload_orig_bytes, upload_mask_bytes)
 
         # 若原图被缩小过（> 1792px），API 结果也是缩小后的尺寸，等比放大回原始分辨率。
         if (orig_native_w, orig_native_h) != (upload_w, upload_h):
