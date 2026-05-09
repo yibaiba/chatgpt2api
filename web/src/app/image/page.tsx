@@ -261,6 +261,8 @@ export default function ImagePage() {
   const [maskEditorImageFile, setMaskEditorImageFile] = useState<File | null>(null);
   const [maskEditorDefaultPrompt, setMaskEditorDefaultPrompt] = useState("");
   const [maskEditorAvailableImages, setMaskEditorAvailableImages] = useState<{ dataUrl: string; id: string }[]>([]);
+  const [maskEditorConversationId, setMaskEditorConversationId] = useState("");
+  const [maskEditorLastMessageId, setMaskEditorLastMessageId] = useState("");
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const effectiveSelectedConversationId = useMemo(() => {
@@ -939,10 +941,12 @@ export default function ImagePage() {
   );
 
   const handleInpaint = useCallback(
-    (payload: { imageDataUrl: string; prompt: string; imageFile: File }) => {
+    (payload: { imageDataUrl: string; prompt: string; imageFile: File; conversationId?: string; lastMessageId?: string }) => {
       setMaskEditorImageDataUrl(payload.imageDataUrl);
       setMaskEditorImageFile(payload.imageFile);
       setMaskEditorDefaultPrompt(payload.prompt);
+      setMaskEditorConversationId(payload.conversationId ?? "");
+      setMaskEditorLastMessageId(payload.lastMessageId ?? "");
       // 收集当前对话里所有成功生成的图供参考图选择
       const available = (selectedConversation?.turns ?? []).flatMap((turn) =>
         turn.status === "success"
@@ -1011,6 +1015,8 @@ export default function ImagePage() {
 
         const job = await createImageInpaintJob(imageFile, maskFile, prompt, imageModel, {
           refImages: refImages.length > 0 ? refImages : undefined,
+          conversationId: maskEditorConversationId || undefined,
+          parentMessageId: maskEditorLastMessageId || undefined,
         });
         const result = await waitForImageJob(job);
 
@@ -1028,6 +1034,8 @@ export default function ImagePage() {
             status: "success" as const,
             b64_json: item.b64_json || "",
             generation_route: item.generation_route,
+            conversation_id: item.conversation_id || undefined,
+            last_message_id: item.last_message_id || undefined,
           }));
           const turns = [...conv.turns];
           turns[turnIdx] = updatedTurn;
@@ -1061,7 +1069,7 @@ export default function ImagePage() {
         externallyManagedTurnIds.delete(turnId);
       }
     },
-    [maskEditorImageFile, selectedConversationId, imageModel],
+    [maskEditorImageFile, selectedConversationId, imageModel, maskEditorConversationId, maskEditorLastMessageId],
   );
 
   const handleReusePrompt = useCallback(
@@ -1276,6 +1284,8 @@ export default function ImagePage() {
               b64_json: b64Json,
               mime_type: mimeType,
               generation_route: first.generation_route,
+              conversation_id: first.conversation_id || undefined,
+              last_message_id: first.last_message_id || undefined,
             };
 
             await updateConversation(conversationId, (current) => {

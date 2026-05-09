@@ -21,6 +21,8 @@ export type GeneratedImageResponseItem = {
   revised_prompt?: string;
   mime_type?: string;
   generation_route?: ImageGenerationRoute;
+  conversation_id?: string;
+  last_message_id?: string;
 };
 export type GeneratedImageResponse = { created: number; data: GeneratedImageResponseItem[] };
 export type ApiModel = {
@@ -580,7 +582,7 @@ export async function createImageInpaintJob(
   maskFile: File,
   prompt: string,
   model: ImageModel = "gpt-image-2",
-  options: ImageJobRequestOptions & { originalGenId?: string; refImages?: File[] } = {},
+  options: ImageJobRequestOptions & { originalGenId?: string; refImages?: File[]; conversationId?: string; parentMessageId?: string } = {},
 ) {
   const formData = new FormData();
   formData.append("image", originalFile);
@@ -593,6 +595,8 @@ export async function createImageInpaintJob(
   if (options.output_format) formData.append("output_format", options.output_format);
   if (typeof options.compression === "number") formData.append("compression", String(options.compression));
   if (options.originalGenId) formData.append("original_gen_id", options.originalGenId);
+  if (options.conversationId) formData.append("conversation_id", options.conversationId);
+  if (options.parentMessageId) formData.append("parent_message_id", options.parentMessageId);
   if (options.refImages) {
     options.refImages.forEach((rf) => formData.append("ref_image", rf));
   }

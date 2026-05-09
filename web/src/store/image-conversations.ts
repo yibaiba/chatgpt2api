@@ -36,6 +36,8 @@ export type StoredImage = {
   error?: string;
   job_id?: string;
   generation_route?: ImageGenerationRoute;
+  conversation_id?: string;
+  last_message_id?: string;
 };
 
 export type ImageTurn = {
@@ -92,6 +94,8 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
       mime_type: image.b64_json ? normalizedMimeType : image.mime_type,
       job_id: normalizedJobId,
       generation_route: isImageGenerationRoute(image.generation_route) ? image.generation_route : undefined,
+      conversation_id: image.conversation_id || undefined,
+      last_message_id: image.last_message_id || undefined,
     };
   }
   return {
@@ -100,6 +104,8 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     mime_type: image.b64_json ? normalizedMimeType : image.mime_type,
     job_id: normalizedJobId,
     generation_route: isImageGenerationRoute(image.generation_route) ? image.generation_route : undefined,
+    conversation_id: image.conversation_id || undefined,
+    last_message_id: image.last_message_id || undefined,
   };
 }
 

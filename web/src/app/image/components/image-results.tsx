@@ -35,7 +35,7 @@ type ImageResultsProps = {
   showConversationOwner?: boolean;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onReuseAsReference: (payload: { conversationId?: string; id?: string; dataUrl: string }) => void | Promise<void>;
-  onInpaint: (payload: { imageDataUrl: string; prompt: string; imageFile: File }) => void | Promise<void>;
+  onInpaint: (payload: { imageDataUrl: string; prompt: string; imageFile: File; conversationId?: string; lastMessageId?: string }) => void | Promise<void>;
   onReusePrompt: (payload: {
     conversationId?: string;
     prompt: string;
@@ -338,6 +338,8 @@ export function ImageResults({
                                   imageDataUrl: dataUrl,
                                   prompt: turn.prompt,
                                   imageFile,
+                                  conversationId: image.conversation_id,
+                                  lastMessageId: image.last_message_id,
                                 });
                               }}
                               aria-label="遮罩编辑"

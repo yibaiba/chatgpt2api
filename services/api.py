@@ -874,6 +874,8 @@ def create_app() -> FastAPI:
             base_url: str | None,
             original_gen_id: str,
             ref_images: list[tuple[bytes, str, str]] | None,
+            conversation_id: str = "",
+            parent_message_id: str = "",
     ) -> None:
         try:
             update_image_job(job_id, status="running")
@@ -887,6 +889,8 @@ def create_app() -> FastAPI:
                 original_gen_id=original_gen_id,
                 ref_images=ref_images,
                 image_options=image_options,
+                conversation_id=conversation_id,
+                parent_message_id=parent_message_id,
             )
             auth_service.settle_images_for_identity(identity, reserved_count, count_generated_images(result))
             update_image_job(job_id, status="success", result=result)
@@ -1365,6 +1369,8 @@ def create_app() -> FastAPI:
             response_format: str = Form(default="b64_json"),
             original_gen_id: str | None = Form(default=None),
             ref_image: list[UploadFile] | None = File(default=None),
+            conversation_id: str | None = Form(default=None),
+            parent_message_id: str | None = Form(default=None),
     ):
         identity = require_session(request, authorization)
 
@@ -1427,6 +1433,8 @@ def create_app() -> FastAPI:
                 base_url,
                 str(original_gen_id or ""),
                 ref_images,
+                str(conversation_id or ""),
+                str(parent_message_id or ""),
             ),
             name=f"image-inpaint-job-{job['id']}",
             daemon=True,

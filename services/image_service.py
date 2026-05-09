@@ -915,6 +915,7 @@ def _build_inpaint_picture_v2_body(
     original_gen_id: str,
     ref_images: Optional[list[EditInputImage]] = None,
     original_image: Optional["EditInputImage"] = None,
+    conversation_id: str = "",
 ) -> dict:
     """构建 inpainting 对话 payload。
     HAR 验证：
@@ -986,6 +987,10 @@ def _build_inpaint_picture_v2_body(
             "app_name": "chatgpt.com",
         },
     }
+    # HAR 验证：inpaint 必须属于原始图片生成所在的对话，否则模型无上下文会返回文字
+    if conversation_id:
+        body["conversation_id"] = conversation_id
+    return body
 
 
 def _send_regular_generation_conversation(
@@ -1094,6 +1099,7 @@ def _send_inpaint_conversation(
     conduit_token: str,
     ref_images: Optional[list[EditInputImage]] = None,
     original_image: Optional[EditInputImage] = None,
+    conversation_id: str = "",
 ):
     session_id = str(uuid.uuid4())
     turn_trace_id = str(uuid.uuid4())
@@ -1117,7 +1123,7 @@ def _send_inpaint_conversation(
         headers["openai-sentinel-proof-token"] = proof_token
     body = _build_inpaint_picture_v2_body(
         prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id,
-        ref_images=ref_images, original_image=original_image,
+        ref_images=ref_images, original_image=original_image, conversation_id=conversation_id,
     )
     return _request_image_stream(
         lambda: session.post(
@@ -1147,6 +1153,7 @@ def _run_inpaint_mode(
     ref_images: Optional[list[EditInputImage]] = None,
     attachment_mime_types: Optional[list[str]] = None,
     original_image: Optional[EditInputImage] = None,
+    conversation_id: str = "",
 ) -> dict:
     # inpaint prepare 不传 attachment_mime_types（HAR 验证：entry 73 无此字段）
     conduit_token = _prepare_picture_conversation(
@@ -1175,6 +1182,7 @@ def _run_inpaint_mode(
         conduit_token,
         ref_images=ref_images,
         original_image=original_image,
+        conversation_id=conversation_id,
     )
     return _parse_sse(response)
 
@@ -1356,6 +1364,7 @@ def _parse_sse(response) -> dict:
     resume_conduit_token = ""
     image_gen_task_id = ""
     async_status_seen = False
+    last_message_id = ""
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -1414,6 +1423,10 @@ def _parse_sse(response) -> dict:
             task_id = str(msg_meta.get("image_gen_task_id") or "")
             if task_id and not image_gen_task_id:
                 image_gen_task_id = task_id
+            # 捕获最新的消息 ID（用于后续 inpaint 的 parent_message_id）
+            msg_id = str(msg.get("id") or "")
+            if msg_id:
+                last_message_id = msg_id
         # 检测异步状态
         if obj.get("type") == "conversation_async_status":
             async_status_seen = True
@@ -1434,6 +1447,7 @@ def _parse_sse(response) -> dict:
         "resume_conduit_token": resume_conduit_token,
         "image_gen_task_id": image_gen_task_id,
         "async_mode": async_status_seen,
+        "last_message_id": last_message_id,
     }
 
 
@@ -2372,6 +2386,8 @@ def generate_image_result(
             download_url=download_url,
             base_url=base_url,
         )
+        result_data["conversation_id"] = actual_conversation_id
+        result_data["last_message_id"] = str(parsed.get("last_message_id") or "")
 
         print(f"[image-upstream] success token={access_token[:12]}... images=1 format={response_format}")
         return {
@@ -2589,12 +2605,16 @@ def inpaint_image_result(
     original_gen_id: str = "",
     ref_images: list[tuple[bytes, str, str]] | None = None,
     image_options: ImageRequestOptions | None = None,
+    conversation_id: str = "",
+    parent_message_id: str = "",
 ) -> dict:
     """图片局部重绘（inpainting）。
     original_image: (bytes, file_name, mime_type) 原始图片
     mask_data: PNG 格式遮罩（白色=编辑区域，黑色=保留区域）
     original_gen_id: 可选，原图生成 UUID；不提供则自动生成
     ref_images: 可选参考图列表
+    conversation_id: 原图生成时的对话 ID（HAR 验证必须续接原对话，否则模型无上下文会返回文字）
+    parent_message_id: 原图生成后最后一条消息 ID（续接时的 parent）
     """
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -2660,7 +2680,14 @@ def inpaint_image_result(
                 proof_config=_pow_config(USER_AGENT),
             )
 
-        parent_message_id = "client-created-root"
+        # HAR 验证：inpaint 必须属于原始图片所在对话。在新对话中发起会导致模型无上下文返回文字而非图片。
+        actual_parent_message_id = str(parent_message_id or "").strip() or "client-created-root"
+        actual_conversation_id_for_inpaint = str(conversation_id or "").strip()
+        if actual_conversation_id_for_inpaint:
+            print(f"[image-inpaint-upstream] using existing conv={actual_conversation_id_for_inpaint[:8]}... parent={actual_parent_message_id[:8]}...")
+        else:
+            print(f"[image-inpaint-upstream] no conversation_id provided, starting fresh (may cause text response)")
+
         input_file_ids = {original_file_id, mask_file_id}
         if uploaded_ref_images:
             input_file_ids.update(img.file_id for img in uploaded_ref_images)
@@ -2676,7 +2703,7 @@ def inpaint_image_result(
             device_id,
             chat_token,
             proof_token,
-            parent_message_id,
+            actual_parent_message_id,
             prompt,
             upstream_model,
             original_file_id,
@@ -2685,6 +2712,7 @@ def inpaint_image_result(
             ref_images=uploaded_ref_images if uploaded_ref_images else None,
             attachment_mime_types=inpaint_attachment_mime_types,
             original_image=original_edit_image,
+            conversation_id=actual_conversation_id_for_inpaint,
         )
 
         actual_conversation_id, file_ids, response_text = _collect_edit_output(
@@ -2713,6 +2741,8 @@ def inpaint_image_result(
             download_url=download_url,
             base_url=base_url,
         )
+        result_data["conversation_id"] = actual_conversation_id
+        result_data["last_message_id"] = str(parsed.get("last_message_id") or "")
         print(
             f"[image-inpaint-upstream] success token={access_token[:12]}... format={response_format}"
         )

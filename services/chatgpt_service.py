@@ -1014,6 +1014,8 @@ class ChatGPTService:
         original_gen_id: str = "",
         ref_images: list[tuple[bytes, str, str]] | None = None,
         image_options: ImageRequestOptions | None = None,
+        conversation_id: str = "",
+        parent_message_id: str = "",
     ):
         _INPAINT_MAX_RETRIES = 3
         tried_tokens: set[str] = set()
@@ -1042,6 +1044,8 @@ class ChatGPTService:
                     original_gen_id=original_gen_id,
                     ref_images=ref_images,
                     image_options=image_options,
+                    conversation_id=conversation_id,
+                    parent_message_id=parent_message_id,
                 )
                 account = self._mark_image_request_result(request_token, success=True, model=model)
                 print(
