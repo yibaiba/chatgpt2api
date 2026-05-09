@@ -914,16 +914,13 @@ def _build_inpaint_picture_v2_body(
     mask_file_id: str,
     original_gen_id: str,
     ref_images: Optional[list[EditInputImage]] = None,
-    original_image: Optional["EditInputImage"] = None,
     conversation_id: str = "",
 ) -> dict:
     """构建 inpainting 对话 payload。
-    原图（original_image）放入 content parts 作为 image_asset_pointer，给模型视觉上下文，
-    同时也通过 dalle_operation.original_file_id 传递（服务端 inpaint 机制需要）。
-    跨账号时无 conversation_id 也能工作，因为模型通过 content parts 中的原图获得上下文。
-    - 无原图、无参考图：content_type="text"，client_prepare_state="sent"
-    - 有原图（无参考图）：content_type="multimodal_text"，parts=[orig, prompt]，client_prepare_state="success"
-    - 有参考图：content_type="multimodal_text"，parts=[orig, ref_parts, prompt]，client_prepare_state="success"
+    HAR 验证结论：
+    - 纯遮罩（无参考图）：content_type="text"，parts=[prompt]，client_prepare_state="sent"
+    - 有参考图：content_type="multimodal_text"，parts=[ref_parts, prompt]，client_prepare_state="success"
+    原图不放入 content parts（HAR-1/HAR-2 均无此行为）；原图通过 dalle_operation.original_file_id 传递。
     """
     dalle_operation = {
         "type": "inpainting",
@@ -939,46 +936,17 @@ def _build_inpaint_picture_v2_body(
         "dalle": {"from_client": {"operation": dalle_operation}},
     }
 
-    # 原图 image_asset_pointer 部分（给模型视觉上下文，跨账号也能工作）
-    orig_parts: list = []
-    orig_attachments: list = []
-    if original_image:
-        orig_part = {
-            "content_type": "image_asset_pointer",
-            "asset_pointer": f"sediment://{original_image.file_id}",
-            "size_bytes": len(original_image.data),
-            "width": original_image.width,
-            "height": original_image.height,
-        }
-        orig_parts = [orig_part]
-        orig_attachments = [{
-            "id": original_image.file_id,
-            "size": len(original_image.data),
-            "name": original_image.file_name,
-            "mimeType": original_image.mime_type,
-            "width": original_image.width,
-            "height": original_image.height,
-        }]
-
     if ref_images:
-        # 有参考图：multimodal_text，parts=[原图, ref_parts, prompt]，加 attachments
+        # 有参考图：multimodal_text，parts=[ref_parts, prompt]，加 attachments（仅参考图，不含原图）
         image_parts, ref_attachments = _build_picture_v2_edit_input_payload(ref_images)
         content: dict = {
             "content_type": "multimodal_text",
-            "parts": [*orig_parts, *image_parts, prompt],
+            "parts": [*image_parts, prompt],
         }
-        metadata["attachments"] = orig_attachments + ref_attachments
-        client_prepare_state = "success"
-    elif orig_parts:
-        # 无参考图但有原图：multimodal_text，parts=[原图, prompt]
-        content = {
-            "content_type": "multimodal_text",
-            "parts": [*orig_parts, prompt],
-        }
-        metadata["attachments"] = orig_attachments
+        metadata["attachments"] = ref_attachments
         client_prepare_state = "success"
     else:
-        # 无图（兜底）：纯文本
+        # 纯遮罩（无参考图）：text，client_prepare_state="sent"（HAR-1 验证）
         content = {"content_type": "text", "parts": [prompt]}
         client_prepare_state = "sent"
 
@@ -1126,7 +1094,6 @@ def _send_inpaint_conversation(
     original_gen_id: str,
     conduit_token: str,
     ref_images: Optional[list[EditInputImage]] = None,
-    original_image: Optional[EditInputImage] = None,
     conversation_id: str = "",
 ):
     session_id = str(uuid.uuid4())
@@ -1151,7 +1118,7 @@ def _send_inpaint_conversation(
         headers["openai-sentinel-proof-token"] = proof_token
     body = _build_inpaint_picture_v2_body(
         prompt, parent_message_id, model, original_file_id, mask_file_id, original_gen_id,
-        ref_images=ref_images, original_image=original_image, conversation_id=conversation_id,
+        ref_images=ref_images, conversation_id=conversation_id,
     )
     return _request_image_stream(
         lambda: session.post(
@@ -1180,10 +1147,10 @@ def _run_inpaint_mode(
     original_gen_id: str,
     ref_images: Optional[list[EditInputImage]] = None,
     attachment_mime_types: Optional[list[str]] = None,
-    original_image: Optional[EditInputImage] = None,
     conversation_id: str = "",
 ) -> dict:
-    # inpaint prepare 不传 attachment_mime_types（HAR 验证：entry 73 无此字段）
+    # 纯遮罩时 prepare 不传 attachment_mime_types（HAR-1 entry 73 验证）
+    # 有参考图时需传 attachment_mime_types（HAR-2 entry 22/23 验证）
     conduit_token = _prepare_picture_conversation(
         session,
         access_token,
@@ -1191,6 +1158,7 @@ def _run_inpaint_mode(
         parent_message_id,
         prompt,
         upstream_model,
+        attachment_mime_types=attachment_mime_types if attachment_mime_types else None,
     )
     if not conduit_token:
         raise ImageGenerationError("inpaint mode: f/conversation/prepare returned no conduit_token")
@@ -1209,7 +1177,6 @@ def _run_inpaint_mode(
         original_gen_id,
         conduit_token,
         ref_images=ref_images,
-        original_image=original_image,
         conversation_id=conversation_id,
     )
     return _parse_sse(response)
@@ -2670,15 +2637,6 @@ def inpaint_image_result(
         orig_width, orig_height = _get_image_dimensions(orig_bytes)
         original_file_id = _upload_image(session, access_token, device_id, orig_bytes, orig_name, orig_mime)
         print(f"[image-inpaint-upstream] uploaded original_file_id={original_file_id}")
-        # 构造 EditInputImage，用于在 conversation content 中引用原图（让模型知道编辑哪张图）
-        original_edit_image = EditInputImage(
-            file_id=original_file_id,
-            data=orig_bytes,
-            file_name=orig_name,
-            mime_type=orig_mime,
-            width=orig_width,
-            height=orig_height,
-        )
 
         # 上传遮罩（dalle_agent）
         # 上游 ChatGPT 内部 API 遮罩约定：黑色=编辑区，白色=保留区
@@ -2727,10 +2685,11 @@ def inpaint_image_result(
         if uploaded_ref_images:
             input_file_ids.update(img.file_id for img in uploaded_ref_images)
 
-        # 收集附件 MIME 类型（原图 + 参考图）传递给 prepare
+        # 收集附件 MIME 类型（仅参考图）传递给 prepare
+        # HAR 验证：纯遮罩 prepare 无此字段（entry 73），有参考图时只传参考图 MIME（entry 22/23）
         inpaint_attachment_mime_types = list(dict.fromkeys(
-            [orig_mime] + [img.mime_type for img in uploaded_ref_images]
-        ))
+            [img.mime_type for img in uploaded_ref_images]
+        )) or None
 
         parsed = _run_inpaint_mode(
             session,
@@ -2746,7 +2705,6 @@ def inpaint_image_result(
             gen_id,
             ref_images=uploaded_ref_images if uploaded_ref_images else None,
             attachment_mime_types=inpaint_attachment_mime_types,
-            original_image=original_edit_image,
             conversation_id=actual_conversation_id_for_inpaint,
         )
 
