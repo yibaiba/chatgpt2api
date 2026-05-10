@@ -69,6 +69,14 @@ IMAGE_OUTPUT_EXTENSIONS = {
     "jpeg": "jpg",
     "webp": "webp",
 }
+PLACEHOLDER_CANVAS_LIGHTNESS_MIN = 185
+PLACEHOLDER_CANVAS_NEUTRAL_DELTA_MAX = 8
+PLACEHOLDER_CANVAS_OUTSIDE_RATIO_MIN = 0.85
+PLACEHOLDER_CANVAS_INSIDE_RATIO_MAX = 0.8
+PLACEHOLDER_CANVAS_OUTSIDE_INSIDE_DELTA_MIN = 0.2
+FULL_FRAME_VARIANT_AREA_RATIO_MIN = 0.72
+FULL_FRAME_VARIANT_AREA_RATIO_MAX = 1.45
+FULL_FRAME_VARIANT_MASK_COVERAGE_MIN = 0.35
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -1807,6 +1815,74 @@ def _download_as_base64(session: Session, download_url: str) -> str:
     return base64.b64encode(_fetch_image_bytes(session, download_url)).decode("ascii")
 
 
+def _build_output_candidate_score(
+    candidate_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> tuple[int, float, float, int]:
+    candidate_w, candidate_h = candidate_size
+    target_w, target_h = target_size
+    if candidate_w <= 0 or candidate_h <= 0 or target_w <= 0 or target_h <= 0:
+        return 1, float("inf"), float("inf"), 2**31 - 1
+    exact_size_penalty = 0 if candidate_size == target_size else 1
+    aspect_ratio_error = abs((candidate_w / candidate_h) - (target_w / target_h))
+    area_error = abs((candidate_w * candidate_h) - (target_w * target_h)) / max(target_w * target_h, 1)
+    dimension_error = abs(candidate_w - target_w) + abs(candidate_h - target_h)
+    return exact_size_penalty, aspect_ratio_error, area_error, dimension_error
+
+
+def _select_best_output_candidate(
+    output_candidates: list[tuple[str, bytes, tuple[int, int]]],
+    target_size: tuple[int, int],
+) -> tuple[str, bytes, tuple[int, int]]:
+    if not output_candidates:
+        raise ImageGenerationError("no inpaint output candidates available")
+    return min(
+        enumerate(output_candidates),
+        key=lambda item: (_build_output_candidate_score(item[1][2], target_size), item[0]),
+    )[1]
+
+
+def _download_best_output_candidate(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    conversation_id: str,
+    file_ids: list[str],
+    target_size: tuple[int, int],
+) -> tuple[str, bytes]:
+    output_candidates: list[tuple[str, bytes, tuple[int, int]]] = []
+    download_failures: list[str] = []
+    for file_id in file_ids:
+        download_url = _fetch_download_url(session, access_token, device_id, conversation_id, file_id)
+        if not download_url:
+            download_failures.append(f"{file_id}:missing-download-url")
+            continue
+        try:
+            image_bytes = _fetch_image_bytes(session, download_url)
+            image_size = _get_image_dimensions(image_bytes)
+        except ImageGenerationError as exc:
+            download_failures.append(f"{file_id}:{exc}")
+            continue
+        output_candidates.append((file_id, image_bytes, image_size))
+
+    if not output_candidates:
+        failure_text = "; ".join(download_failures[:3])
+        if failure_text:
+            raise ImageGenerationError(f"failed to download inpaint output candidates: {failure_text}")
+        raise ImageGenerationError("failed to download inpaint output candidates")
+
+    selected_file_id, selected_bytes, selected_size = _select_best_output_candidate(output_candidates, target_size)
+    candidate_summary = ", ".join(
+        f"{str(file_id)[:12]}...={size[0]}x{size[1]}"
+        for file_id, _image_bytes, size in output_candidates
+    )
+    print(
+        f"[image-inpaint-candidates] target={target_size[0]}x{target_size[1]} "
+        f"candidates=[{candidate_summary}] chosen={str(selected_file_id)[:12]}...={selected_size[0]}x{selected_size[1]}"
+    )
+    return selected_file_id, selected_bytes
+
+
 def _guess_mime_type_from_format(output_format: str | None) -> str:
     normalized = str(output_format or "png").strip().lower() or "png"
     return IMAGE_OUTPUT_MIME_TYPES.get(normalized, "image/png")
@@ -2190,6 +2266,7 @@ def _project_inpaint_onto_canvas(
 def _looks_like_full_frame_variant(
     raw_size: tuple[int, int],
     target_size: tuple[int, int],
+    mask_alpha: Image.Image,
 ) -> bool:
     raw_w, raw_h = raw_size
     target_w, target_h = target_size
@@ -2198,9 +2275,98 @@ def _looks_like_full_frame_variant(
     if target_area <= 0:
         return False
     area_ratio = raw_area / target_area
-    # 经验规则：若返回图面积与目标图接近，通常是“整图方版/裁切版”，
-    # 不应按局部 patch 回贴；真正的局部 patch 往往明显更小。
-    return 0.72 <= area_ratio <= 1.45
+    if not (FULL_FRAME_VARIANT_AREA_RATIO_MIN <= area_ratio <= FULL_FRAME_VARIANT_AREA_RATIO_MAX):
+        return False
+
+    histogram = mask_alpha.histogram()
+    # 前端生成的 mask 包含 alpha 梯度（羽化），从 0（保留区）到 255（核心编辑区）。
+    # 仅计算 alpha >= 128 的像素（半透明以上），避免把整个柔和边缘都算作"全图编辑"。
+    significant_alpha_pixels = sum(histogram[128:])
+    mask_coverage_ratio = significant_alpha_pixels / target_area
+    # 方图面积接近原图不等于整图结果；若用户实际只遮了局部区域，
+    # 更可能是“局部编辑画布”而不是整图方版，此时应走 bbox 回贴。
+    return mask_coverage_ratio >= FULL_FRAME_VARIANT_MASK_COVERAGE_MIN
+
+
+def _is_placeholder_canvas_pixel(pixel: tuple[int, int, int] | tuple[int, int, int, int]) -> bool:
+    red, green, blue = pixel[:3]
+    mean = (red + green + blue) / 3.0
+    spread = max(abs(red - green), abs(red - blue), abs(green - blue))
+    return mean >= PLACEHOLDER_CANVAS_LIGHTNESS_MIN and spread <= PLACEHOLDER_CANVAS_NEUTRAL_DELTA_MAX
+
+
+def _measure_placeholder_canvas_ratios(
+    raw_rgb: Image.Image,
+    mask_alpha: Image.Image,
+) -> tuple[float, float] | None:
+    raw_pixels = raw_rgb.load()
+    mask_pixels = mask_alpha.load()
+    outside_total = 0
+    outside_placeholder = 0
+    inside_total = 0
+    inside_placeholder = 0
+
+    for y in range(raw_rgb.height):
+        for x in range(raw_rgb.width):
+            pixel_is_placeholder = _is_placeholder_canvas_pixel(raw_pixels[x, y])
+            if mask_pixels[x, y] > 0:
+                inside_total += 1
+                inside_placeholder += int(pixel_is_placeholder)
+            else:
+                outside_total += 1
+                outside_placeholder += int(pixel_is_placeholder)
+
+    if outside_total == 0 or inside_total == 0:
+        return None
+    return outside_placeholder / outside_total, inside_placeholder / inside_total
+
+
+def _filter_mask_by_placeholder_pixels(
+    raw_rgb: Image.Image,
+    mask_alpha: Image.Image,
+) -> Image.Image:
+    raw_pixels = raw_rgb.load()
+    mask_pixels = mask_alpha.load()
+    effective_mask = Image.new("L", mask_alpha.size, 0)
+    effective_pixels = effective_mask.load()
+
+    for y in range(raw_rgb.height):
+        for x in range(raw_rgb.width):
+            alpha_value = mask_pixels[x, y]
+            if alpha_value <= 0:
+                continue
+            if _is_placeholder_canvas_pixel(raw_pixels[x, y]):
+                continue
+            effective_pixels[x, y] = alpha_value
+    return effective_mask
+
+
+def _build_same_size_effective_mask(
+    inpaint_img: Image.Image,
+    mask_alpha: Image.Image,
+) -> tuple[Image.Image, bool]:
+    mask_bbox = mask_alpha.getbbox()
+    if mask_bbox is None or mask_bbox == (0, 0, mask_alpha.width, mask_alpha.height):
+        return mask_alpha, False
+
+    raw_rgb = inpaint_img.convert("RGB")
+    ratios = _measure_placeholder_canvas_ratios(raw_rgb, mask_alpha)
+    if ratios is None:
+        return mask_alpha, False
+
+    outside_ratio, inside_ratio = ratios
+    if outside_ratio < PLACEHOLDER_CANVAS_OUTSIDE_RATIO_MIN:
+        return mask_alpha, False
+    if inside_ratio > PLACEHOLDER_CANVAS_INSIDE_RATIO_MAX:
+        return mask_alpha, False
+    if outside_ratio - inside_ratio < PLACEHOLDER_CANVAS_OUTSIDE_INSIDE_DELTA_MIN:
+        return mask_alpha, False
+
+    effective_mask = _filter_mask_by_placeholder_pixels(raw_rgb, mask_alpha)
+
+    if effective_mask.getbbox() is None:
+        return mask_alpha, False
+    return effective_mask, True
 
 
 def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, mask_bytes: bytes) -> bytes:
@@ -2219,11 +2385,13 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
             mask_img = mask_img.resize((target_w, target_h), Image.LANCZOS)
         mask_alpha = mask_img.split()[3] if mask_img.mode == "RGBA" else mask_img.convert("L")
         orig_rgba = orig_img.convert("RGBA")
+        composite_mask = mask_alpha
         if inpaint_img.size == (target_w, target_h):
             inpaint_rgba = inpaint_img.convert("RGBA")
-            projection_mode = "full-frame"
-            projection_box = (0, 0, target_w, target_h)
-        elif _looks_like_full_frame_variant(inpaint_img.size, (target_w, target_h)):
+            composite_mask, placeholder_filtered = _build_same_size_effective_mask(inpaint_img, mask_alpha)
+            projection_mode = "same-size-patch-canvas" if placeholder_filtered else "full-frame"
+            projection_box = composite_mask.getbbox() or (0, 0, target_w, target_h)
+        elif _looks_like_full_frame_variant(inpaint_img.size, (target_w, target_h), mask_alpha):
             inpaint_rgba = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGBA")
             projection_mode = "full-frame-variant"
             projection_box = (0, 0, target_w, target_h)
@@ -2237,7 +2405,7 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
             f"[image-inpaint-compose] raw={inpaint_img.width}x{inpaint_img.height} "
             f"target={target_w}x{target_h} mode={projection_mode} box={projection_box}"
         )
-        composited = Image.composite(inpaint_rgba, orig_rgba, mask_alpha)
+        composited = Image.composite(inpaint_rgba, orig_rgba, composite_mask)
         buf = io.BytesIO()
         composited.save(buf, format="PNG")
         return buf.getvalue()
@@ -3087,18 +3255,23 @@ def inpaint_image_result(
                 raise ImageGenerationError(image_stream_error_message(response_text))
             raise ImageGenerationError("no image returned from inpaint upstream")
 
-        first_file_id = str(file_ids[0])
-        download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
-        if not download_url:
-            raise ImageGenerationError("failed to get download url")
+        upload_w, upload_h = _get_image_dimensions(upload_orig_bytes)
+        # ChatGPT API 同一次 inpaint 可能返回多个输出候选；不能盲取第一个。
+        # 优先选与上传尺寸完全一致的候选，其次选宽高比/面积最接近上传图的结果。
+        _selected_file_id, raw_inpaint_bytes = _download_best_output_candidate(
+            session,
+            access_token,
+            device_id,
+            actual_conversation_id,
+            file_ids,
+            (upload_w, upload_h),
+        )
 
         # 下载 inpaint 结果。
         # ChatGPT API 有时返回完整合成图（同尺寸），有时仅返回 patch（小尺寸）。
         # 实测发现即使同尺寸，API 也可能只填充遮罩区而其余区域为黑/透明，
         # 因此不能用尺寸判断是否已完整合成——始终手动合成回原图。
         # 合成使用羽化 mask（A 值渐变），边缘平滑，不产生割裂感。
-        raw_inpaint_bytes = _fetch_image_bytes(session, download_url)
-        upload_w, upload_h = _get_image_dimensions(upload_orig_bytes)
         raw_w, raw_h = _get_image_dimensions(raw_inpaint_bytes)
         print(f"[image-inpaint-upstream] API returned {raw_w}x{raw_h} (upload={upload_w}x{upload_h}), compositing with original")
         composited_bytes = _composite_inpaint_onto_original(raw_inpaint_bytes, upload_orig_bytes, upload_mask_bytes)
