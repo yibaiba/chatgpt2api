@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Re-check backend conventions after changing image service behavior."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Need shared quality/thinking checks during validation."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Ensure no redundant helper logic is left behind after the fix."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify data flow and error propagation still make sense after the fix."}

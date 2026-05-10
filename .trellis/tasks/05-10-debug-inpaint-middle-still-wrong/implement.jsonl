@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "本轮修改位于 services/image_service.py，需要遵循 backend 层约定。"}
+{"file": ".trellis/spec/guides/index.md", "reason": "进入实现前读取共享思考指引和 pre-modification 规则。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本轮可能新增 same-size 分流 helper，需要避免复制已有合成逻辑。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "问题跨越前端 inpaint 请求、后端 job 轮询、上游返回与最终合成。"}

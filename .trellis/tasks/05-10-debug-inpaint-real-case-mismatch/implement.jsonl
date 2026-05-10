@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend service change lives in services/image_service.py."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Need shared pre-modification and thinking guidance before changing helpers."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Candidate selection/compositing helpers should reuse existing paths instead of adding duplicate logic."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Bug spans API job result, service candidate selection, and final image returned to UI."}

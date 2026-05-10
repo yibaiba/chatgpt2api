@@ -14,8 +14,10 @@ os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 from services.image_service import (
     EditInputImage,
     ImageGenerationError,
+    _build_output_candidate_score,
     _build_edit_input_payload,
     _build_image_result_data,
+    _composite_inpaint_onto_original,
     _build_regular_picture_v2_body,
     _collect_edit_output,
     _download_as_base64,
@@ -26,6 +28,7 @@ from services.image_service import (
     _run_legacy_regular_edit_mode,
     _resolve_upstream_edit_model,
     _resolve_upstream_model,
+    _select_best_output_candidate,
     _send_regular_edit_conversation,
     edit_image_result,
     generate_image_result,
@@ -35,6 +38,11 @@ from services.utils import ImageRequestOptions
 
 
 class ImageModelRoutingTests(unittest.TestCase):
+    def _png_bytes(self, image: Image.Image) -> bytes:
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
     def _download_response(self, status_code: int, content: bytes = b"", text: str = ""):
         response = mock.Mock()
         response.status_code = status_code
@@ -374,6 +382,106 @@ class ImageModelRoutingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ImageGenerationError, r"upstream image connection failed, please retry later"):
             _download_as_base64(session, "https://example.com/image.png")
+
+    def test_build_output_candidate_score_prefers_exact_size(self) -> None:
+        exact_score = _build_output_candidate_score((941, 1672), (941, 1672))
+        square_score = _build_output_candidate_score((1254, 1254), (941, 1672))
+
+        self.assertLess(exact_score, square_score)
+
+    def test_select_best_output_candidate_prefers_exact_size_over_first_candidate(self) -> None:
+        square_candidate = ("file_square", b"square", (1254, 1254))
+        exact_candidate = ("file_exact", b"exact", (941, 1672))
+
+        selected = _select_best_output_candidate(
+            [square_candidate, exact_candidate],
+            (941, 1672),
+        )
+
+        self.assertEqual(exact_candidate, selected)
+
+    def test_select_best_output_candidate_prefers_closest_aspect_ratio_when_no_exact_size(self) -> None:
+        square_candidate = ("file_square", b"square", (1254, 1254))
+        portrait_candidate = ("file_portrait", b"portrait", (1086, 1448))
+        patch_candidate = ("file_patch", b"patch", (320, 320))
+
+        selected = _select_best_output_candidate(
+            [square_candidate, portrait_candidate, patch_candidate],
+            (941, 1672),
+        )
+
+        self.assertEqual(portrait_candidate, selected)
+
+    def test_composite_inpaint_same_size_patch_canvas_filters_placeholder_background(self) -> None:
+        original = Image.new("RGBA", (20, 20), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (20, 20), (252, 252, 252, 255))
+        for y in range(20):
+            for x in range(20):
+                shade = 252 if (x + y) % 2 == 0 else 196
+                raw_output.putpixel((x, y), (shade, shade, shade, 255))
+        for y in range(8, 12):
+            for x in range(8, 12):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (20, 20), (255, 255, 255, 0))
+        for y in range(6, 14):
+            for x in range(6, 14):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((9, 9)))
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((7, 7)))
+
+    def test_composite_inpaint_same_size_full_frame_keeps_neutral_result_when_not_patch_canvas(self) -> None:
+        original = Image.new("RGBA", (20, 20), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (20, 20), (230, 230, 230, 255))
+
+        mask = Image.new("RGBA", (20, 20), (255, 255, 255, 0))
+        for y in range(6, 14):
+            for x in range(6, 14):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((230, 230, 230, 255), composited.getpixel((9, 9)))
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((2, 2)))
+
+    def test_composite_inpaint_square_output_with_local_mask_uses_bbox_projection(self) -> None:
+        original = Image.new("RGBA", (100, 100), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (50, 50), (210, 210, 210, 255))
+        for y in range(18, 32):
+            for x in range(18, 32):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (100, 100), (255, 255, 255, 0))
+        for y in range(10, 30):
+            for x in range(40, 60):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            center_pixel = composited.getpixel((50, 20))
+            self.assertGreaterEqual(center_pixel[0], 200)
+            self.assertLessEqual(center_pixel[1], 80)
+            self.assertLessEqual(center_pixel[2], 80)
+            self.assertEqual(255, center_pixel[3])
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((10, 10)))
 
     def test_build_image_result_data_resizes_and_reencodes_requested_output(self) -> None:
         source = io.BytesIO()

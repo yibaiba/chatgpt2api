@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "验证 image_service 行为修改仍符合 backend 约定。"}
+{"file": ".trellis/spec/guides/index.md", "reason": "按共享思考指引检查本轮修改范围和验证路径。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "确保没有新增重复分流逻辑。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证日志、job 流程与最终回图数据流仍一致。"}

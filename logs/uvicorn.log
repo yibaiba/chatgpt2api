@@ -1,92 +1,227 @@
-INFO:     Started server process [38516]
+INFO:     Started server process [83252]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-[account-limited-watcher] checking 1 limited accounts
-[account-refresh] start eyJhbGciOiJS...
-INFO:     127.0.0.1:53661 - "GET / HTTP/1.1" 200 OK
-[account-refresh] ok user-89ykktvqNQT5aKTJjdDwP4Up avhu863@yibaiba.fun quota=0 restore_at=2026-04-23T03:21:39.895987+00:00
-[account-refresh] done refreshed=1 errors=0 workers=1
-INFO:     127.0.0.1:54247 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /image/ HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /_next/static/chunks/0youvlgh7lvm0.css HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /_next/static/chunks/0a3i3l808d5qz.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /_next/static/chunks/02i7dfk78~t~2.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54257 - "GET /_next/static/chunks/0mstyq17cbf8-.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54259 - "GET /_next/static/chunks/0rw90u9hu9xv0.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54258 - "GET /_next/static/chunks/08f-kaxjrf~_q.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "GET /_next/static/chunks/turbopack-0vah4y1iw2e5-.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /_next/static/chunks/0wu3_~m4j9oy4.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /_next/static/chunks/0ja56latvbzm-.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54259 - "GET /_next/static/chunks/0bfy5o2waki_8.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "GET /_next/static/chunks/0d3shmwh5_nmn.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /_next/static/chunks/0fcef3e_d.wol.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54258 - "GET /api/image-conversations HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54259 - "GET /image/__next._head.txt?_rsc=m6gay HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "GET /image/__next._index.txt?_rsc=49yld HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /favicon.ico?favicon.0x3dzn~oxb6tn.ico HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /image/__next.image.txt?_rsc=13bir HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54257 - "GET /image/__next.image.__PAGE__.txt?_rsc=y20zm HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54259 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "HEAD /settings/ HTTP/1.1" 405 Method Not Allowed
-INFO:     127.0.0.1:54260 - "HEAD /accounts/ HTTP/1.1" 405 Method Not Allowed
-INFO:     127.0.0.1:54268 - "GET /image/__next._index.txt?_rsc=49yld HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54267 - "GET /image/__next._head.txt?_rsc=m6gay HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54269 - "GET /image/__next.image.txt?_rsc=13bir HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54270 - "GET /image/__next.image.__PAGE__.txt?_rsc=y20zm HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54258 - "GET /accounts/index.txt?_rsc=ybgn1 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54270 - "GET /accounts/index.txt?_rsc=ybgn1 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54258 - "GET /_next/static/chunks/0e_k6j-w0svcm.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "GET /_next/static/chunks/05mkly65y268_.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /_next/static/chunks/0e9ab83vxz3qq.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "HEAD /settings/ HTTP/1.1" 405 Method Not Allowed
-INFO:     127.0.0.1:54258 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /accounts/__next._head.txt?_rsc=1qlly HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54257 - "GET /accounts/__next.accounts.__PAGE__.txt?_rsc=185gs HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /accounts/__next.accounts.txt?_rsc=13rhh HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54258 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54270 - "GET /accounts/__next._head.txt?_rsc=1qlly HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54269 - "GET /accounts/__next.accounts.__PAGE__.txt?_rsc=185gs HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54267 - "GET /accounts/__next.accounts.txt?_rsc=13rhh HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /settings/index.txt?_rsc=ycz4f HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /_next/static/chunks/12fct-ae5du~-.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54267 - "GET /settings/index.txt?_rsc=ycz4f HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54257 - "GET /_next/static/chunks/0.bs-n-csf31t.js HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54257 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54261 - "GET /settings/__next._head.txt?_rsc=ht3gq HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54247 - "GET /settings/__next.settings.__PAGE__.txt?_rsc=3965r HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54258 - "GET /settings/__next.settings.txt?_rsc=1i6wg HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54257 - "GET /api/cpa/pools HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54260 - "GET /api/auth-users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/settings/proxies HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54270 - "GET /settings/__next.settings.txt?_rsc=1i6wg HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54269 - "GET /settings/__next.settings.__PAGE__.txt?_rsc=3965r HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54267 - "GET /settings/__next._head.txt?_rsc=ht3gq HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/image-conversations HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54362 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54362 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/cpa/pools HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54362 - "GET /api/auth-users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54387 - "GET /api/settings/proxies HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54387 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54387 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54387 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54387 - "GET /api/cpa/pools HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54362 - "GET /api/auth-users HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/settings/proxies HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54316 - "GET /api/image-conversations HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54421 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54421 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64041 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64041 - "GET /api/accounts HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64041 - "GET /auth/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64041 - "GET /api/accounts HTTP/1.1" 200 OK
+[account-refresh-watcher] refreshing 94 accounts
+[account-refresh] batch 1 size=3 workers=3
+[account-refresh] start token:a912135c95
+[account-refresh] start token:dab539e4ca
+[account-refresh] start token:c1346d162a
+[account-refresh] fail token:dab539e4ca /backend-api/me failed: HTTP 401
+[account-refresh] fail token:c1346d162a /backend-api/me failed: HTTP 401
+[account-refresh] fail token:a912135c95 /backend-api/me failed: HTTP 401
+[account-refresh] batch 2 size=3 workers=3
+[account-refresh] start token:0fcc411c7b
+[account-refresh] start token:0f65105ca1
+[account-refresh] start token:cf376c9516
+[account-refresh] fail token:cf376c9516 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:0fcc411c7b /backend-api/me failed: HTTP 401
+[account-refresh] fail token:0f65105ca1 /backend-api/me failed: HTTP 401
+[account-refresh] batch 3 size=3 workers=3
+[account-refresh] start token:8997eec9d5
+[account-refresh] start token:8a65175c31
+[account-refresh] start token:c279625db9
+[account-refresh] fail token:8a65175c31 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:c279625db9 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:8997eec9d5 /backend-api/me failed: HTTP 401
+[account-refresh] batch 4 size=3 workers=3
+[account-refresh] start token:1ad2d2d07e
+[account-refresh] start token:3a937ac4aa
+[account-refresh] start token:d3b38dfb9f
+[account-refresh] fail token:3a937ac4aa /backend-api/me failed: HTTP 401
+[account-refresh] fail token:d3b38dfb9f /backend-api/me failed: HTTP 401
+[account-refresh] fail token:1ad2d2d07e /backend-api/me failed: HTTP 401
+[account-refresh] batch 5 size=3 workers=3
+[account-refresh] start token:6d00162326
+[account-refresh] start token:99fc77243c
+[account-refresh] start token:10e8c55d06
+[account-refresh] fail token:6d00162326 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:99fc77243c /backend-api/me failed: HTTP 401
+[account-refresh] fail token:10e8c55d06 /backend-api/me failed: HTTP 401
+[account-refresh] batch 6 size=3 workers=3
+[account-refresh] start token:5187af1b5a
+[account-refresh] start token:d2ada3fcc6
+[account-refresh] start token:b05854db05
+[account-refresh] fail token:b05854db05 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:5187af1b5a /backend-api/me failed: HTTP 401
+[account-refresh] fail token:d2ada3fcc6 /backend-api/me failed: HTTP 401
+[account-refresh] batch 7 size=3 workers=3
+[account-refresh] start token:ee1c4729ae
+[account-refresh] start token:230fcd39d6
+[account-refresh] start token:d9e4629419
+[account-refresh] fail token:230fcd39d6 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:d9e4629419 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:ee1c4729ae /backend-api/me failed: HTTP 401
+[account-refresh] batch 8 size=3 workers=3
+[account-refresh] start token:391b08df59
+[account-refresh] start token:453f1348cd
+[account-refresh] start token:4cc1112b36
+[account-refresh] fail token:453f1348cd /backend-api/me failed: HTTP 401
+[account-refresh] fail token:4cc1112b36 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:391b08df59 /backend-api/me failed: HTTP 401
+[account-refresh] batch 9 size=3 workers=3
+[account-refresh] start token:11dace166b
+[account-refresh] start token:567f36f452
+[account-refresh] start token:a64920d693
+[account-refresh] fail token:567f36f452 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:a64920d693 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:11dace166b /backend-api/me failed: HTTP 401
+[account-refresh] batch 10 size=3 workers=3
+[account-refresh] start token:53f9d442e6
+[account-refresh] start token:ba9ee839ca
+[account-refresh] start token:5c06aa2b2b
+[account-refresh] fail token:ba9ee839ca /backend-api/me failed: HTTP 401
+[account-refresh] fail token:5c06aa2b2b /backend-api/me failed: HTTP 401
+[account-refresh] fail token:53f9d442e6 /backend-api/me failed: HTTP 401
+[account-refresh] batch 11 size=3 workers=3
+[account-refresh] start token:903a14c822
+[account-refresh] start token:ac69a8307c
+[account-refresh] start token:69cc82f3f2
+[account-refresh] fail token:69cc82f3f2 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:ac69a8307c /backend-api/me failed: HTTP 401
+[account-refresh] fail token:903a14c822 /backend-api/me failed: HTTP 401
+[account-refresh] batch 12 size=3 workers=3
+[account-refresh] start token:0b771de012
+[account-refresh] start token:1a2db096c0
+[account-refresh] start token:41c9d35463
+[account-refresh] fail token:41c9d35463 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:0b771de012 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:1a2db096c0 /backend-api/me failed: HTTP 401
+[account-refresh] batch 13 size=3 workers=3
+[account-refresh] start token:9574690ab7
+[account-refresh] start token:f7168f359a
+[account-refresh] start token:ac2dc5395d
+[account-refresh] fail token:9574690ab7 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:f7168f359a /backend-api/me failed: HTTP 401
+[account-refresh] fail token:ac2dc5395d /backend-api/me failed: HTTP 401
+[account-refresh] batch 14 size=3 workers=3
+[account-refresh] start token:477301607d
+[account-refresh] start token:c077308dd5
+[account-refresh] start token:5beab9d70a
+[account-refresh] fail token:5beab9d70a /backend-api/me failed: HTTP 401
+[account-refresh] fail token:c077308dd5 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:477301607d /backend-api/me failed: HTTP 401
+[account-refresh] batch 15 size=3 workers=3
+[account-refresh] start token:0e5d14d8cb
+[account-refresh] start token:cac27b79b0
+[account-refresh] start token:f63bfeda73
+[account-refresh] fail token:cac27b79b0 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:f63bfeda73 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:0e5d14d8cb /backend-api/me failed: HTTP 401
+[account-refresh] batch 16 size=3 workers=3
+[account-refresh] start token:43745a926e
+[account-refresh] start token:969349fca5
+[account-refresh] start token:275082b77e
+[account-refresh] fail token:275082b77e /backend-api/me failed: HTTP 401
+[account-refresh] fail token:969349fca5 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:43745a926e /backend-api/me failed: HTTP 401
+[account-refresh] batch 17 size=3 workers=3
+[account-refresh] start token:21ea9266a6
+[account-refresh] start token:2fad04bba9
+[account-refresh] start token:d8526108fa
+[account-refresh] fail token:21ea9266a6 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:d8526108fa /backend-api/me failed: HTTP 401
+[account-refresh] fail token:2fad04bba9 /backend-api/me failed: HTTP 401
+[account-refresh] batch 18 size=3 workers=3
+[account-refresh] start token:3830fa34be
+[account-refresh] start token:a2c8fca41a
+[account-refresh] start token:a69f1fb7ae
+[account-refresh] fail token:a69f1fb7ae /backend-api/me failed: HTTP 401
+[account-refresh] fail token:a2c8fca41a /backend-api/me failed: HTTP 401
+[account-refresh] fail token:3830fa34be /backend-api/me failed: HTTP 401
+[account-refresh] batch 19 size=3 workers=3
+[account-refresh] start token:d580256df2
+[account-refresh] start token:4dcfdd6b69
+[account-refresh] start token:b72603840b
+[account-refresh] fail token:b72603840b /backend-api/me failed: HTTP 401
+[account-refresh] fail token:4dcfdd6b69 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:d580256df2 /backend-api/me failed: HTTP 401
+[account-refresh] batch 20 size=3 workers=3
+[account-refresh] start token:41395da600
+[account-refresh] start token:5e97789e90
+[account-refresh] start token:82b5f87be4
+[account-refresh] fail token:41395da600 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:82b5f87be4 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:5e97789e90 /backend-api/me failed: HTTP 401
+[account-refresh] batch 21 size=3 workers=3
+[account-refresh] start token:744c5223f7
+[account-refresh] start token:09a16f4d10
+[account-refresh] start token:8e0a8f88b0
+[account-refresh] fail token:744c5223f7 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:09a16f4d10 /backend-api/me failed: HTTP 401
+检测账户类型响应 {'chatgpt_account_id': '36a3abd9-21c4-4351-9396-87fc1ff12451', 'chatgpt_account_user_id': 'user-OWXEHKSXeZnUbicqViF4RmhT__36a3abd9-21c4-4351-9396-87fc1ff12451', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-OWXEHKSXeZnUbicqViF4RmhT', 'is_signup': True, 'user_id': 'user-OWXEHKSXeZnUbicqViF4RmhT'}
+[account-refresh] ok token:8e0a8f88b0 quota=24 restore_at=2026-05-11T11:57:57.951998+00:00
+[account-refresh] batch 22 size=3 workers=3
+[account-refresh] start token:92c528a30e
+[account-refresh] start token:9432d7127c
+[account-refresh] start token:81ebf8bb46
+[account-refresh] fail token:92c528a30e /backend-api/me failed: HTTP 401
+[account-refresh] fail token:9432d7127c /backend-api/me failed: HTTP 401
+[account-refresh] fail token:81ebf8bb46 /backend-api/me failed: HTTP 401
+[account-refresh] batch 23 size=3 workers=3
+[account-refresh] start token:957fb000c1
+[account-refresh] start token:e3552fa7da
+[account-refresh] start token:012b55e3f2
+[account-refresh] fail token:e3552fa7da /backend-api/me failed: HTTP 401
+[account-refresh] fail token:957fb000c1 /backend-api/me failed: HTTP 401
+检测账户类型响应 {'chatgpt_account_id': 'f020a13b-a1f5-403f-a936-f0c2f9d2123b', 'chatgpt_account_user_id': 'user-QIF1YHZkMY21PWpA2GvE8DMy__f020a13b-a1f5-403f-a936-f0c2f9d2123b', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-QIF1YHZkMY21PWpA2GvE8DMy', 'is_signup': True, 'user_id': 'user-QIF1YHZkMY21PWpA2GvE8DMy'}
+[account-refresh] ok token:012b55e3f2 quota=25 restore_at=2026-05-11T12:03:58.670754+00:00
+[account-refresh] batch 24 size=3 workers=3
+[account-refresh] start token:1264d46da3
+[account-refresh] start token:1481d90438
+[account-refresh] start token:3e94b3db73
+[account-refresh] fail token:3e94b3db73 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:1481d90438 /backend-api/me failed: HTTP 401
+检测账户类型响应 {'chatgpt_account_id': '036d2b8a-3672-42c9-988e-689a54e36b5a', 'chatgpt_account_user_id': 'user-ve2XkNbwJESpYzbEnPSEDxGa__036d2b8a-3672-42c9-988e-689a54e36b5a', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-ve2XkNbwJESpYzbEnPSEDxGa', 'is_signup': True, 'user_id': 'user-ve2XkNbwJESpYzbEnPSEDxGa'}
+[account-refresh] ok token:1264d46da3 quota=25 restore_at=2026-05-11T12:03:59.636856+00:00
+[account-refresh] batch 25 size=3 workers=3
+[account-refresh] start token:4cdbc42a5e
+[account-refresh] start token:cf2a6fb02d
+[account-refresh] start token:403c469c48
+[account-refresh] fail token:cf2a6fb02d /backend-api/me failed: HTTP 401
+[account-refresh] fail token:403c469c48 /backend-api/me failed: HTTP 401
+[account-refresh] fail token:4cdbc42a5e /backend-api/me failed: HTTP 401
+[account-refresh] batch 26 size=3 workers=3
+[account-refresh] start token:5b229da9a8
+[account-refresh] start token:29dc90e54c
+[account-refresh] start token:06e605535b
+[account-refresh] fail token:06e605535b /backend-api/me failed: HTTP 401
+[account-refresh] fail token:29dc90e54c /backend-api/me failed: HTTP 401
+检测账户类型响应 {'chatgpt_account_id': 'ad35556f-3f25-4fab-ad0f-549fa25b1aec', 'chatgpt_account_user_id': 'user-rxoRSzTE7iJqhmjh3t6TKVCf__ad35556f-3f25-4fab-ad0f-549fa25b1aec', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-rxoRSzTE7iJqhmjh3t6TKVCf', 'is_signup': True, 'user_id': 'user-rxoRSzTE7iJqhmjh3t6TKVCf'}
+[account-refresh] ok token:5b229da9a8 quota=25 restore_at=2026-05-11T12:04:01.525488+00:00
+[account-refresh] batch 27 size=3 workers=3
+[account-refresh] start token:718dfe1a84
+[account-refresh] start token:bc9d69ba21
+[account-refresh] start token:67468539c2
+检测账户类型响应 {'chatgpt_account_id': 'f2287b6f-1b85-42a9-af14-beaaac6c638f', 'chatgpt_account_user_id': 'user-eZ2HvFxxobhO3HmHKj7HnP58__f2287b6f-1b85-42a9-af14-beaaac6c638f', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-eZ2HvFxxobhO3HmHKj7HnP58', 'is_signup': True, 'user_id': 'user-eZ2HvFxxobhO3HmHKj7HnP58'}
+[account-refresh] ok token:bc9d69ba21 quota=25 restore_at=2026-05-11T12:04:02.610418+00:00
+检测账户类型响应 {'chatgpt_account_id': '7a3da3e6-7f0f-4d89-9b35-7e1ad2adb290', 'chatgpt_account_user_id': 'user-0SgIZJtWLymqp9ZzyMHnJS7l__7a3da3e6-7f0f-4d89-9b35-7e1ad2adb290', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-0SgIZJtWLymqp9ZzyMHnJS7l', 'is_signup': True, 'user_id': 'user-0SgIZJtWLymqp9ZzyMHnJS7l'}
+[account-refresh] ok token:67468539c2 quota=25 restore_at=2026-05-11T12:04:02.616694+00:00
+检测账户类型响应 {'chatgpt_account_id': '5cb8d58e-be32-4725-9544-81b05bdfb488', 'chatgpt_account_user_id': 'user-jz96PLNbexPM56gv7XesepdI__5cb8d58e-be32-4725-9544-81b05bdfb488', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-jz96PLNbexPM56gv7XesepdI', 'is_signup': True, 'user_id': 'user-jz96PLNbexPM56gv7XesepdI'}
+[account-refresh] ok token:718dfe1a84 quota=25 restore_at=2026-05-11T12:04:02.698544+00:00
+[account-refresh] batch 28 size=3 workers=3
+[account-refresh] start token:112e3fe578
+[account-refresh] start token:edc9468f09
+[account-refresh] start token:1c63df21bd
+[account-refresh] fail token:112e3fe578 /backend-api/me failed: HTTP 401
+检测账户类型响应 {'chatgpt_account_id': '0b7621ec-5163-46e8-b03a-2125ea2f29c3', 'chatgpt_account_user_id': 'user-oWPBogSctdgGf1FImVPOz2N3__0b7621ec-5163-46e8-b03a-2125ea2f29c3', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-oWPBogSctdgGf1FImVPOz2N3', 'is_signup': True, 'user_id': 'user-oWPBogSctdgGf1FImVPOz2N3'}
+[account-refresh] ok token:1c63df21bd quota=25 restore_at=2026-05-11T12:04:03.994050+00:00
+检测账户类型响应 {'chatgpt_account_id': 'f6f5f6d9-cb1c-4adc-b6a3-ef58a54b91ec', 'chatgpt_account_user_id': 'user-21EhA4KPyEmmucvbgqxocneZ__f6f5f6d9-cb1c-4adc-b6a3-ef58a54b91ec', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-21EhA4KPyEmmucvbgqxocneZ', 'is_signup': True, 'user_id': 'user-21EhA4KPyEmmucvbgqxocneZ'}
+[account-refresh] ok token:edc9468f09 quota=25 restore_at=2026-05-11T12:04:03.947895+00:00
+[account-refresh] batch 29 size=3 workers=3
+[account-refresh] start token:ac647f4d1d
+[account-refresh] start token:8796cf3355
+[account-refresh] start token:304ca89e27
+检测账户类型响应 {'chatgpt_account_id': '9bfb4de1-7cb3-4d59-96f0-73fc6c3afd60', 'chatgpt_account_user_id': 'user-R93pS15wCipIgQRuBm4DSVJf__9bfb4de1-7cb3-4d59-96f0-73fc6c3afd60', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-R93pS15wCipIgQRuBm4DSVJf', 'is_signup': True, 'user_id': 'user-R93pS15wCipIgQRuBm4DSVJf'}
+[account-refresh] ok token:8796cf3355 quota=3 restore_at=2026-05-11T12:04:04.860859+00:00
+检测账户类型响应 {'chatgpt_account_id': '046cc361-7475-4e93-bf9a-e3726357068c', 'chatgpt_account_user_id': 'user-hrn1EWOX98ee0HXHIomYxrLk__046cc361-7475-4e93-bf9a-e3726357068c', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-hrn1EWOX98ee0HXHIomYxrLk', 'is_signup': True, 'user_id': 'user-hrn1EWOX98ee0HXHIomYxrLk'}
+[account-refresh] ok token:ac647f4d1d quota=50 restore_at=2026-05-11T12:04:04.978183+00:00
+检测账户类型响应 {'chatgpt_account_id': 'ac6e8bee-7acd-4866-a4a9-9f38426bfd8e', 'chatgpt_account_user_id': 'user-3AJgYHvZX0zHtPNGhBNX9BlY__ac6e8bee-7acd-4866-a4a9-9f38426bfd8e', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-3AJgYHvZX0zHtPNGhBNX9BlY', 'is_signup': True, 'user_id': 'user-3AJgYHvZX0zHtPNGhBNX9BlY'}
+[account-refresh] ok token:304ca89e27 quota=25 restore_at=2026-05-11T12:04:05.062408+00:00
+[account-refresh] batch 30 size=3 workers=3
+[account-refresh] start token:c275e98aea
+[account-refresh] start token:df5f6417d0
+[account-refresh] start token:771c8b5890
+检测账户类型响应 {'chatgpt_account_id': 'e51fa037-3c4f-43c5-90b2-a0a71fd61c0d', 'chatgpt_account_user_id': 'user-KrjzOpeygQW995GeB2oZBGuo__e51fa037-3c4f-43c5-90b2-a0a71fd61c0d', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-KrjzOpeygQW995GeB2oZBGuo', 'is_signup': True, 'user_id': 'user-KrjzOpeygQW995GeB2oZBGuo'}
+[account-refresh] ok token:c275e98aea quota=25 restore_at=2026-05-11T12:04:06.249361+00:00
+检测账户类型响应 {'chatgpt_account_id': '2157c44d-06b4-4671-9599-a0de6a8d1d66', 'chatgpt_account_user_id': 'user-dsE2vl6vU7uJ2IX4erZGIZF4__2157c44d-06b4-4671-9599-a0de6a8d1d66', 'chatgpt_compute_residency': 'no_constraint', 'chatgpt_plan_type': 'free', 'chatgpt_user_id': 'user-dsE2vl6vU7uJ2IX4erZGIZF4', 'is_signup': True, 'user_id': 'user-dsE2vl6vU7uJ2IX4erZGIZF4'}

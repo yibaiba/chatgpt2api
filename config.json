@@ -14,5 +14,6 @@
   "storage_backend": "json",
   "storage_sqlite_path": "./data/accounts.sqlite3",
   "storage_env_override_active": false,
+  "image_upstream_model": "auto",
   "auth-key-hash": "pbkdf2_sha256$260000$0edf2f17e4ad1e2185b49dcb76e7e528$2df553ecb66e266ffcf220aa659cb1720b6923dcf2400483b2ee90771356dbc5"
 }
