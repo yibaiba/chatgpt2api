@@ -209,8 +209,8 @@ class ImageEditsApiTests(unittest.TestCase):
         self.assertEqual([1], self.auth_service.reserved)
         self.assertEqual([(1, 1)], self.auth_service.settled)
 
-    def test_inpaint_job_does_not_forward_conversation_id(self) -> None:
-        """跨账号 404 修复验证：前端传来的 conversation_id 不应透传给 inpaint 服务。"""
+    def test_inpaint_job_forwards_conversation_id(self) -> None:
+        """前端传来的 upstream 会话上下文应透传到 inpaint 服务。"""
         img = self._fake_image_bytes()
         response = self.client.post(
             "/api/image-jobs/inpaint",
@@ -230,13 +230,11 @@ class ImageEditsApiTests(unittest.TestCase):
         job = self._wait_for_job(response.json()["job"]["id"])
 
         self.assertEqual("success", job["status"])
-        # inpaint_with_pool 收到的 conversation_id/parent_message_id 必须为空
-        # 否则跨账号时服务端会 404
         call = _FakeChatGPTService.last_call
         self.assertIsNotNone(call)
         self.assertEqual("inpaint", call["kind"])
-        self.assertEqual("", call["conversation_id"], "conversation_id 不应透传给 inpaint 服务")
-        self.assertEqual("", call["parent_message_id"], "parent_message_id 不应透传给 inpaint 服务")
+        self.assertEqual("conv-from-other-account", call["conversation_id"])
+        self.assertEqual("msg-123", call["parent_message_id"])
 
     def test_inpaint_job_error_refunds_reserved_quota(self) -> None:
         _FakeChatGPTService.inpaint_error = ImageGenerationError("upstream inpaint failed")

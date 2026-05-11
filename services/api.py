@@ -878,13 +878,11 @@ def create_app() -> FastAPI:
             image_options: ImageRequestOptions,
             response_format: str,
             base_url: str | None,
-            original_gen_id: str,
-            ref_images: list[tuple[bytes, str, str]] | None,
-            conversation_id: str = "",
-            parent_message_id: str = "",
+            inpaint_context: dict[str, object] | None = None,
     ) -> None:
         try:
             update_image_job(job_id, status="running")
+            context = inpaint_context or {}
             result = chatgpt_service.inpaint_with_pool(
                 prompt,
                 original_image,
@@ -892,13 +890,11 @@ def create_app() -> FastAPI:
                 model,
                 response_format=response_format,
                 base_url=base_url,
-                original_gen_id=original_gen_id,
-                ref_images=ref_images,
+                original_gen_id=str(context.get("original_gen_id") or ""),
+                ref_images=context.get("ref_images"),
                 image_options=image_options,
-                # 账号池模式：不透传 conversation_id/parent_message_id
-                # 这两个 ID 属于生成时的账号，换账号后服务端查不到会话 → 404
-                conversation_id="",
-                parent_message_id="",
+                conversation_id=str(context.get("conversation_id") or ""),
+                parent_message_id=str(context.get("parent_message_id") or ""),
             )
             auth_service.settle_images_for_identity(identity, reserved_count, count_generated_images(result))
             update_image_job(job_id, status="success", result=result)
@@ -1439,10 +1435,12 @@ def create_app() -> FastAPI:
                 image_options,
                 normalized_response_format,
                 base_url,
-                str(original_gen_id or ""),
-                ref_images,
-                str(conversation_id or ""),
-                str(parent_message_id or ""),
+                {
+                    "original_gen_id": str(original_gen_id or ""),
+                    "ref_images": ref_images,
+                    "conversation_id": str(conversation_id or ""),
+                    "parent_message_id": str(parent_message_id or ""),
+                },
             ),
             name=f"image-inpaint-job-{job['id']}",
             daemon=True,
@@ -1521,6 +1519,8 @@ def create_app() -> FastAPI:
             compression: int | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
             original_gen_id: str | None = Form(default=None),
+                conversation_id: str | None = Form(default=None),
+                parent_message_id: str | None = Form(default=None),
     ):
         identity = require_session(request, authorization)
         if n < 1 or n > 4:
@@ -1578,6 +1578,8 @@ def create_app() -> FastAPI:
                     original_gen_id=str(original_gen_id or ""),
                     ref_images=ref_images,
                     image_options=image_options,
+                    conversation_id=str(conversation_id or ""),
+                    parent_message_id=str(parent_message_id or ""),
                 )
             except ImageGenerationError as exc:
                 auth_service.settle_images_for_identity(identity, n, 0)

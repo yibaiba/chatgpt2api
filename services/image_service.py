@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from curl_cffi.requests import Session
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 
 from services.account_service import account_service
 from services import proof_of_work
@@ -74,9 +74,17 @@ PLACEHOLDER_CANVAS_NEUTRAL_DELTA_MAX = 8
 PLACEHOLDER_CANVAS_OUTSIDE_RATIO_MIN = 0.85
 PLACEHOLDER_CANVAS_INSIDE_RATIO_MAX = 0.8
 PLACEHOLDER_CANVAS_OUTSIDE_INSIDE_DELTA_MIN = 0.2
+PLACEHOLDER_CANVAS_TONE_RANGE_MIN = 24
+SAME_SIZE_PATCH_CANVAS_BBOX_AREA_RATIO_MAX = 0.5
+SAME_SIZE_FULL_FRAME_MASK_EXPANSION_RATIO = 0.12
+SAME_SIZE_FULL_FRAME_MASK_EXPANSION_MAX = 24
+SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER = 1.5
+SAME_SIZE_FULL_FRAME_MASK_ALPHA_FLOOR = 8
 FULL_FRAME_VARIANT_AREA_RATIO_MIN = 0.72
 FULL_FRAME_VARIANT_AREA_RATIO_MAX = 1.45
 FULL_FRAME_VARIANT_MASK_COVERAGE_MIN = 0.35
+FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX = 16
+FULL_FRAME_VARIANT_OUTSIDE_MASK_MEAN_DIFF_MAX = 12.0
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -2264,12 +2272,12 @@ def _project_inpaint_onto_canvas(
 
 
 def _looks_like_full_frame_variant(
-    raw_size: tuple[int, int],
-    target_size: tuple[int, int],
+    inpaint_img: Image.Image,
+    orig_img: Image.Image,
     mask_alpha: Image.Image,
 ) -> bool:
-    raw_w, raw_h = raw_size
-    target_w, target_h = target_size
+    raw_w, raw_h = inpaint_img.size
+    target_w, target_h = orig_img.size
     raw_area = raw_w * raw_h
     target_area = target_w * target_h
     if target_area <= 0:
@@ -2283,9 +2291,35 @@ def _looks_like_full_frame_variant(
     # 仅计算 alpha >= 128 的像素（半透明以上），避免把整个柔和边缘都算作"全图编辑"。
     significant_alpha_pixels = sum(histogram[128:])
     mask_coverage_ratio = significant_alpha_pixels / target_area
-    # 方图面积接近原图不等于整图结果；若用户实际只遮了局部区域，
-    # 更可能是“局部编辑画布”而不是整图方版，此时应走 bbox 回贴。
-    return mask_coverage_ratio >= FULL_FRAME_VARIANT_MASK_COVERAGE_MIN
+    if mask_coverage_ratio >= FULL_FRAME_VARIANT_MASK_COVERAGE_MIN:
+        return True
+
+    scaled_rgb = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGB")
+    original_rgb = orig_img.convert("RGB")
+    scaled_pixels = scaled_rgb.load()
+    original_pixels = original_rgb.load()
+    mask_pixels = mask_alpha.load()
+
+    total_diff = 0
+    sample_count = 0
+    sample_step = max(1, min(target_w, target_h) // 200)
+    for y in range(0, target_h, sample_step):
+        for x in range(0, target_w, sample_step):
+            if mask_pixels[x, y] > FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX:
+                continue
+            raw_pixel = scaled_pixels[x, y]
+            orig_pixel = original_pixels[x, y]
+            total_diff += (
+                abs(raw_pixel[0] - orig_pixel[0])
+                + abs(raw_pixel[1] - orig_pixel[1])
+                + abs(raw_pixel[2] - orig_pixel[2])
+            )
+            sample_count += 1
+
+    if sample_count == 0:
+        return False
+    mean_diff = total_diff / (sample_count * 3)
+    return mean_diff <= FULL_FRAME_VARIANT_OUTSIDE_MASK_MEAN_DIFF_MAX
 
 
 def _is_placeholder_canvas_pixel(pixel: tuple[int, int, int] | tuple[int, int, int, int]) -> bool:
@@ -2298,27 +2332,35 @@ def _is_placeholder_canvas_pixel(pixel: tuple[int, int, int] | tuple[int, int, i
 def _measure_placeholder_canvas_ratios(
     raw_rgb: Image.Image,
     mask_alpha: Image.Image,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, int] | None:
     raw_pixels = raw_rgb.load()
     mask_pixels = mask_alpha.load()
     outside_total = 0
     outside_placeholder = 0
     inside_total = 0
     inside_placeholder = 0
+    outside_placeholder_min = 255
+    outside_placeholder_max = 0
 
     for y in range(raw_rgb.height):
         for x in range(raw_rgb.width):
-            pixel_is_placeholder = _is_placeholder_canvas_pixel(raw_pixels[x, y])
+            pixel = raw_pixels[x, y]
+            pixel_is_placeholder = _is_placeholder_canvas_pixel(pixel)
             if mask_pixels[x, y] > 0:
                 inside_total += 1
                 inside_placeholder += int(pixel_is_placeholder)
             else:
                 outside_total += 1
                 outside_placeholder += int(pixel_is_placeholder)
+                if pixel_is_placeholder:
+                    mean = round((pixel[0] + pixel[1] + pixel[2]) / 3.0)
+                    outside_placeholder_min = min(outside_placeholder_min, mean)
+                    outside_placeholder_max = max(outside_placeholder_max, mean)
 
     if outside_total == 0 or inside_total == 0:
         return None
-    return outside_placeholder / outside_total, inside_placeholder / inside_total
+    outside_tone_range = max(0, outside_placeholder_max - outside_placeholder_min)
+    return outside_placeholder / outside_total, inside_placeholder / inside_total, outside_tone_range
 
 
 def _filter_mask_by_placeholder_pixels(
@@ -2341,6 +2383,25 @@ def _filter_mask_by_placeholder_pixels(
     return effective_mask
 
 
+def _box_area(box: tuple[int, int, int, int]) -> int:
+    return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+
+
+def _build_same_size_full_frame_mask(mask_alpha: Image.Image) -> Image.Image:
+    mask_bbox = mask_alpha.getbbox()
+    if mask_bbox is None or mask_bbox == (0, 0, mask_alpha.width, mask_alpha.height):
+        return mask_alpha
+
+    box_w = max(1, mask_bbox[2] - mask_bbox[0])
+    box_h = max(1, mask_bbox[3] - mask_bbox[1])
+    expansion = round(min(box_w, box_h) * SAME_SIZE_FULL_FRAME_MASK_EXPANSION_RATIO)
+    expansion = min(SAME_SIZE_FULL_FRAME_MASK_EXPANSION_MAX, max(1, expansion))
+    expanded = mask_alpha.filter(ImageFilter.MaxFilter(expansion * 2 + 1))
+    feathered = expanded.filter(ImageFilter.GaussianBlur(radius=max(1, expansion * SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER)))
+    feathered = feathered.point(lambda value: 0 if value < SAME_SIZE_FULL_FRAME_MASK_ALPHA_FLOOR else value)
+    return ImageChops.lighter(mask_alpha, feathered)
+
+
 def _build_same_size_effective_mask(
     inpaint_img: Image.Image,
     mask_alpha: Image.Image,
@@ -2354,17 +2415,22 @@ def _build_same_size_effective_mask(
     if ratios is None:
         return mask_alpha, False
 
-    outside_ratio, inside_ratio = ratios
+    outside_ratio, inside_ratio, outside_tone_range = ratios
     if outside_ratio < PLACEHOLDER_CANVAS_OUTSIDE_RATIO_MIN:
         return mask_alpha, False
     if inside_ratio > PLACEHOLDER_CANVAS_INSIDE_RATIO_MAX:
         return mask_alpha, False
     if outside_ratio - inside_ratio < PLACEHOLDER_CANVAS_OUTSIDE_INSIDE_DELTA_MIN:
         return mask_alpha, False
+    if outside_tone_range < PLACEHOLDER_CANVAS_TONE_RANGE_MIN:
+        return mask_alpha, False
 
     effective_mask = _filter_mask_by_placeholder_pixels(raw_rgb, mask_alpha)
 
-    if effective_mask.getbbox() is None:
+    effective_bbox = effective_mask.getbbox()
+    if effective_bbox is None:
+        return mask_alpha, False
+    if _box_area(effective_bbox) / max(1, _box_area(mask_bbox)) > SAME_SIZE_PATCH_CANVAS_BBOX_AREA_RATIO_MAX:
         return mask_alpha, False
     return effective_mask, True
 
@@ -2389,9 +2455,13 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
         if inpaint_img.size == (target_w, target_h):
             inpaint_rgba = inpaint_img.convert("RGBA")
             composite_mask, placeholder_filtered = _build_same_size_effective_mask(inpaint_img, mask_alpha)
-            projection_mode = "same-size-patch-canvas" if placeholder_filtered else "full-frame"
+            if placeholder_filtered:
+                projection_mode = "same-size-patch-canvas"
+            else:
+                composite_mask = _build_same_size_full_frame_mask(mask_alpha)
+                projection_mode = "full-frame"
             projection_box = composite_mask.getbbox() or (0, 0, target_w, target_h)
-        elif _looks_like_full_frame_variant(inpaint_img.size, (target_w, target_h), mask_alpha):
+        elif _looks_like_full_frame_variant(inpaint_img, orig_img, mask_alpha):
             inpaint_rgba = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGBA")
             projection_mode = "full-frame-variant"
             projection_box = (0, 0, target_w, target_h)

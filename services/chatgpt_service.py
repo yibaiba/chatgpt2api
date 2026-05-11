@@ -16,6 +16,7 @@ from services.image_service import (
     edit_image_result,
     generate_image_result,
     inpaint_image_result,
+    is_conversation_forbidden_error,
     is_rate_limited_image_error,
     is_retryable_image_output_error,
     is_token_invalid_error,
@@ -1020,6 +1021,8 @@ class ChatGPTService:
         _INPAINT_MAX_RETRIES = 3
         tried_tokens: set[str] = set()
         last_error: str = "inpaint failed"
+        requested_conversation_id = str(conversation_id or "").strip()
+        requested_parent_message_id = str(parent_message_id or "").strip()
 
         for attempt in range(1, _INPAINT_MAX_RETRIES + 1):
             try:
@@ -1030,7 +1033,8 @@ class ChatGPTService:
             tried_tokens.add(request_token)
             print(
                 f"[image-inpaint] attempt={attempt}/{_INPAINT_MAX_RETRIES} "
-                f"token={request_token[:12]}... model={model}"
+                f"token={request_token[:12]}... model={model} "
+                f"reuse_conversation={'yes' if requested_conversation_id and requested_parent_message_id else 'no'}"
             )
             try:
                 result = inpaint_image_result(
@@ -1044,28 +1048,65 @@ class ChatGPTService:
                     original_gen_id=original_gen_id,
                     ref_images=ref_images,
                     image_options=image_options,
-                    # 账号池模式：conversation_id 属于生成时的账号，跨账号使用会导致 404
-                    # 原图已重新上传（original_file_id 是当前账号的），无需续接原会话
-                    conversation_id="",
-                    parent_message_id="",
+                    conversation_id=requested_conversation_id,
+                    parent_message_id=requested_parent_message_id,
                 )
+            except ImageGenerationError as exc:
+                if requested_conversation_id and requested_parent_message_id and is_conversation_forbidden_error(str(exc)):
+                    print(
+                        "[image-inpaint] existing conversation rejected by current account, "
+                        "retrying same token without conversation context"
+                    )
+                    try:
+                        result = inpaint_image_result(
+                            request_token,
+                            prompt,
+                            original_image,
+                            mask_data,
+                            model,
+                            response_format=response_format,
+                            base_url=base_url,
+                            original_gen_id=original_gen_id,
+                            ref_images=ref_images,
+                            image_options=image_options,
+                            conversation_id="",
+                            parent_message_id="",
+                        )
+                    except ImageGenerationError as fallback_exc:
+                        self._mark_image_request_result(request_token, success=False, model=model)
+                        last_error = str(fallback_exc)
+                        if "no image returned" in last_error and attempt < _INPAINT_MAX_RETRIES:
+                            print(
+                                f"[image-inpaint] account doesn't support inpainting, "
+                                f"retrying with different account (attempt {attempt}/{_INPAINT_MAX_RETRIES})"
+                            )
+                            continue
+                        raise
+                else:
+                    self._mark_image_request_result(request_token, success=False, model=model)
+                    last_error = str(exc)
+                    # 「no image returned」通常表示该账号不支持编辑功能，换号重试
+                    if "no image returned" in last_error and attempt < _INPAINT_MAX_RETRIES:
+                        print(
+                            f"[image-inpaint] account doesn't support inpainting, "
+                            f"retrying with different account (attempt {attempt}/{_INPAINT_MAX_RETRIES})"
+                        )
+                        continue
+                    raise
+            else:
                 account = self._mark_image_request_result(request_token, success=True, model=model)
                 print(
                     f"[image-inpaint] success attempt={attempt} token={request_token[:12]}... "
                     f"quota={account.get('quota') if account else 'unknown'}"
                 )
                 return result
-            except ImageGenerationError as exc:
-                self._mark_image_request_result(request_token, success=False, model=model)
-                last_error = str(exc)
-                # 「no image returned」通常表示该账号不支持编辑功能，换号重试
-                if "no image returned" in last_error and attempt < _INPAINT_MAX_RETRIES:
-                    print(
-                        f"[image-inpaint] account doesn't support inpainting, "
-                        f"retrying with different account (attempt {attempt}/{_INPAINT_MAX_RETRIES})"
-                    )
-                    continue
-                raise
+
+            account = self._mark_image_request_result(request_token, success=True, model=model)
+            print(
+                f"[image-inpaint] success attempt={attempt} token={request_token[:12]}... "
+                f"quota={account.get('quota') if account else 'unknown'}"
+            )
+            return result
 
         raise ImageGenerationError(last_error)
 

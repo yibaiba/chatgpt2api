@@ -90,6 +90,58 @@ class ImageModelRoutingTests(unittest.TestCase):
         self.assertEqual("gpt-5-3", upstream_model)
         self.assertTrue(use_thinking)
 
+    def test_inpaint_with_pool_reuses_existing_conversation_context(self) -> None:
+        account_service = mock.Mock()
+        account_service.get_available_access_token.return_value = "token-a"
+        account_service.mark_image_result.return_value = {"quota": 1}
+        service = ChatGPTService(account_service)
+
+        with mock.patch(
+            "services.chatgpt_service.inpaint_image_result",
+            return_value={"created": 123, "data": [{"b64_json": "ZmFrZQ=="}]},
+        ) as inpaint_mock:
+            result = service.inpaint_with_pool(
+                "replace center character",
+                (b"orig", "orig.png", "image/png"),
+                b"mask",
+                "gpt-image-2",
+                conversation_id="conv-123",
+                parent_message_id="msg-456",
+            )
+
+        self.assertEqual(123, result["created"])
+        self.assertEqual("conv-123", inpaint_mock.call_args.kwargs["conversation_id"])
+        self.assertEqual("msg-456", inpaint_mock.call_args.kwargs["parent_message_id"])
+
+    def test_inpaint_with_pool_falls_back_without_conversation_context_on_404(self) -> None:
+        account_service = mock.Mock()
+        account_service.get_available_access_token.return_value = "token-a"
+        account_service.mark_image_result.return_value = {"quota": 1}
+        service = ChatGPTService(account_service)
+
+        with mock.patch(
+            "services.chatgpt_service.inpaint_image_result",
+            side_effect=[
+                ImageGenerationError("conversation failed: 404"),
+                {"created": 123, "data": [{"b64_json": "ZmFrZQ=="}]},
+            ],
+        ) as inpaint_mock:
+            result = service.inpaint_with_pool(
+                "replace center character",
+                (b"orig", "orig.png", "image/png"),
+                b"mask",
+                "gpt-image-2",
+                conversation_id="conv-123",
+                parent_message_id="msg-456",
+            )
+
+        self.assertEqual(123, result["created"])
+        self.assertEqual(2, inpaint_mock.call_count)
+        self.assertEqual("conv-123", inpaint_mock.call_args_list[0].kwargs["conversation_id"])
+        self.assertEqual("msg-456", inpaint_mock.call_args_list[0].kwargs["parent_message_id"])
+        self.assertEqual("", inpaint_mock.call_args_list[1].kwargs["conversation_id"])
+        self.assertEqual("", inpaint_mock.call_args_list[1].kwargs["parent_message_id"])
+
     def test_edit_models_follow_upstream_picture_pipeline_slug(self) -> None:
         self.assertEqual("gpt-5-3", _resolve_upstream_edit_model("gpt-image-2"))
         self.assertEqual("gpt-5-3", _resolve_upstream_edit_model("gpt-image-think"))
@@ -457,6 +509,87 @@ class ImageModelRoutingTests(unittest.TestCase):
             self.assertEqual((230, 230, 230, 255), composited.getpixel((9, 9)))
             self.assertEqual((12, 34, 56, 255), composited.getpixel((2, 2)))
 
+    def test_composite_inpaint_same_size_full_frame_light_background_keeps_mask_area(self) -> None:
+        original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (24, 24), (242, 242, 242, 255))
+        for y in range(9, 15):
+            for x in range(9, 15):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (24, 24), (255, 255, 255, 0))
+        for y in range(6, 18):
+            for x in range(6, 18):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((242, 242, 242, 255), composited.getpixel((7, 7)))
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((12, 12)))
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((3, 3)))
+
+    def test_composite_inpaint_same_size_full_frame_feathers_context_past_mask_edge(self) -> None:
+        original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        for y in range(8, 16):
+            for x in range(8, 16):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+        for y in range(7, 17):
+            raw_output.putpixel((7, y), (80, 200, 80, 255))
+            raw_output.putpixel((16, y), (80, 200, 80, 255))
+        for x in range(7, 17):
+            raw_output.putpixel((x, 7), (80, 200, 80, 255))
+            raw_output.putpixel((x, 16), (80, 200, 80, 255))
+
+        mask = Image.new("RGBA", (24, 24), (255, 255, 255, 0))
+        for y in range(8, 16):
+            for x in range(8, 16):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((12, 12)))
+            edge_pixel = composited.getpixel((7, 12))
+            self.assertGreater(edge_pixel[1], 34)
+            self.assertNotEqual((12, 34, 56, 255), edge_pixel)
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((4, 12)))
+
+    def test_composite_inpaint_same_size_near_full_mask_stays_full_frame(self) -> None:
+        original = Image.new("RGBA", (32, 32), (30, 40, 80, 255))
+        raw_output = Image.new("RGBA", (32, 32), (252, 252, 252, 255))
+        for y in range(32):
+            for x in range(32):
+                shade = 252 if (x + y) % 2 == 0 else 196
+                raw_output.putpixel((x, y), (shade, shade, shade, 255))
+        for y in range(10, 22):
+            for x in range(10, 22):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (32, 32), (255, 255, 255, 0))
+        for y in range(8, 24):
+            for x in range(8, 24):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((252, 252, 252, 255), composited.getpixel((9, 9)))
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((16, 16)))
+            self.assertEqual((30, 40, 80, 255), composited.getpixel((1, 1)))
+
     def test_composite_inpaint_square_output_with_local_mask_uses_bbox_projection(self) -> None:
         original = Image.new("RGBA", (100, 100), (12, 34, 56, 255))
         raw_output = Image.new("RGBA", (50, 50), (210, 210, 210, 255))
@@ -482,6 +615,38 @@ class ImageModelRoutingTests(unittest.TestCase):
             self.assertLessEqual(center_pixel[2], 80)
             self.assertEqual(255, center_pixel[3])
             self.assertEqual((12, 34, 56, 255), composited.getpixel((10, 10)))
+
+    def test_composite_inpaint_different_size_full_frame_variant_with_local_mask_keeps_scene_alignment(self) -> None:
+        original = Image.new("RGBA", (100, 100), (0, 0, 0, 255))
+        for y in range(100):
+            for x in range(100):
+                original.putpixel((x, y), (x, y, 120, 255))
+
+        raw_output = original.resize((120, 120), Image.Resampling.BICUBIC)
+        for y in range(54, 66):
+            for x in range(54, 66):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (100, 100), (255, 255, 255, 0))
+        for y in range(40, 60):
+            for x in range(40, 60):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            center_pixel = composited.getpixel((50, 50))
+            self.assertGreaterEqual(center_pixel[0], 210)
+            self.assertLessEqual(center_pixel[1], 40)
+            self.assertLessEqual(center_pixel[2], 40)
+            self.assertEqual(255, center_pixel[3])
+            # 若误把整图结果压进局部 bbox，这个点会采样到整图左上角，颜色会明显偏离原场景。
+            self.assertEqual((42, 42, 120, 255), composited.getpixel((42, 42)))
+            self.assertEqual((12, 12, 120, 255), composited.getpixel((12, 12)))
 
     def test_build_image_result_data_resizes_and_reencodes_requested_output(self) -> None:
         source = io.BytesIO()
@@ -702,6 +867,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             "device",
             "conversation_regular",
             {"file_input"},
+            force_poll_past_text=False,
         )
 
     def test_collect_edit_output_filters_invalid_file_upload_id_before_polling(self) -> None:
@@ -729,6 +895,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             "device",
             "conversation_regular",
             {"file_input"},
+            force_poll_past_text=False,
         )
 
     def test_edit_think_model_uses_regular_image_pipeline(self) -> None:

@@ -265,8 +265,17 @@ curl http://localhost:8000/v1/images/edits \
 | `n`               | 生成数量，当前后端限制为 `1-4`                               |
 | `response_format` | 返回格式，支持 `b64_json` 与 `url`，默认值为 `b64_json`     |
 | `image`           | 需要编辑的图片文件，使用 multipart/form-data 上传              |
+| `conversation_id` | *可选* - 上游对话 ID，用于保持编辑上下文。当传递时，系统会复用该对话的上下文进行编辑 |
+| `parent_message_id` | *可选* - 上游父消息 ID，与 `conversation_id` 配套使用      |
+| `mask`            | *可选* - 编辑掩码文件。如不提供，系统会基于编辑区域自动生成          |
 
 <br>
+
+**上下文保持说明**：
+- 当从前一次图片生成继续编辑时（例如先生成再修改），应传递该生成操作返回的 `conversation_id` 和 `parent_message_id`，以保持上游模型的编辑意图理解
+- 如不提供这两个参数，系统将自动启动新的对话（bootstrap）进行编辑，结果应该仍然可用但可能缺乏上下文
+- 若传递的对话 ID 无效或已过期，系统会自动降级到 bootstrap 模式重试
+
 </details>
 </details>
 
