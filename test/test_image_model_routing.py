@@ -590,6 +590,28 @@ class ImageModelRoutingTests(unittest.TestCase):
             self.assertEqual((220, 30, 30, 255), composited.getpixel((16, 16)))
             self.assertEqual((30, 40, 80, 255), composited.getpixel((1, 1)))
 
+    def test_composite_inpaint_same_size_full_frame_with_strong_outside_drift_prefers_generated_frame(self) -> None:
+        original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (24, 24), (170, 210, 120, 255))
+        for y in range(8, 16):
+            for x in range(8, 16):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (24, 24), (255, 255, 255, 0))
+        for y in range(9, 15):
+            for x in range(9, 15):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((170, 210, 120, 255), composited.getpixel((2, 2)))
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((12, 12)))
+
     def test_composite_inpaint_square_output_with_local_mask_uses_bbox_projection(self) -> None:
         original = Image.new("RGBA", (100, 100), (12, 34, 56, 255))
         raw_output = Image.new("RGBA", (50, 50), (210, 210, 210, 255))

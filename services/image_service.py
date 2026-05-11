@@ -80,6 +80,7 @@ SAME_SIZE_FULL_FRAME_MASK_EXPANSION_RATIO = 0.12
 SAME_SIZE_FULL_FRAME_MASK_EXPANSION_MAX = 24
 SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER = 1.5
 SAME_SIZE_FULL_FRAME_MASK_ALPHA_FLOOR = 8
+SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX = 24.0
 FULL_FRAME_VARIANT_AREA_RATIO_MIN = 0.72
 FULL_FRAME_VARIANT_AREA_RATIO_MAX = 1.45
 FULL_FRAME_VARIANT_MASK_COVERAGE_MIN = 0.35
@@ -2296,30 +2297,46 @@ def _looks_like_full_frame_variant(
 
     scaled_rgb = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGB")
     original_rgb = orig_img.convert("RGB")
-    scaled_pixels = scaled_rgb.load()
+    mean_diff = _measure_outside_mask_mean_diff(
+        scaled_rgb,
+        original_rgb,
+        mask_alpha,
+        FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX,
+    )
+    if mean_diff is None:
+        return False
+    return mean_diff <= FULL_FRAME_VARIANT_OUTSIDE_MASK_MEAN_DIFF_MAX
+
+
+def _measure_outside_mask_mean_diff(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+    outside_mask_alpha_max: int,
+) -> float | None:
+    candidate_pixels = candidate_rgb.load()
     original_pixels = original_rgb.load()
     mask_pixels = mask_alpha.load()
 
     total_diff = 0
     sample_count = 0
-    sample_step = max(1, min(target_w, target_h) // 200)
-    for y in range(0, target_h, sample_step):
-        for x in range(0, target_w, sample_step):
-            if mask_pixels[x, y] > FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX:
+    sample_step = max(1, min(candidate_rgb.width, candidate_rgb.height) // 200)
+    for y in range(0, candidate_rgb.height, sample_step):
+        for x in range(0, candidate_rgb.width, sample_step):
+            if mask_pixels[x, y] > outside_mask_alpha_max:
                 continue
-            raw_pixel = scaled_pixels[x, y]
-            orig_pixel = original_pixels[x, y]
+            candidate_pixel = candidate_pixels[x, y]
+            original_pixel = original_pixels[x, y]
             total_diff += (
-                abs(raw_pixel[0] - orig_pixel[0])
-                + abs(raw_pixel[1] - orig_pixel[1])
-                + abs(raw_pixel[2] - orig_pixel[2])
+                abs(candidate_pixel[0] - original_pixel[0])
+                + abs(candidate_pixel[1] - original_pixel[1])
+                + abs(candidate_pixel[2] - original_pixel[2])
             )
             sample_count += 1
 
     if sample_count == 0:
-        return False
-    mean_diff = total_diff / (sample_count * 3)
-    return mean_diff <= FULL_FRAME_VARIANT_OUTSIDE_MASK_MEAN_DIFF_MAX
+        return None
+    return total_diff / (sample_count * 3)
 
 
 def _is_placeholder_canvas_pixel(pixel: tuple[int, int, int] | tuple[int, int, int, int]) -> bool:
@@ -2458,8 +2475,21 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
             if placeholder_filtered:
                 projection_mode = "same-size-patch-canvas"
             else:
-                composite_mask = _build_same_size_full_frame_mask(mask_alpha)
-                projection_mode = "full-frame"
+                outside_mask_mean_diff = _measure_outside_mask_mean_diff(
+                    inpaint_img.convert("RGB"),
+                    orig_img.convert("RGB"),
+                    mask_alpha,
+                    FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX,
+                )
+                if (
+                    outside_mask_mean_diff is not None
+                    and outside_mask_mean_diff > SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX
+                ):
+                    composite_mask = Image.new("L", (target_w, target_h), 255)
+                    projection_mode = "full-frame-generated"
+                else:
+                    composite_mask = _build_same_size_full_frame_mask(mask_alpha)
+                    projection_mode = "full-frame"
             projection_box = composite_mask.getbbox() or (0, 0, target_w, target_h)
         elif _looks_like_full_frame_variant(inpaint_img, orig_img, mask_alpha):
             inpaint_rgba = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGBA")
