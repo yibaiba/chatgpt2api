@@ -23,13 +23,16 @@ class _FakeAccountsService:
             {"status": "限流", "quota": 9, "imageQuotaUnknown": False},
         ]
         self.added_tokens: list[str] = []
+        self.added_metadata_by_token: dict[str, dict] = {}
         self.refreshed_tokens: list[str] = []
 
     def list_accounts(self):
         return list(self.items)
 
-    def add_accounts(self, tokens: list[str]):
+    def add_accounts(self, tokens: list[str], metadata_by_token: dict[str, dict] | None = None):
         self.added_tokens.extend(tokens)
+        if metadata_by_token:
+            self.added_metadata_by_token.update({token: dict(item) for token, item in metadata_by_token.items()})
         return {"added": len(tokens), "skipped": 0, "items": []}
 
     def refresh_accounts(self, tokens: list[str]):
@@ -170,6 +173,9 @@ class RegisterServiceTests(unittest.TestCase):
             self.assertFalse(finished["enabled"])
             self.assertEqual(1, finished["stats"]["success"])
             self.assertEqual(["token-1"], accounts_service.added_tokens)
+            self.assertEqual("register", accounts_service.added_metadata_by_token["token-1"]["source"])
+            self.assertEqual("demo@example.com", accounts_service.added_metadata_by_token["token-1"]["email"])
+            self.assertTrue(accounts_service.added_metadata_by_token["token-1"]["registered_at"])
             self.assertEqual(["token-1"], accounts_service.refreshed_tokens)
             self.assertTrue(any("模拟注册成功" in item["text"] for item in finished["logs"]))
 

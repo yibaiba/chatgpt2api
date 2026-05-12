@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Thread
 from unittest import mock
@@ -258,6 +259,56 @@ class AccountCapabilityTests(unittest.TestCase):
 
             self.assertIsNone(updated)
             self.assertEqual([], service.list_accounts())
+
+    def test_refresh_accounts_auto_removes_recently_registered_abnormal_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(
+                ["token-1"],
+                metadata_by_token={
+                    "token-1": {
+                        "source": "register",
+                        "registered_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
+            )
+
+            with mock.patch.object(
+                service,
+                "fetch_remote_info",
+                side_effect=RuntimeError("/backend-api/me failed: HTTP 401"),
+            ):
+                result = service.refresh_accounts(["token-1"])
+
+            self.assertEqual([], service.list_accounts())
+            self.assertEqual(0, result["refreshed"])
+            self.assertEqual("检测到封号", result["errors"][0]["error"])
+
+    def test_refresh_accounts_keeps_old_registered_abnormal_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(Path(tmp_dir) / "accounts.json")
+            service.add_accounts(
+                ["token-1"],
+                metadata_by_token={
+                    "token-1": {
+                        "source": "register",
+                        "registered_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+                    }
+                },
+            )
+
+            with mock.patch.object(
+                service,
+                "fetch_remote_info",
+                side_effect=RuntimeError("/backend-api/me failed: HTTP 401"),
+            ):
+                result = service.refresh_accounts(["token-1"])
+
+            remaining = service.list_accounts()
+            self.assertEqual(1, len(remaining))
+            self.assertEqual("异常", remaining[0]["status"])
+            self.assertEqual(0, result["refreshed"])
+            self.assertEqual("检测到封号", result["errors"][0]["error"])
 
     def test_mark_image_result_auto_removes_rate_limited_account_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

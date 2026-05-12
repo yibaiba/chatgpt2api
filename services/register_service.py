@@ -455,9 +455,19 @@ class RegisterService:
                         result = future.result()
                         access_token = _clean_text(result.get("access_token"))
                         email = _clean_text(result.get("email"))
+                        registered_at = _clean_text(result.get("created_at")) or datetime.now(timezone.utc).isoformat()
                         if not access_token:
                             raise RuntimeError("executor did not return access_token")
-                        self._account_service.add_accounts([access_token])
+                        self._account_service.add_accounts(
+                            [access_token],
+                            metadata_by_token={
+                                access_token: {
+                                    "email": email or None,
+                                    "source": "register",
+                                    "registered_at": registered_at,
+                                }
+                            },
+                        )
                         self._account_service.refresh_accounts([access_token])
                         done += 1
                         success += 1

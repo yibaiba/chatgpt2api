@@ -6,7 +6,7 @@ import hashlib
 import json
 from threading import Condition, Lock
 from typing import Any, Callable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from curl_cffi.requests import Session
@@ -21,6 +21,8 @@ from services.utils import anonymize_token
 
 class AccountService:
     REMOTE_SYNC_REMOVABLE_STATUSES = {"异常", "禁用"}
+    REGISTER_SOURCE = "register"
+    REGISTER_ABNORMAL_AUTO_REMOVE_WINDOW = timedelta(days=1)
     CODEX_IMAGE_ACCOUNT_TYPES = {"Plus", "Team", "Pro"}
     ACCOUNT_TYPE_MAP = {
         "free": "Free",
@@ -166,10 +168,25 @@ class AccountService:
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
         normalized["default_model_slug"] = self._clean_token(normalized.get("default_model_slug")) or None
         normalized["restore_at"] = self._clean_token(normalized.get("restore_at")) or None
+        normalized["source"] = self._clean_token(normalized.get("source")) or None
+        normalized["registered_at"] = self._clean_token(normalized.get("registered_at")) or None
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
         normalized["last_used_at"] = normalized.get("last_used_at")
         return normalized
+
+    @staticmethod
+    def _parse_account_timestamp(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     @staticmethod
     def _extract_quota_and_restore_at(limits_progress: list[Any]) -> tuple[int, str | None, bool]:
@@ -428,10 +445,16 @@ class AccountService:
                    and (token := self._clean_token(item.get("access_token")))
             ]
 
-    def add_accounts(self, tokens: list[str]) -> dict:
+    def add_accounts(self, tokens: list[str], metadata_by_token: dict[str, dict[str, Any]] | None = None) -> dict:
         cleaned_tokens = self._clean_tokens(tokens)
         if not cleaned_tokens:
             return {"added": 0, "skipped": 0, "items": self.list_accounts()}
+
+        metadata_index = {
+            self._clean_token(token): dict(metadata)
+            for token, metadata in (metadata_by_token or {}).items()
+            if self._clean_token(token) and isinstance(metadata, dict)
+        }
 
         with self._lock:
             indexed = {self._clean_token(item.get("access_token")): dict(item) for item in self._accounts}
@@ -447,6 +470,7 @@ class AccountService:
                 account = self._normalize_account(
                     {
                         **current,
+                        **metadata_index.get(access_token, {}),
                         "access_token": access_token,
                         "type": str(current.get("type") or "Free"),
                     }
@@ -534,6 +558,17 @@ class AccountService:
     def _should_auto_remove_rate_limited_account(account: dict | None) -> bool:
         return bool(account) and account.get("status") == "限流" and config.auto_remove_rate_limited_accounts
 
+    @classmethod
+    def _should_auto_remove_recently_registered_abnormal_account(cls, account: dict | None) -> bool:
+        if not account or account.get("status") != "异常":
+            return False
+        if account.get("source") != cls.REGISTER_SOURCE:
+            return False
+        registered_at = cls._parse_account_timestamp(account.get("registered_at"))
+        if registered_at is None:
+            return False
+        return datetime.now(timezone.utc) - registered_at <= cls.REGISTER_ABNORMAL_AUTO_REMOVE_WINDOW
+
     def update_account(self, access_token: str, updates: dict) -> dict | None:
         access_token = self._clean_token(access_token)
         if not access_token:
@@ -545,7 +580,10 @@ class AccountService:
             account = self._normalize_account({**self._accounts[index], **updates, "access_token": access_token})
             if account is None:
                 return None
-            if self._should_auto_remove_rate_limited_account(account):
+            if (
+                self._should_auto_remove_rate_limited_account(account)
+                or self._should_auto_remove_recently_registered_abnormal_account(account)
+            ):
                 self._remove_account_at_index(index)
                 return None
             self._accounts[index] = account
