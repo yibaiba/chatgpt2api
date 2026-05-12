@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eraser, ImagePlus, Paintbrush, RotateCcw, X } from "lucide-react";
+import { Circle, Eraser, ImagePlus, Paintbrush, RotateCcw, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,12 +17,19 @@ type MaskEditorDialogProps = {
   /** 当前对话已生成的图，可直接选为参考图 */
   availableImages?: AvailableImage[];
   onClose: () => void;
-  onSubmit: (maskFile: File, prompt: string, refImages: File[]) => void | Promise<void>;
+  onSubmit: (annotatedImageFile: File, prompt: string, refImages: File[]) => void | Promise<void>;
 };
 
 const MIN_BRUSH = 8;
 const MAX_BRUSH = 80;
 const DEFAULT_BRUSH = 28;
+const RED_ANNOTATION_COLOR = "rgba(239, 68, 68, 0.95)";
+const BLUE_ANNOTATION_COLOR = "rgba(59, 130, 246, 0.95)";
+const RED_ANNOTATION_FILL = "rgba(239, 68, 68, 0.12)";
+const BLUE_ANNOTATION_FILL = "rgba(59, 130, 246, 0.12)";
+
+type EditorTool = "brush" | "ellipse" | "eraser";
+type AnnotationColor = "red" | "blue";
 
 export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", availableImages = [], onClose, onSubmit }: MaskEditorDialogProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -29,9 +37,13 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
   const imageRef = useRef<HTMLImageElement | null>(null);
   const drawingRef = useRef(false);
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
-  const toolRef = useRef<"brush" | "eraser">("brush");
+  const toolRef = useRef<EditorTool>("brush");
+  const colorRef = useRef<AnnotationColor>("red");
+  const ellipseStartRef = useRef<{ x: number; y: number } | null>(null);
+  const canvasSnapshotRef = useRef<ImageData | null>(null);
 
-  const [tool, setTool] = useState<"brush" | "eraser">("brush");
+  const [tool, setTool] = useState<EditorTool>("brush");
+  const [annotationColor, setAnnotationColor] = useState<AnnotationColor>("red");
   const [brushSize, setBrushSize] = useState(DEFAULT_BRUSH);
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [submitting, setSubmitting] = useState(false);
@@ -59,6 +71,8 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
       setPrompt(defaultPrompt);
       setPrevDefaultPrompt(defaultPrompt);
       setRefImages([]);
+      setTool("brush");
+      setAnnotationColor("red");
     }
   }
   if (open && defaultPrompt !== prevDefaultPrompt) {
@@ -135,6 +149,10 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     toolRef.current = tool;
   }, [tool]);
 
+  useEffect(() => {
+    colorRef.current = annotationColor;
+  }, [annotationColor]);
+
   // 保持 refImagesRef 始终指向最新 refImages（每次渲染后执行，无 deps）
   // 不能在渲染体中直接赋值（React 19 报 "Cannot update ref during render"）
   useEffect(() => {
@@ -178,15 +196,22 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     };
   }, []);
 
-  const draw = useCallback((canvas: HTMLCanvasElement, x: number, y: number, fromX?: number, fromY?: number) => {
+  const getAnnotationStrokeStyle = useCallback((value: AnnotationColor) => (
+    value === "red" ? RED_ANNOTATION_COLOR : BLUE_ANNOTATION_COLOR
+  ), []);
+
+  const getAnnotationFillStyle = useCallback((value: AnnotationColor) => (
+    value === "red" ? RED_ANNOTATION_FILL : BLUE_ANNOTATION_FILL
+  ), []);
+
+  const drawBrush = useCallback((canvas: HTMLCanvasElement, x: number, y: number, fromX?: number, fromY?: number) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const scaledBrush = brushSize * (canvas.width / canvas.getBoundingClientRect().width);
     ctx.save();
     ctx.globalCompositeOperation = toolRef.current === "eraser" ? "destination-out" : "source-over";
-    // 画布上显示浅蓝色（视觉反馈），导出时会转成黑白 mask
-    ctx.fillStyle = "rgba(96, 165, 250, 0.85)";
-    ctx.strokeStyle = "rgba(96, 165, 250, 0.85)";
+    ctx.fillStyle = getAnnotationStrokeStyle(colorRef.current);
+    ctx.strokeStyle = getAnnotationStrokeStyle(colorRef.current);
     ctx.lineWidth = scaledBrush;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -200,7 +225,34 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     ctx.arc(x, y, scaledBrush / 2, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-  }, [brushSize]);
+  }, [brushSize, getAnnotationStrokeStyle]);
+
+  const drawEllipse = useCallback((
+    canvas: HTMLCanvasElement,
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+  ) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const radiusX = Math.abs(end.x - start.x) / 2;
+    const radiusY = Math.abs(end.y - start.y) / 2;
+    if (radiusX < 1 || radiusY < 1) {
+      return;
+    }
+    const centerX = Math.min(start.x, end.x) + radiusX;
+    const centerY = Math.min(start.y, end.y) + radiusY;
+    const scaledBrush = Math.max(2, brushSize * 0.22 * (canvas.width / canvas.getBoundingClientRect().width));
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = getAnnotationStrokeStyle(colorRef.current);
+    ctx.fillStyle = getAnnotationFillStyle(colorRef.current);
+    ctx.lineWidth = scaledBrush;
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }, [brushSize, getAnnotationFillStyle, getAnnotationStrokeStyle]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -209,8 +261,14 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     drawingRef.current = true;
     const pos = getCanvasPos(canvas, e.clientX, e.clientY);
     lastPosRef.current = pos;
-    draw(canvas, pos.x, pos.y);
-  }, [draw, getCanvasPos]);
+    if (toolRef.current === "ellipse") {
+      const ctx = canvas.getContext("2d");
+      canvasSnapshotRef.current = ctx?.getImageData(0, 0, canvas.width, canvas.height) ?? null;
+      ellipseStartRef.current = pos;
+      return;
+    }
+    drawBrush(canvas, pos.x, pos.y);
+  }, [drawBrush, getCanvasPos]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     // 更新自定义光标位置（相对于 wrapper div）
@@ -223,15 +281,39 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     const canvas = canvasRef.current;
     if (!canvas) return;
     const pos = getCanvasPos(canvas, e.clientX, e.clientY);
+    if (toolRef.current === "ellipse") {
+      const ctx = canvas.getContext("2d");
+      const snapshot = canvasSnapshotRef.current;
+      const ellipseStart = ellipseStartRef.current;
+      if (!ctx || !snapshot || !ellipseStart) {
+        return;
+      }
+      ctx.putImageData(snapshot, 0, 0);
+      drawEllipse(canvas, ellipseStart, pos);
+      return;
+    }
     const last = lastPosRef.current;
-    draw(canvas, pos.x, pos.y, last?.x, last?.y);
+    drawBrush(canvas, pos.x, pos.y, last?.x, last?.y);
     lastPosRef.current = pos;
-  }, [draw, getCanvasPos]);
+  }, [drawBrush, drawEllipse, getCanvasPos]);
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e?: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    const ellipseStart = ellipseStartRef.current;
+    if (canvas && ellipseStart && drawingRef.current && toolRef.current === "ellipse" && e) {
+      const ctx = canvas.getContext("2d");
+      const snapshot = canvasSnapshotRef.current;
+      const pos = getCanvasPos(canvas, e.clientX, e.clientY);
+      if (ctx && snapshot) {
+        ctx.putImageData(snapshot, 0, 0);
+        drawEllipse(canvas, ellipseStart, pos);
+      }
+    }
     drawingRef.current = false;
     lastPosRef.current = null;
-  }, []);
+    ellipseStartRef.current = null;
+    canvasSnapshotRef.current = null;
+  }, [drawEllipse, getCanvasPos]);
 
   const handleClear = useCallback(() => {
     const canvas = canvasRef.current;
@@ -240,72 +322,103 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
     ctx?.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
 
-  const exportMaskAsFile = useCallback((): File | null => {
+  const buildAnnotationSummary = useCallback((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return { hasBlue: false, hasRed: false };
+    }
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let hasRed = false;
+    let hasBlue = false;
+    for (let index = 0; index < data.length; index += 4) {
+      const alpha = data[index + 3];
+      if (alpha <= 0) {
+        continue;
+      }
+      const red = data[index];
+      const blue = data[index + 2];
+      if (red >= blue + 20) {
+        hasRed = true;
+      } else if (blue >= red + 20) {
+        hasBlue = true;
+      }
+      if (hasRed && hasBlue) {
+        break;
+      }
+    }
+    return { hasBlue, hasRed };
+  }, []);
+
+  const exportAnnotatedImageAsFile = useCallback((): { file: File; hasBlue: boolean; hasRed: boolean } | null => {
     const canvas = canvasRef.current;
     const img = imageRef.current;
     if (!canvas || !img) return null;
-
-    // Step 1：对用户笔刷 canvas 做羽化（blur）处理，使边缘自然过渡。
-    // 羽化半径与图片宽度成正比，保证在不同分辨率下视觉一致。
-    const blurRadius = Math.max(4, Math.round(canvas.width / 120));
-    const blurred = document.createElement("canvas");
-    blurred.width = canvas.width;
-    blurred.height = canvas.height;
-    const blurCtx = blurred.getContext("2d");
-    if (!blurCtx) return null;
-    blurCtx.filter = `blur(${blurRadius}px)`;
-    blurCtx.drawImage(canvas, 0, 0);
-    blurCtx.filter = "none";
-
-    // Step 2：合成最终 mask（RGBA 格式，与官方 ChatGPT 一致）。
-    // HAR 抓包确认官方使用 RGBA PNG（color_type=6），alpha 通道承载 mask 权重：
-    //   alpha=255 → 编辑区核心（完全不透明白色）
-    //   alpha=128 → 软边缘过渡区（半透明白色，模型据此在边界自然融合）
-    //   alpha=0   → 保留区（完全透明，模型不修改）
-    // 注意：我们之前输出 RGB 灰度（A 全为 255），模型若读 alpha 则识别为"全图编辑"，
-    // 改为 RGBA 后 alpha 通道直接传递羽化强度，与官方行为完全一致。
     const offscreen = document.createElement("canvas");
     offscreen.width = canvas.width;
     offscreen.height = canvas.height;
     const ctx = offscreen.getContext("2d");
     if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(canvas, 0, 0);
 
-    const srcData = blurCtx.getImageData(0, 0, canvas.width, canvas.height);
-    const dstData = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
-    for (let i = 0; i < srcData.data.length; i += 4) {
-      const alpha = srcData.data[i + 3]; // 羽化后的 alpha（0‒255）
-      dstData.data[i]     = 255;   // R - 白色
-      dstData.data[i + 1] = 255;   // G - 白色
-      dstData.data[i + 2] = 255;   // B - 白色
-      dstData.data[i + 3] = alpha; // A - mask 权重（羽化软边缘由此承载）
-    }
-    ctx.putImageData(dstData, 0, 0);
-
+    const { hasBlue, hasRed } = buildAnnotationSummary(canvas);
     const dataUrl = offscreen.toDataURL("image/png");
     const byteString = atob(dataUrl.split(",")[1]);
     const ab = new ArrayBuffer(byteString.length);
     const ia = new Uint8Array(ab);
     for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-    return new File([ab], "mask.png", { type: "image/png" });
+    return {
+      file: new File([ab], "annotated-edit.png", { type: "image/png" }),
+      hasBlue,
+      hasRed,
+    };
+  }, [buildAnnotationSummary]);
+
+  const buildSubmissionPrompt = useCallback((value: string, hasRed: boolean, hasBlue: boolean) => {
+    const instruction = value.trim();
+    if (!instruction) {
+      return "";
+    }
+    const parts = [
+      "请基于上传的带标注截图进行图生图编辑。",
+    ];
+    if (hasRed) {
+      parts.push(`请把红色标注出来的区域修改为：${instruction}。`);
+    } else {
+      parts.push(`请根据用户要求完成修改：${instruction}。`);
+    }
+    if (hasBlue) {
+      parts.push("蓝色标注区域代表风格、材质、配色或造型参考，请参考这些区域，但不要把蓝色标记本身生成为最终图像。");
+    }
+    parts.push("除非用户描述明确要求，否则尽量保持未标注区域不变，并去掉所有圈线、涂抹和标记。");
+    return parts.join(" ");
   }, []);
 
   const handleSubmit = useCallback(async () => {
     if (!prompt.trim()) return;
-    const maskFile = exportMaskAsFile();
-    if (!maskFile) return;
+    const annotated = exportAnnotatedImageAsFile();
+    if (!annotated) return;
+    if (!annotated.hasRed && !annotated.hasBlue) {
+      toast.error("请先在图片上用红色或蓝色做标注");
+      return;
+    }
+    const submissionPrompt = buildSubmissionPrompt(prompt, annotated.hasRed, annotated.hasBlue);
+    if (!submissionPrompt) {
+      return;
+    }
     setSubmitting(true);
     try {
-      await onSubmit(maskFile, prompt.trim(), refImages.map((r) => r.file));
+      await onSubmit(annotated.file, submissionPrompt, refImages.map((r) => r.file));
     } finally {
       setSubmitting(false);
     }
-  }, [prompt, exportMaskAsFile, onSubmit, refImages]);
+  }, [buildSubmissionPrompt, exportAnnotatedImageAsFile, onSubmit, prompt, refImages]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="flex max-h-[95dvh] w-full max-w-4xl flex-col gap-4 overflow-hidden p-5 sm:p-6">
         <DialogHeader className="shrink-0">
-          <DialogTitle className="text-base font-semibold">遮罩编辑</DialogTitle>
+          <DialogTitle className="text-base font-semibold">编辑图片</DialogTitle>
         </DialogHeader>
 
         {/* 工具栏 */}
@@ -318,6 +431,15 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
           >
             <Paintbrush className="size-3.5" />
             笔刷
+          </Button>
+          <Button
+            variant={tool === "ellipse" ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => setTool("ellipse")}
+          >
+            <Circle className="size-3.5" />
+            椭圆
           </Button>
           <Button
             variant={tool === "eraser" ? "default" : "outline"}
@@ -339,6 +461,29 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
               className="w-24 accent-stone-800"
             />
             <span className="w-6 text-xs tabular-nums text-stone-500">{brushSize}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-stone-500">颜色</span>
+            <Button
+              variant={annotationColor === "red" ? "default" : "outline"}
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => setAnnotationColor("red")}
+              disabled={tool === "eraser"}
+            >
+              <span className="size-2 rounded-full bg-red-500" />
+              红色
+            </Button>
+            <Button
+              variant={annotationColor === "blue" ? "default" : "outline"}
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => setAnnotationColor("blue")}
+              disabled={tool === "eraser"}
+            >
+              <span className="size-2 rounded-full bg-blue-500" />
+              蓝色
+            </Button>
           </div>
           <Button
             variant="outline"
@@ -390,13 +535,19 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
                   borderRadius: "50%",
                   border: tool === "eraser"
                     ? "2px dashed rgba(251,113,133,0.9)"
-                    : "2px dashed rgba(255,255,255,0.95)",
+                    : annotationColor === "red"
+                      ? "2px dashed rgba(239,68,68,0.95)"
+                      : "2px dashed rgba(59,130,246,0.95)",
                   boxShadow: tool === "eraser"
                     ? "0 0 0 1.5px rgba(159,18,57,0.5)"
-                    : "0 0 0 1.5px rgba(30,64,175,0.4)",
+                    : annotationColor === "red"
+                      ? "0 0 0 1.5px rgba(153,27,27,0.35)"
+                      : "0 0 0 1.5px rgba(30,64,175,0.4)",
                   backgroundColor: tool === "eraser"
                     ? "rgba(254,205,211,0.25)"
-                    : "rgba(147,210,252,0.35)",
+                    : annotationColor === "red"
+                      ? "rgba(252,165,165,0.28)"
+                      : "rgba(147,210,252,0.35)",
                   pointerEvents: "none",
                   zIndex: 20,
                 }}
@@ -406,7 +557,8 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
         </div>
 
         <p className="shrink-0 text-xs text-stone-500">
-          用笔刷涂抹要修改的区域（<span className="font-medium text-sky-600">蓝色高亮 = 编辑区域</span>），然后输入描述并点击生成。
+          红色标注表示 <span className="font-medium text-red-500">要修改的区域</span>，蓝色标注表示
+          <span className="font-medium text-blue-500"> 风格 / 参考提示区域</span>。导出时会上传带标注截图做图生图参考。
         </p>
 
         {/* 参考图上传区 */}
@@ -495,7 +647,7 @@ export function MaskEditorDialog({ open, imageDataUrl, defaultPrompt = "", avail
         {/* Prompt 输入 */}
         <div className="flex shrink-0 flex-col gap-2">
           <Textarea
-            placeholder="描述要如何修改遮罩区域..."
+            placeholder="例如：把红色圈起来的葡萄帽改成草莓帽，蓝色区域的光感和材质作为参考"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             className="min-h-[72px] resize-none text-sm"

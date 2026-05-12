@@ -75,7 +75,7 @@ const RESULTS_SCROLL_RETRY_DELAYS_MS = [80, 240, 600, 1200, 2400] as const;
 const RESULTS_SCROLL_SETTLE_DELAY_MS = 2400;
 const DRAFT_CONVERSATION_TITLE = "新对话";
 const activeConversationQueueIds = new Set<string>();
-// 跟踪由外部流程（如 handleMaskEditorSubmit）直接管理的 turn，防止 runConversationQueue 抢占处理
+// 保留给外部托管流程的预留位；当前图片工作区所有 turn 统一进入 runConversationQueue。
 const externallyManagedTurnIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
@@ -258,11 +258,8 @@ export default function ImagePage() {
   // 遮罩编辑 dialog 状态
   const [maskEditorOpen, setMaskEditorOpen] = useState(false);
   const [maskEditorImageDataUrl, setMaskEditorImageDataUrl] = useState("");
-  const [maskEditorImageFile, setMaskEditorImageFile] = useState<File | null>(null);
   const [maskEditorDefaultPrompt, setMaskEditorDefaultPrompt] = useState("");
   const [maskEditorAvailableImages, setMaskEditorAvailableImages] = useState<{ dataUrl: string; id: string }[]>([]);
-  const [maskEditorConversationId, setMaskEditorConversationId] = useState("");
-  const [maskEditorLastMessageId, setMaskEditorLastMessageId] = useState("");
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const effectiveSelectedConversationId = useMemo(() => {
@@ -584,15 +581,18 @@ export default function ImagePage() {
     return task;
   }, [saveConversationToCurrentStore]);
 
-  const persistConversation = async (conversation: ImageConversation) => {
-    const nextConversations = sortImageConversations([
-      conversation,
-      ...conversationsRef.current.filter((item) => item.id !== conversation.id),
-    ]);
-    conversationsRef.current = nextConversations;
-    setConversations(nextConversations);
-    await scheduleConversationPersistence(conversation.id);
-  };
+  const persistConversation = useCallback(
+    async (conversation: ImageConversation) => {
+      const nextConversations = sortImageConversations([
+        conversation,
+        ...conversationsRef.current.filter((item) => item.id !== conversation.id),
+      ]);
+      conversationsRef.current = nextConversations;
+      setConversations(nextConversations);
+      await scheduleConversationPersistence(conversation.id);
+    },
+    [scheduleConversationPersistence],
+  );
 
   const updateConversation = useCallback(
     async (
@@ -941,12 +941,9 @@ export default function ImagePage() {
   );
 
   const handleInpaint = useCallback(
-    (payload: { imageDataUrl: string; prompt: string; imageFile: File; conversationId?: string; lastMessageId?: string }) => {
+    (payload: { imageDataUrl: string; prompt: string }) => {
       setMaskEditorImageDataUrl(payload.imageDataUrl);
-      setMaskEditorImageFile(payload.imageFile);
       setMaskEditorDefaultPrompt(payload.prompt);
-      setMaskEditorConversationId(payload.conversationId ?? "");
-      setMaskEditorLastMessageId(payload.lastMessageId ?? "");
       // 收集当前对话里所有成功生成的图供参考图选择
       const available = (selectedConversation?.turns ?? []).flatMap((turn) =>
         turn.status === "success"
@@ -965,65 +962,89 @@ export default function ImagePage() {
   );
 
   const handleMaskEditorSubmit = useCallback(
-    async (maskFile: File, prompt: string, refImages: File[]) => {
-      const imageFile = maskEditorImageFile;
-      if (!imageFile) return;
+    async (annotatedImageFile: File, prompt: string, refImages: File[]) => {
       setMaskEditorOpen(false);
 
-      const conversationId = selectedConversationId ?? createId();
+      const targetConversation = selectedConversationId
+        ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
+        : null;
+      const now = new Date().toISOString();
+      const conversationId = targetConversation?.id ?? createId();
       const turnId = createId();
       const placeholderImageId = createId();
+      const draftOwnerRole: UserRole = viewerRole === "admin" ? "admin" : "user";
+      const draftOwnerId = viewerSession?.id || (draftOwnerRole === "admin" ? "admin" : "unknown");
+      const draftOwnerName = viewerSession?.name || (draftOwnerRole === "admin" ? "管理员" : "普通用户");
+      const submittedModel = normalizeImageModelForMode("edit", imageModel);
+      const annotationReferenceFiles = [annotatedImageFile, ...refImages];
 
-      // 把 File 对象转为 dataUrl 存入 turn，让队列可以在任意时间点读取
-      const [origDataUrl, maskDataUrl, ...refDataUrls] = await Promise.all([
-        readFileAsDataUrl(imageFile),
-        readFileAsDataUrl(maskFile),
-        ...refImages.map((f) => readFileAsDataUrl(f)),
-      ]);
+      const referenceDataUrls = await Promise.all(annotationReferenceFiles.map((file) => readFileAsDataUrl(file)));
 
-      setConversations((prev) => {
-        const existingIdx = prev.findIndex((c) => c.id === conversationId);
-        const inpaintTurn = {
-          id: turnId,
-          mode: "edit" as ImageConversationMode,
-          model: imageModel,
-          prompt,
-          status: "queued" as const,
-          createdAt: new Date().toISOString(),
-          referenceImages: refImages.map((f, i) => ({
-            name: f.name,
-            type: f.type,
-            dataUrl: refDataUrls[i] ?? "",
-          })),
-          count: 1,
-          images: [{ id: placeholderImageId, status: "loading" as const }],
-          aspectRatio: undefined,
-          outputQuality: undefined,
-          renderQuality: undefined,
-          background: undefined,
-          outputFormat: undefined,
-          compression: undefined,
-          // inpaint 专用：原图与遮罩图，供 runConversationQueue 读取
-          inpaintOriginalImage: { name: imageFile.name, type: imageFile.type, dataUrl: origDataUrl },
-          inpaintMaskImage: { name: maskFile.name, type: maskFile.type, dataUrl: maskDataUrl },
-          inpaintConversationId: maskEditorConversationId || undefined,
-          inpaintParentMessageId: maskEditorLastMessageId || undefined,
-        };
-        if (existingIdx >= 0) {
-          const updated = { ...prev[existingIdx] };
-          updated.turns = [...updated.turns, inpaintTurn];
-          const next = [...prev];
-          next[existingIdx] = updated;
-          return next;
-        }
-        return prev;
-      });
+      const annotationTurn: ImageTurn = {
+        id: turnId,
+        mode: "edit",
+        model: submittedModel,
+        prompt,
+        status: "queued",
+        createdAt: now,
+        referenceImages: annotationReferenceFiles.map((file, index) => ({
+          name: index === 0 ? "annotated-edit.png" : file.name,
+          type: file.type,
+          dataUrl: referenceDataUrls[index] ?? "",
+        })),
+        count: 1,
+        images: [{ id: placeholderImageId, status: "loading" }],
+        aspectRatio: imageAspectRatio,
+        outputQuality: imageOutputQuality,
+        renderQuality: isCodexImageModel(submittedModel) ? imageRenderQuality : undefined,
+        background: isCodexImageModel(submittedModel) ? imageBackground : undefined,
+        outputFormat: isCodexImageModel(submittedModel) ? imageOutputFormat : undefined,
+        compression:
+          isCodexImageModel(submittedModel) && imageOutputFormat !== "png"
+            ? normalizeImageCompression(imageCompression)
+            : undefined,
+      };
+
+      const baseConversation: ImageConversation = targetConversation
+        ? {
+            ...targetConversation,
+            title:
+              targetConversation.turns.length === 0 || targetConversation.title === DRAFT_CONVERSATION_TITLE
+                ? buildConversationTitle(prompt)
+                : targetConversation.title,
+            updatedAt: now,
+            turns: [...targetConversation.turns, annotationTurn],
+          }
+        : {
+            id: conversationId,
+            title: buildConversationTitle(prompt),
+            createdAt: now,
+            updatedAt: now,
+            ownerRole: draftOwnerRole,
+            ownerId: draftOwnerId,
+            ownerName: draftOwnerName,
+            turns: [annotationTurn],
+          };
+
       setSelectedConversationId(conversationId);
-
-      // 入队后触发队列，和文生图/图生图走同一套流程
-      void runConversationQueueRef.current(conversationId);
+      await persistConversation(baseConversation);
+          void runConversationQueueRef.current(conversationId);
+      toast.success(targetConversation ? "已加入当前对话编辑队列" : "已创建新对话并开始编辑");
     },
-    [maskEditorImageFile, selectedConversationId, imageModel, maskEditorConversationId, maskEditorLastMessageId],
+    [
+      imageBackground,
+      imageCompression,
+      imageModel,
+      imageOutputFormat,
+      imageOutputQuality,
+      imageRenderQuality,
+      imageAspectRatio,
+      persistConversation,
+      selectedConversationId,
+      viewerRole,
+      viewerSession?.id,
+      viewerSession?.name,
+    ],
   );
 
   const handleReusePrompt = useCallback(

@@ -35,7 +35,7 @@ type ImageResultsProps = {
   showConversationOwner?: boolean;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onReuseAsReference: (payload: { conversationId?: string; id?: string; dataUrl: string }) => void | Promise<void>;
-  onInpaint: (payload: { imageDataUrl: string; prompt: string; imageFile: File; conversationId?: string; lastMessageId?: string }) => void | Promise<void>;
+  onInpaint: (payload: { imageDataUrl: string; prompt: string }) => void | Promise<void>;
   onReusePrompt: (payload: {
     conversationId?: string;
     prompt: string;
@@ -325,27 +325,15 @@ export function ImageResults({
                                   // b64_json 为空，无法编辑
                                   return;
                                 }
-                                // dataUrl → File
-                                const byteString = atob(base64Part);
-                                const ab = new ArrayBuffer(byteString.length);
-                                const ia = new Uint8Array(ab);
-                                for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-                                const mimeMatch = dataUrl.match(/^data:([^;]+);/);
-                                const mime = mimeMatch ? mimeMatch[1] : "image/png";
-                                const ext = mime.split("/")[1] || "png";
-                                const imageFile = new File([ab], `image.${ext}`, { type: mime });
                                 void onInpaint({
                                   imageDataUrl: dataUrl,
                                   prompt: turn.prompt,
-                                  imageFile,
-                                  conversationId: image.conversation_id,
-                                  lastMessageId: image.last_message_id,
                                 });
                               }}
-                              aria-label="遮罩编辑"
+                              aria-label="编辑图片"
                             >
                               <Paintbrush className="size-4" />
-                              <span className="hidden sm:inline">遮罩编辑</span>
+                              <span className="hidden sm:inline">编辑图片</span>
                             </Button>
                             <Button
                               variant="outline"
