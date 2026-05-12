@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import random
 import re
 import time
@@ -13,13 +14,13 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from curl_cffi.requests import Session
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 from services.account_service import account_service
 from services import proof_of_work
 from services.system_settings import system_settings_service
 from services.utils import CODEX_IMAGE_MODEL, ImageRequestOptions, parse_exact_image_size
-from services.config import config
+from services.config import BASE_DIR, config
 
 
 BASE_URL = "https://chatgpt.com"
@@ -81,11 +82,30 @@ SAME_SIZE_FULL_FRAME_MASK_EXPANSION_MAX = 24
 SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER = 1.5
 SAME_SIZE_FULL_FRAME_MASK_ALPHA_FLOOR = 8
 SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX = 24.0
+SAME_SIZE_FULL_FRAME_RING_DIFF_MAX = 36.0
+SAME_SIZE_FULL_FRAME_OUTSIDE_OPAQUE_ALPHA_MIN = 250
+SAME_SIZE_FULL_FRAME_OUTSIDE_OPAQUE_RATIO_MIN = 0.98
+SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_NEAR_WIDTH = 2
+SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_FAR_WIDTH = 8
+SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_DIFF_MIN = 18.0
+SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_RATIO_MIN = 0.75
+SAME_SIZE_FULL_FRAME_EDGE_DIFF_SOFT_MIN = 24
+SAME_SIZE_FULL_FRAME_EDGE_DIFF_HARD_MAX = 72
+SAME_SIZE_FULL_FRAME_EDGE_ALPHA_SOFT_MIN = 250
+SAME_SIZE_FULL_FRAME_EDGE_ALPHA_HARD_MIN = 32
+SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_SOFT_MIN = 20
+SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_HARD_MAX = 60
+SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_HARD_MAX = 64
+SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_SOFT_MAX = 160
+SAME_SIZE_FULL_FRAME_LOW_DRIFT_MAX = 14.0
+SAME_SIZE_FULL_FRAME_SHARPENED_EXPANSION_SCALE_MIN = 0.5
+SAME_SIZE_FULL_FRAME_SHARPENED_BLUR_MULTIPLIER_MIN = 0.85
 FULL_FRAME_VARIANT_AREA_RATIO_MIN = 0.72
 FULL_FRAME_VARIANT_AREA_RATIO_MAX = 1.45
 FULL_FRAME_VARIANT_MASK_COVERAGE_MIN = 0.35
 FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX = 16
 FULL_FRAME_VARIANT_OUTSIDE_MASK_MEAN_DIFF_MAX = 12.0
+INPAINT_DEBUG_ARTIFACTS_DIR_ENV = "CHATGPT2API_INPAINT_DEBUG_DIR"
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -2339,6 +2359,173 @@ def _measure_outside_mask_mean_diff(
     return total_diff / (sample_count * 3)
 
 
+def _measure_inside_mask_mean_diff(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+    inside_mask_alpha_min: int,
+) -> float | None:
+    candidate_pixels = candidate_rgb.load()
+    original_pixels = original_rgb.load()
+    mask_pixels = mask_alpha.load()
+
+    total_diff = 0
+    sample_count = 0
+    sample_step = max(1, min(candidate_rgb.width, candidate_rgb.height) // 200)
+    for y in range(0, candidate_rgb.height, sample_step):
+        for x in range(0, candidate_rgb.width, sample_step):
+            if mask_pixels[x, y] < inside_mask_alpha_min:
+                continue
+            candidate_pixel = candidate_pixels[x, y]
+            original_pixel = original_pixels[x, y]
+            total_diff += (
+                abs(candidate_pixel[0] - original_pixel[0])
+                + abs(candidate_pixel[1] - original_pixel[1])
+                + abs(candidate_pixel[2] - original_pixel[2])
+            )
+            sample_count += 1
+
+    if sample_count == 0:
+        return None
+    return total_diff / (sample_count * 3)
+
+
+def _measure_outside_mask_opaque_ratio(
+    candidate_rgba: Image.Image,
+    mask_alpha: Image.Image,
+    outside_mask_alpha_max: int,
+) -> float | None:
+    candidate_alpha = candidate_rgba.getchannel("A")
+    candidate_pixels = candidate_alpha.load()
+    mask_pixels = mask_alpha.load()
+    opaque_count = 0
+    sample_count = 0
+    sample_step = max(1, min(candidate_rgba.width, candidate_rgba.height) // 200)
+
+    for y in range(0, candidate_rgba.height, sample_step):
+        for x in range(0, candidate_rgba.width, sample_step):
+            if mask_pixels[x, y] > outside_mask_alpha_max:
+                continue
+            sample_count += 1
+            if candidate_pixels[x, y] >= SAME_SIZE_FULL_FRAME_OUTSIDE_OPAQUE_ALPHA_MIN:
+                opaque_count += 1
+
+    if sample_count == 0:
+        return None
+    return opaque_count / sample_count
+
+
+def _build_outer_band_mask(mask_alpha: Image.Image, band_width: int) -> Image.Image:
+    if band_width <= 0 or mask_alpha.getbbox() is None:
+        return Image.new("L", mask_alpha.size, 0)
+    expanded_mask = mask_alpha.filter(ImageFilter.MaxFilter(band_width * 2 + 1))
+    return ImageChops.subtract(expanded_mask, mask_alpha)
+
+
+def _measure_mask_outer_band_mean_diff(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+    band_width: int,
+) -> float | None:
+    outer_band_mask = _build_outer_band_mask(mask_alpha, band_width)
+    return _measure_inside_mask_mean_diff(candidate_rgb, original_rgb, outer_band_mask, 1)
+
+
+def _measure_persistent_outer_band_drift(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+) -> tuple[float | None, float | None, float | None]:
+    near_diff = _measure_mask_outer_band_mean_diff(
+        candidate_rgb,
+        original_rgb,
+        mask_alpha,
+        SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_NEAR_WIDTH,
+    )
+    far_diff = _measure_mask_outer_band_mean_diff(
+        candidate_rgb,
+        original_rgb,
+        mask_alpha,
+        SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_FAR_WIDTH,
+    )
+    if near_diff is None or near_diff <= 0 or far_diff is None:
+        return near_diff, far_diff, None
+    return near_diff, far_diff, far_diff / near_diff
+
+
+def _compute_same_size_full_frame_mask_expansion(mask_alpha: Image.Image) -> int | None:
+    mask_bbox = mask_alpha.getbbox()
+    if mask_bbox is None:
+        return None
+    box_w = max(1, mask_bbox[2] - mask_bbox[0])
+    box_h = max(1, mask_bbox[3] - mask_bbox[1])
+    expansion = round(min(box_w, box_h) * SAME_SIZE_FULL_FRAME_MASK_EXPANSION_RATIO)
+    return min(SAME_SIZE_FULL_FRAME_MASK_EXPANSION_MAX, max(1, expansion))
+
+
+def _resolve_same_size_full_frame_feather_params(
+    mask_alpha: Image.Image,
+    outside_mask_mean_diff: float | None = None,
+    mask_ring_mean_diff: float | None = None,
+    persistent_outer_band_far_diff: float | None = None,
+) -> tuple[int | None, float, float]:
+    base_expansion = _compute_same_size_full_frame_mask_expansion(mask_alpha)
+    if base_expansion is None:
+        return None, SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER, 1.0
+
+    drift_candidates = [
+        value
+        for value in (
+            outside_mask_mean_diff,
+            mask_ring_mean_diff,
+            persistent_outer_band_far_diff,
+        )
+        if value is not None
+    ]
+    if not drift_candidates:
+        return base_expansion, SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER, 1.0
+
+    max_drift = max(drift_candidates)
+    if max_drift >= SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX:
+        return base_expansion, SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER, 1.0
+
+    if max_drift <= SAME_SIZE_FULL_FRAME_LOW_DRIFT_MAX:
+        scale = SAME_SIZE_FULL_FRAME_SHARPENED_EXPANSION_SCALE_MIN
+    else:
+        interpolation = (
+            (max_drift - SAME_SIZE_FULL_FRAME_LOW_DRIFT_MAX)
+            / (SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX - SAME_SIZE_FULL_FRAME_LOW_DRIFT_MAX)
+        )
+        scale = (
+            SAME_SIZE_FULL_FRAME_SHARPENED_EXPANSION_SCALE_MIN
+            + (1.0 - SAME_SIZE_FULL_FRAME_SHARPENED_EXPANSION_SCALE_MIN) * interpolation
+        )
+    adapted_expansion = max(1, round(base_expansion * scale))
+    adapted_blur_multiplier = (
+        SAME_SIZE_FULL_FRAME_SHARPENED_BLUR_MULTIPLIER_MIN
+        + (SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER - SAME_SIZE_FULL_FRAME_SHARPENED_BLUR_MULTIPLIER_MIN)
+        * (
+            (scale - SAME_SIZE_FULL_FRAME_SHARPENED_EXPANSION_SCALE_MIN)
+            / max(1e-6, 1.0 - SAME_SIZE_FULL_FRAME_SHARPENED_EXPANSION_SCALE_MIN)
+        )
+    )
+    return adapted_expansion, adapted_blur_multiplier, scale
+
+
+def _measure_mask_ring_mean_diff(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+) -> float | None:
+    expansion = _compute_same_size_full_frame_mask_expansion(mask_alpha)
+    if expansion is None:
+        return None
+
+    ring_mask = _build_outer_band_mask(mask_alpha, expansion)
+    return _measure_inside_mask_mean_diff(candidate_rgb, original_rgb, ring_mask, 1)
+
+
 def _is_placeholder_canvas_pixel(pixel: tuple[int, int, int] | tuple[int, int, int, int]) -> bool:
     red, green, blue = pixel[:3]
     mean = (red + green + blue) / 3.0
@@ -2405,18 +2592,201 @@ def _box_area(box: tuple[int, int, int, int]) -> int:
 
 
 def _build_same_size_full_frame_mask(mask_alpha: Image.Image) -> Image.Image:
+    return _build_same_size_full_frame_mask_with_metrics(mask_alpha)[0]
+
+
+def _build_same_size_full_frame_mask_with_metrics(
+    mask_alpha: Image.Image,
+    outside_mask_mean_diff: float | None = None,
+    mask_ring_mean_diff: float | None = None,
+    persistent_outer_band_far_diff: float | None = None,
+) -> tuple[Image.Image, float]:
     mask_bbox = mask_alpha.getbbox()
     if mask_bbox is None or mask_bbox == (0, 0, mask_alpha.width, mask_alpha.height):
-        return mask_alpha
+        return mask_alpha, 1.0
 
-    box_w = max(1, mask_bbox[2] - mask_bbox[0])
-    box_h = max(1, mask_bbox[3] - mask_bbox[1])
-    expansion = round(min(box_w, box_h) * SAME_SIZE_FULL_FRAME_MASK_EXPANSION_RATIO)
-    expansion = min(SAME_SIZE_FULL_FRAME_MASK_EXPANSION_MAX, max(1, expansion))
+    expansion, blur_multiplier, scale = _resolve_same_size_full_frame_feather_params(
+        mask_alpha,
+        outside_mask_mean_diff,
+        mask_ring_mean_diff,
+        persistent_outer_band_far_diff,
+    )
+    if expansion is None:
+        return mask_alpha, 1.0
     expanded = mask_alpha.filter(ImageFilter.MaxFilter(expansion * 2 + 1))
-    feathered = expanded.filter(ImageFilter.GaussianBlur(radius=max(1, expansion * SAME_SIZE_FULL_FRAME_MASK_BLUR_MULTIPLIER)))
+    feathered = expanded.filter(ImageFilter.GaussianBlur(radius=max(1, expansion * blur_multiplier)))
     feathered = feathered.point(lambda value: 0 if value < SAME_SIZE_FULL_FRAME_MASK_ALPHA_FLOOR else value)
-    return ImageChops.lighter(mask_alpha, feathered)
+    return ImageChops.lighter(mask_alpha, feathered), scale
+
+
+def _build_max_channel_diff_mask(candidate_rgb: Image.Image, original_rgb: Image.Image) -> Image.Image:
+    diff_rgb = ImageChops.difference(candidate_rgb, original_rgb)
+    red, green, blue = diff_rgb.split()
+    return ImageChops.lighter(ImageChops.lighter(red, green), blue)
+
+
+def _should_refine_same_size_full_frame_blend(
+    outside_mask_mean_diff: float | None,
+    mask_ring_mean_diff: float | None,
+    persistent_outer_band_far_diff: float | None,
+    outside_opaque_ratio: float | None,
+) -> bool:
+    if outside_mask_mean_diff is None or outside_mask_mean_diff <= SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX:
+        return False
+    if (
+        persistent_outer_band_far_diff is None
+        or persistent_outer_band_far_diff <= SAME_SIZE_FULL_FRAME_PERSISTENT_OUTER_BAND_DIFF_MIN
+    ):
+        return False
+    if (
+        outside_opaque_ratio is not None
+        and outside_opaque_ratio < SAME_SIZE_FULL_FRAME_OUTSIDE_OPAQUE_RATIO_MIN
+    ):
+        return False
+    if mask_ring_mean_diff is not None and mask_ring_mean_diff > SAME_SIZE_FULL_FRAME_RING_DIFF_MAX:
+        return True
+    return outside_mask_mean_diff > SAME_SIZE_FULL_FRAME_RING_DIFF_MAX
+
+
+def _sum_mask_alpha(mask_alpha: Image.Image) -> int:
+    histogram = mask_alpha.histogram()
+    return sum(index * count for index, count in enumerate(histogram))
+
+
+def _square_mask(mask_alpha: Image.Image) -> Image.Image:
+    return mask_alpha.point(lambda value: round(value * value / 255))
+
+
+def _build_same_size_bright_halo_risk_mask(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+    blur_radius: int,
+) -> Image.Image:
+    candidate_luma = candidate_rgb.convert("L")
+    original_luma = original_rgb.convert("L")
+    bright_luma_delta = ImageChops.subtract(candidate_luma, original_luma)
+    bright_luma_risk = bright_luma_delta.point(
+        lambda value: 0
+        if value <= SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_SOFT_MIN
+        else (
+            255
+            if value >= SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_HARD_MAX
+            else round(
+                (value - SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_SOFT_MIN)
+                * 255
+                / (
+                    SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_HARD_MAX
+                    - SAME_SIZE_FULL_FRAME_BRIGHT_HALO_LUMA_SOFT_MIN
+                )
+            )
+        )
+    )
+    low_mask_alpha_risk = mask_alpha.point(
+        lambda value: 255
+        if value <= SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_HARD_MAX
+        else (
+            0
+            if value >= SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_SOFT_MAX
+            else round(
+                (SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_SOFT_MAX - value)
+                * 255
+                / (
+                    SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_SOFT_MAX
+                    - SAME_SIZE_FULL_FRAME_BRIGHT_HALO_MASK_ALPHA_HARD_MAX
+                )
+            )
+        )
+    )
+    bright_halo_risk = ImageChops.multiply(bright_luma_risk, low_mask_alpha_risk)
+    return bright_halo_risk.filter(ImageFilter.GaussianBlur(radius=max(1, blur_radius)))
+
+
+def _refine_same_size_full_frame_blend_mask(
+    candidate_rgba: Image.Image,
+    original_rgba: Image.Image,
+    mask_alpha: Image.Image,
+    base_mask: Image.Image,
+    outside_mask_mean_diff: float | None,
+    mask_ring_mean_diff: float | None,
+    persistent_outer_band_far_diff: float | None,
+    outside_opaque_ratio: float | None,
+) -> tuple[Image.Image, bool, float | None]:
+    if not _should_refine_same_size_full_frame_blend(
+        outside_mask_mean_diff,
+        mask_ring_mean_diff,
+        persistent_outer_band_far_diff,
+        outside_opaque_ratio,
+    ):
+        return base_mask, False, None
+
+    expansion = _compute_same_size_full_frame_mask_expansion(mask_alpha)
+    if expansion is None:
+        return base_mask, False, None
+
+    core_shrink = max(1, expansion // 2)
+    inner_core_mask = mask_alpha.filter(ImageFilter.MinFilter(core_shrink * 2 + 1))
+    if inner_core_mask.getbbox() is None:
+        return base_mask, False, None
+
+    edge_band_mask = ImageChops.subtract(base_mask, inner_core_mask)
+    if edge_band_mask.getbbox() is None:
+        return base_mask, False, None
+
+    candidate_rgb = candidate_rgba.convert("RGB")
+    original_rgb = original_rgba.convert("RGB")
+
+    diff_mask = _build_max_channel_diff_mask(
+        candidate_rgb,
+        original_rgb,
+    )
+    color_risk_mask = diff_mask.point(
+        lambda value: 0
+        if value <= SAME_SIZE_FULL_FRAME_EDGE_DIFF_SOFT_MIN
+        else (
+            255
+            if value >= SAME_SIZE_FULL_FRAME_EDGE_DIFF_HARD_MAX
+            else round(
+                (value - SAME_SIZE_FULL_FRAME_EDGE_DIFF_SOFT_MIN)
+                * 255
+                / (SAME_SIZE_FULL_FRAME_EDGE_DIFF_HARD_MAX - SAME_SIZE_FULL_FRAME_EDGE_DIFF_SOFT_MIN)
+            )
+        )
+    )
+    candidate_alpha = candidate_rgba.getchannel("A")
+    alpha_risk_mask = candidate_alpha.point(
+        lambda value: 0
+        if value >= SAME_SIZE_FULL_FRAME_EDGE_ALPHA_SOFT_MIN
+        else (
+            255
+            if value <= SAME_SIZE_FULL_FRAME_EDGE_ALPHA_HARD_MIN
+            else round(
+                (SAME_SIZE_FULL_FRAME_EDGE_ALPHA_SOFT_MIN - value)
+                * 255
+                / (SAME_SIZE_FULL_FRAME_EDGE_ALPHA_SOFT_MIN - SAME_SIZE_FULL_FRAME_EDGE_ALPHA_HARD_MIN)
+            )
+        )
+    )
+    combined_risk_mask = ImageChops.lighter(color_risk_mask, alpha_risk_mask)
+    combined_risk_mask = combined_risk_mask.filter(ImageFilter.GaussianBlur(radius=max(1, expansion // 3)))
+    bright_halo_risk_mask = _build_same_size_bright_halo_risk_mask(
+        candidate_rgb,
+        original_rgb,
+        mask_alpha,
+        max(1, expansion // 4),
+    )
+    combined_risk_mask = ImageChops.lighter(combined_risk_mask, bright_halo_risk_mask)
+
+    safe_edge_mask = _square_mask(ImageChops.invert(combined_risk_mask))
+    refined_edge_band_mask = ImageChops.multiply(edge_band_mask, safe_edge_mask)
+    refined_mask = ImageChops.lighter(inner_core_mask, refined_edge_band_mask)
+
+    edge_alpha_total = _sum_mask_alpha(edge_band_mask)
+    refined_edge_alpha_total = _sum_mask_alpha(refined_edge_band_mask)
+    if edge_alpha_total <= 0 or refined_edge_alpha_total >= edge_alpha_total:
+        return base_mask, False, None
+    attenuated_ratio = 1.0 - (refined_edge_alpha_total / edge_alpha_total)
+    return refined_mask, True, attenuated_ratio
 
 
 def _build_same_size_effective_mask(
@@ -2452,6 +2822,161 @@ def _build_same_size_effective_mask(
     return effective_mask, True
 
 
+def _resolve_same_size_projection_mode(
+    candidate_rgb: Image.Image,
+    original_rgb: Image.Image,
+    mask_alpha: Image.Image,
+    target_size: tuple[int, int],
+    outside_opaque_ratio: float | None,
+) -> tuple[str, Image.Image, float | None, float | None, float | None, float | None, float | None, float | None]:
+    outside_mask_mean_diff = _measure_outside_mask_mean_diff(
+        candidate_rgb,
+        original_rgb,
+        mask_alpha,
+        FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX,
+    )
+    mask_ring_mean_diff = _measure_mask_ring_mean_diff(
+        candidate_rgb,
+        original_rgb,
+        mask_alpha,
+    )
+    (
+        persistent_outer_band_near_diff,
+        persistent_outer_band_far_diff,
+        persistent_outer_band_ratio,
+    ) = _measure_persistent_outer_band_drift(
+        candidate_rgb,
+        original_rgb,
+        mask_alpha,
+    )
+    candidate_can_replace_full_frame = (
+        outside_opaque_ratio is None
+        or outside_opaque_ratio >= SAME_SIZE_FULL_FRAME_OUTSIDE_OPAQUE_RATIO_MIN
+    )
+    outside_frame_is_still_original = (
+        outside_mask_mean_diff is not None
+        and outside_mask_mean_diff <= SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX
+    )
+    ring_requires_generated_frame = (
+        mask_ring_mean_diff is not None
+        and mask_ring_mean_diff > SAME_SIZE_FULL_FRAME_RING_DIFF_MAX
+    )
+    should_use_generated_frame = (
+        candidate_can_replace_full_frame
+        and outside_frame_is_still_original
+        and ring_requires_generated_frame
+    )
+    if should_use_generated_frame:
+        return (
+            "full-frame-generated",
+            Image.new("L", target_size, 255),
+            outside_mask_mean_diff,
+            mask_ring_mean_diff,
+            persistent_outer_band_near_diff,
+            persistent_outer_band_far_diff,
+            persistent_outer_band_ratio,
+            None,
+        )
+    full_frame_mask, full_frame_mask_scale = _build_same_size_full_frame_mask_with_metrics(
+        mask_alpha,
+        outside_mask_mean_diff,
+        mask_ring_mean_diff,
+        persistent_outer_band_far_diff,
+    )
+    return (
+        "full-frame",
+        full_frame_mask,
+        outside_mask_mean_diff,
+        mask_ring_mean_diff,
+        persistent_outer_band_near_diff,
+        persistent_outer_band_far_diff,
+        persistent_outer_band_ratio,
+        full_frame_mask_scale,
+    )
+
+
+def _resolve_inpaint_debug_root_dir() -> Path | None:
+    if not config.inpaint_debug_artifacts_enabled:
+        return None
+    configured = str(os.getenv(INPAINT_DEBUG_ARTIFACTS_DIR_ENV) or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (BASE_DIR / "logs" / "inpaint_debug").resolve()
+
+
+def _build_inpaint_debug_overlay_image(original_rgba: Image.Image, mask_alpha: Image.Image) -> Image.Image:
+    overlay = Image.new("RGBA", original_rgba.size, (255, 64, 64, 0))
+    overlay.putalpha(mask_alpha.point(lambda value: min(160, value)))
+    return Image.alpha_composite(original_rgba, overlay)
+
+
+def _build_inpaint_debug_heatmap_image(reference_rgb: Image.Image, result_rgb: Image.Image) -> Image.Image:
+    diff = ImageChops.difference(reference_rgb, result_rgb).convert("L")
+    diff = ImageOps.autocontrast(diff)
+    return ImageOps.colorize(diff, black=(0, 0, 0), mid=(255, 140, 0), white=(255, 255, 255)).convert("RGBA")
+
+
+def _write_inpaint_debug_artifacts(
+    *,
+    original_rgba: Image.Image,
+    candidate_rgba: Image.Image,
+    mask_alpha: Image.Image,
+    composited_rgba: Image.Image,
+    projection_mode: str,
+    projection_box: tuple[int, int, int, int],
+    outside_mask_mean_diff: float | None,
+    mask_ring_mean_diff: float | None,
+    persistent_outer_band_near_diff: float | None,
+    persistent_outer_band_far_diff: float | None,
+    persistent_outer_band_ratio: float | None,
+    outside_opaque_ratio: float | None,
+    blend_refined: bool,
+    blend_refined_alpha_ratio: float | None,
+    full_frame_mask_scale: float | None,
+) -> Path | None:
+    debug_root = _resolve_inpaint_debug_root_dir()
+    if debug_root is None:
+        return None
+
+    bundle_hash = hashlib.sha256(
+        original_rgba.tobytes() + candidate_rgba.tobytes() + mask_alpha.tobytes() + composited_rgba.tobytes()
+    ).hexdigest()[:12]
+    relative_dir = Path(time.strftime("%Y"), time.strftime("%m"), time.strftime("%d"))
+    bundle_dir = debug_root / relative_dir / f"{int(time.time())}_{bundle_hash}"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    original_rgba.save(bundle_dir / "original.png", format="PNG")
+    candidate_rgba.save(bundle_dir / "candidate.png", format="PNG")
+    mask_alpha.save(bundle_dir / "mask.png", format="PNG")
+    composited_rgba.save(bundle_dir / "composited.png", format="PNG")
+    _build_inpaint_debug_overlay_image(original_rgba, mask_alpha).save(bundle_dir / "mask_overlay.png", format="PNG")
+    _build_inpaint_debug_heatmap_image(
+        original_rgba.convert("RGB"),
+        composited_rgba.convert("RGB"),
+    ).save(bundle_dir / "composited_diff_heatmap.png", format="PNG")
+
+    metadata = {
+        "projection_mode": projection_mode,
+        "projection_box": list(projection_box),
+        "original_size": list(original_rgba.size),
+        "candidate_size": list(candidate_rgba.size),
+        "outside_diff": outside_mask_mean_diff,
+        "ring_diff": mask_ring_mean_diff,
+        "outer_band_near_diff": persistent_outer_band_near_diff,
+        "outer_band_far_diff": persistent_outer_band_far_diff,
+        "outer_band_ratio": persistent_outer_band_ratio,
+        "outside_opaque_ratio": outside_opaque_ratio,
+        "blend_refined": blend_refined,
+        "blend_refined_alpha_ratio": blend_refined_alpha_ratio,
+        "full_frame_mask_scale": full_frame_mask_scale,
+    }
+    (bundle_dir / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return bundle_dir
+
+
 def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, mask_bytes: bytes) -> bytes:
     """合成兜底：用 mask 将 inpaint 结果叠合到原图。
     mask A=255（遮罩区）→ 使用 inpaint 结果像素（AI 修改的区域）。
@@ -2469,30 +2994,70 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
         mask_alpha = mask_img.split()[3] if mask_img.mode == "RGBA" else mask_img.convert("L")
         orig_rgba = orig_img.convert("RGBA")
         composite_mask = mask_alpha
+        outside_mask_mean_diff: float | None = None
+        mask_ring_mean_diff: float | None = None
+        persistent_outer_band_near_diff: float | None = None
+        persistent_outer_band_far_diff: float | None = None
+        persistent_outer_band_ratio: float | None = None
+        outside_opaque_ratio: float | None = None
+        blend_refined = False
+        blend_refined_alpha_ratio: float | None = None
+        full_frame_mask_scale: float | None = None
+        debug_candidate_rgba: Image.Image | None = None
         if inpaint_img.size == (target_w, target_h):
             inpaint_rgba = inpaint_img.convert("RGBA")
+            debug_candidate_rgba = inpaint_rgba
+            outside_opaque_ratio = _measure_outside_mask_opaque_ratio(
+                inpaint_rgba,
+                mask_alpha,
+                FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX,
+            )
+            if (
+                outside_opaque_ratio is not None
+                and outside_opaque_ratio < SAME_SIZE_FULL_FRAME_OUTSIDE_OPAQUE_RATIO_MIN
+            ):
+                inpaint_rgba = Image.alpha_composite(orig_rgba, inpaint_rgba)
             composite_mask, placeholder_filtered = _build_same_size_effective_mask(inpaint_img, mask_alpha)
             if placeholder_filtered:
                 projection_mode = "same-size-patch-canvas"
             else:
-                outside_mask_mean_diff = _measure_outside_mask_mean_diff(
-                    inpaint_img.convert("RGB"),
-                    orig_img.convert("RGB"),
+                candidate_rgb = inpaint_img.convert("RGB")
+                original_rgb = orig_img.convert("RGB")
+                (
+                    projection_mode,
+                    composite_mask,
+                    outside_mask_mean_diff,
+                    mask_ring_mean_diff,
+                    persistent_outer_band_near_diff,
+                    persistent_outer_band_far_diff,
+                    persistent_outer_band_ratio,
+                    full_frame_mask_scale,
+                ) = _resolve_same_size_projection_mode(
+                    candidate_rgb,
+                    original_rgb,
                     mask_alpha,
-                    FULL_FRAME_VARIANT_OUTSIDE_MASK_ALPHA_MAX,
+                    (target_w, target_h),
+                    outside_opaque_ratio,
                 )
-                if (
-                    outside_mask_mean_diff is not None
-                    and outside_mask_mean_diff > SAME_SIZE_FULL_FRAME_OUTSIDE_MASK_MEAN_DIFF_MAX
-                ):
-                    composite_mask = Image.new("L", (target_w, target_h), 255)
-                    projection_mode = "full-frame-generated"
-                else:
-                    composite_mask = _build_same_size_full_frame_mask(mask_alpha)
-                    projection_mode = "full-frame"
+                if projection_mode == "full-frame":
+                    (
+                        composite_mask,
+                        blend_refined,
+                        blend_refined_alpha_ratio,
+                    ) = _refine_same_size_full_frame_blend_mask(
+                        inpaint_rgba,
+                        orig_rgba,
+                        mask_alpha,
+                        composite_mask,
+                        outside_mask_mean_diff,
+                        mask_ring_mean_diff,
+                        persistent_outer_band_far_diff,
+                        outside_opaque_ratio,
+                    )
             projection_box = composite_mask.getbbox() or (0, 0, target_w, target_h)
         elif _looks_like_full_frame_variant(inpaint_img, orig_img, mask_alpha):
             inpaint_rgba = _scale_to_fill(inpaint_img, (target_w, target_h)).convert("RGBA")
+            debug_candidate_rgba = inpaint_rgba
             projection_mode = "full-frame-variant"
             projection_box = (0, 0, target_w, target_h)
         else:
@@ -2501,11 +3066,42 @@ def _composite_inpaint_onto_original(inpaint_bytes: bytes, orig_bytes: bytes, ma
                 mask_alpha,
                 (target_w, target_h),
             )
+            debug_candidate_rgba = inpaint_rgba
         print(
             f"[image-inpaint-compose] raw={inpaint_img.width}x{inpaint_img.height} "
-            f"target={target_w}x{target_h} mode={projection_mode} box={projection_box}"
+            f"target={target_w}x{target_h} mode={projection_mode} box={projection_box} "
+            f"outside_diff={outside_mask_mean_diff} ring_diff={mask_ring_mean_diff} "
+            f"outer_band_near_diff={persistent_outer_band_near_diff} "
+            f"outer_band_far_diff={persistent_outer_band_far_diff} "
+            f"outer_band_ratio={persistent_outer_band_ratio} "
+            f"outside_opaque_ratio={outside_opaque_ratio} "
+            f"full_frame_mask_scale={full_frame_mask_scale} "
+            f"blend_refined={blend_refined} "
+            f"blend_refined_alpha_ratio={blend_refined_alpha_ratio}"
         )
         composited = Image.composite(inpaint_rgba, orig_rgba, composite_mask)
+        try:
+            bundle_dir = _write_inpaint_debug_artifacts(
+                original_rgba=orig_rgba,
+                candidate_rgba=debug_candidate_rgba,
+                mask_alpha=mask_alpha,
+                composited_rgba=composited,
+                projection_mode=projection_mode,
+                projection_box=projection_box,
+                outside_mask_mean_diff=outside_mask_mean_diff,
+                mask_ring_mean_diff=mask_ring_mean_diff,
+                persistent_outer_band_near_diff=persistent_outer_band_near_diff,
+                persistent_outer_band_far_diff=persistent_outer_band_far_diff,
+                persistent_outer_band_ratio=persistent_outer_band_ratio,
+                outside_opaque_ratio=outside_opaque_ratio,
+                blend_refined=blend_refined,
+                blend_refined_alpha_ratio=blend_refined_alpha_ratio,
+                full_frame_mask_scale=full_frame_mask_scale,
+            )
+            if bundle_dir is not None:
+                print(f"[image-inpaint-debug] saved artifacts to {bundle_dir}")
+        except Exception as exc:
+            print(f"[image-inpaint-debug] failed to save artifacts: {exc}")
         buf = io.BytesIO()
         composited.save(buf, format="PNG")
         return buf.getvalue()
@@ -2554,7 +3150,7 @@ def _process_output_image(image_bytes: bytes, image_options: ImageRequestOptions
 
 
 def _save_processed_image(image_bytes: bytes, output_format: str, base_url: str | None = None) -> str:
-    file_hash = hashlib.md5(image_bytes).hexdigest()
+    file_hash = hashlib.sha256(image_bytes).hexdigest()
     timestamp = int(time.time())
     extension = IMAGE_OUTPUT_EXTENSIONS[output_format]
     filename = f"{timestamp}_{file_hash}.{extension}"
@@ -3407,4 +4003,3 @@ def inpaint_image_result(
         raise
     finally:
         session.close()
-

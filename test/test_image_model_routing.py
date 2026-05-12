@@ -4,7 +4,9 @@ import base64
 import io
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from PIL import Image
@@ -590,7 +592,7 @@ class ImageModelRoutingTests(unittest.TestCase):
             self.assertEqual((220, 30, 30, 255), composited.getpixel((16, 16)))
             self.assertEqual((30, 40, 80, 255), composited.getpixel((1, 1)))
 
-    def test_composite_inpaint_same_size_full_frame_with_strong_outside_drift_prefers_generated_frame(self) -> None:
+    def test_composite_inpaint_same_size_with_strong_outside_drift_preserves_original_frame(self) -> None:
         original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
         raw_output = Image.new("RGBA", (24, 24), (170, 210, 120, 255))
         for y in range(8, 16):
@@ -609,8 +611,396 @@ class ImageModelRoutingTests(unittest.TestCase):
         )
 
         with Image.open(io.BytesIO(composited_bytes)) as composited:
-            self.assertEqual((170, 210, 120, 255), composited.getpixel((2, 2)))
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((2, 2)))
             self.assertEqual((220, 30, 30, 255), composited.getpixel((12, 12)))
+
+    def test_composite_inpaint_same_size_transparent_outside_mask_preserves_original(self) -> None:
+        original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (24, 24), (0, 0, 0, 0))
+        for y in range(8, 16):
+            for x in range(8, 16):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (24, 24), (255, 255, 255, 0))
+        for y in range(9, 15):
+            for x in range(9, 15):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((2, 2)))
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((12, 12)))
+            self.assertEqual(255, composited.getpixel((8, 12))[3])
+
+    def test_composite_inpaint_same_size_with_strong_mask_ring_drift_prefers_generated_frame(self) -> None:
+        original = Image.new("RGBA", (32, 32), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (32, 32), (12, 34, 56, 255))
+        for y in range(11, 21):
+            for x in range(11, 21):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+        for y in range(9, 23):
+            for x in range(9, 23):
+                if 11 <= x < 21 and 11 <= y < 21:
+                    continue
+                raw_output.putpixel((x, y), (180, 220, 120, 255))
+
+        mask = Image.new("RGBA", (32, 32), (255, 255, 255, 0))
+        for y in range(11, 21):
+            for x in range(11, 21):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            self.assertEqual((180, 220, 120, 255), composited.getpixel((10, 16)))
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((16, 16)))
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((2, 2)))
+
+    def test_composite_inpaint_same_size_with_persistent_outer_band_drift_preserves_original_frame(self) -> None:
+        original = Image.new("RGBA", (120, 120), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (120, 120), (12, 34, 56, 255))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+        for y in range(32, 88):
+            for x in range(32, 88):
+                if 40 <= x < 80 and 40 <= y < 80:
+                    continue
+                raw_output.putpixel((x, y), (20, 85, 75, 255))
+
+        mask = Image.new("RGBA", (120, 120), (255, 255, 255, 0))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        composited_bytes = _composite_inpaint_onto_original(
+            self._png_bytes(raw_output),
+            self._png_bytes(original),
+            self._png_bytes(mask),
+        )
+
+        with Image.open(io.BytesIO(composited_bytes)) as composited:
+            outside_band_pixel = composited.getpixel((34, 60))
+            self.assertLess(outside_band_pixel[1], 100)
+            self.assertEqual((220, 30, 30, 255), composited.getpixel((60, 60)))
+            self.assertEqual((12, 34, 56, 255), composited.getpixel((10, 10)))
+
+    def test_composite_inpaint_same_size_with_low_ring_drift_uses_masked_frame(self) -> None:
+        original = Image.new("RGBA", (120, 120), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (120, 120), (12, 34, 56, 255))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+        for y in range(32, 88):
+            for x in range(32, 88):
+                if 40 <= x < 80 and 40 <= y < 80:
+                    continue
+                raw_output.putpixel((x, y), (20, 85, 75, 255))
+
+        mask = Image.new("RGBA", (120, 120), (255, 255, 255, 0))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "",
+                        "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                    },
+                    clear=False,
+                ),
+                mock.patch("services.image_service.config", mock.Mock(inpaint_debug_artifacts_enabled=True)),
+            ):
+                _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            metadata_path = next(Path(temp_dir).rglob("metadata.json"))
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual("full-frame", metadata["projection_mode"])
+            self.assertLess(metadata["ring_diff"], 36.0)
+            self.assertGreater(metadata["outer_band_far_diff"], 18.0)
+            self.assertFalse(metadata["blend_refined"])
+            self.assertEqual(1.0, metadata["full_frame_mask_scale"])
+
+    def test_composite_inpaint_same_size_low_drift_uses_sharper_full_frame_mask(self) -> None:
+        original = Image.new("RGBA", (120, 120), (120, 120, 120, 255))
+        raw_output = original.copy()
+        for y in range(42, 78):
+            for x in range(42, 78):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+        for y in range(36, 84):
+            for x in range(76, 88):
+                raw_output.putpixel((x, y), (210, 170, 110, 255))
+
+        mask = Image.new("RGBA", (120, 120), (255, 255, 255, 0))
+        for y in range(36, 84):
+            for x in range(36, 84):
+                alpha = 255
+                if x >= 76:
+                    alpha = max(32, 255 - (x - 76) * 24)
+                mask.putpixel((x, y), (255, 255, 255, alpha))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "",
+                        "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                    },
+                    clear=False,
+                ),
+                mock.patch("services.image_service.config", mock.Mock(inpaint_debug_artifacts_enabled=True)),
+            ):
+                composited_bytes = _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            with Image.open(io.BytesIO(composited_bytes)) as composited:
+                edge_pixel = composited.getpixel((80, 60))
+                self.assertEqual((220, 30, 30, 255), composited.getpixel((60, 60)))
+                self.assertGreater(edge_pixel[0], 185)
+                self.assertGreater(edge_pixel[1], 150)
+                self.assertGreater(edge_pixel[2], 95)
+                self.assertEqual((120, 120, 120, 255), composited.getpixel((20, 60)))
+
+            metadata_path = next(Path(temp_dir).rglob("metadata.json"))
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual("full-frame", metadata["projection_mode"])
+            self.assertFalse(metadata["blend_refined"])
+            self.assertLess(metadata["full_frame_mask_scale"], 1.0)
+
+    def test_composite_inpaint_same_size_full_frame_refines_suspicious_edge_pixels(self) -> None:
+        original = Image.new("RGBA", (120, 120), (60, 80, 100, 255))
+        raw_output = Image.new("RGBA", (120, 120), (220, 220, 220, 255))
+        for y in range(44, 76):
+            for x in range(44, 76):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (120, 120), (255, 255, 255, 0))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "",
+                        "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                    },
+                    clear=False,
+                ),
+                mock.patch("services.image_service.config", mock.Mock(inpaint_debug_artifacts_enabled=True)),
+            ):
+                composited_bytes = _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            with Image.open(io.BytesIO(composited_bytes)) as composited:
+                self.assertEqual((220, 30, 30, 255), composited.getpixel((60, 60)))
+                self.assertEqual((60, 80, 100, 255), composited.getpixel((30, 60)))
+
+            metadata_path = next(Path(temp_dir).rglob("metadata.json"))
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual("full-frame", metadata["projection_mode"])
+            self.assertTrue(metadata["blend_refined"])
+            self.assertGreater(metadata["blend_refined_alpha_ratio"], 0.0)
+
+    def test_composite_inpaint_same_size_full_frame_refines_edge_alpha_halo(self) -> None:
+        original = Image.new("RGBA", (120, 120), (40, 70, 110, 255))
+        raw_output = Image.new("RGBA", (120, 120), (214, 206, 188, 255))
+        for y in range(44, 76):
+            for x in range(44, 76):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                if 44 <= x < 76 and 44 <= y < 76:
+                    continue
+                raw_output.putpixel((x, y), (214, 206, 188, 64))
+
+        mask = Image.new("RGBA", (120, 120), (255, 255, 255, 0))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "",
+                        "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                    },
+                    clear=False,
+                ),
+                mock.patch("services.image_service.config", mock.Mock(inpaint_debug_artifacts_enabled=True)),
+            ):
+                composited_bytes = _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            with Image.open(io.BytesIO(composited_bytes)) as composited:
+                edge_pixel = composited.getpixel((41, 60))
+                self.assertEqual((220, 30, 30, 255), composited.getpixel((60, 60)))
+                self.assertEqual(255, edge_pixel[3])
+                self.assertLess(abs(edge_pixel[0] - 40), 20)
+                self.assertLess(abs(edge_pixel[1] - 70), 20)
+                self.assertLess(abs(edge_pixel[2] - 110), 20)
+
+            metadata_path = next(Path(temp_dir).rglob("metadata.json"))
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertTrue(metadata["blend_refined"])
+
+    def test_composite_inpaint_same_size_full_frame_refines_bright_matte_halo(self) -> None:
+        original = Image.new("RGBA", (120, 120), (160, 128, 92, 255))
+        raw_output = Image.new("RGBA", (120, 120), (228, 224, 220, 255))
+        for y in range(40, 80):
+            for x in range(40, 80):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (120, 120), (255, 255, 255, 0))
+        for y in range(24, 96):
+            for x in range(24, 96):
+                alpha = 255
+                if y < 40:
+                    alpha = max(8, (y - 24) * 16)
+                mask.putpixel((x, y), (255, 255, 255, alpha))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "",
+                        "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                    },
+                    clear=False,
+                ),
+                mock.patch("services.image_service.config", mock.Mock(inpaint_debug_artifacts_enabled=True)),
+            ):
+                composited_bytes = _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            with Image.open(io.BytesIO(composited_bytes)) as composited:
+                self.assertEqual((220, 30, 30, 255), composited.getpixel((60, 60)))
+                halo_pixel = composited.getpixel((60, 30))
+                self.assertLess(abs(halo_pixel[0] - 160), 20)
+                self.assertLess(abs(halo_pixel[1] - 128), 20)
+                self.assertLess(abs(halo_pixel[2] - 92), 20)
+
+            metadata_path = next(Path(temp_dir).rglob("metadata.json"))
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual("full-frame", metadata["projection_mode"])
+            self.assertTrue(metadata["blend_refined"])
+
+    def test_composite_inpaint_writes_debug_artifacts_when_enabled(self) -> None:
+        original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (24, 24), (170, 210, 120, 255))
+        for y in range(8, 16):
+            for x in range(8, 16):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (24, 24), (255, 255, 255, 0))
+        for y in range(9, 15):
+            for x in range(9, 15):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "1",
+                    "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                },
+                clear=False,
+            ):
+                self._png_bytes(original)
+                _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            bundle_dirs = [path for path in Path(temp_dir).rglob("*") if path.is_dir() and (path / "metadata.json").exists()]
+            self.assertEqual(1, len(bundle_dirs))
+            bundle_dir = bundle_dirs[0]
+            expected_files = {
+                "original.png",
+                "candidate.png",
+                "mask.png",
+                "composited.png",
+                "mask_overlay.png",
+                "composited_diff_heatmap.png",
+                "metadata.json",
+            }
+            self.assertEqual(expected_files, {path.name for path in bundle_dir.iterdir()})
+
+            metadata = json.loads((bundle_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual("full-frame", metadata["projection_mode"])
+            self.assertIn("outside_diff", metadata)
+            self.assertIn("outside_opaque_ratio", metadata)
+            self.assertIn("blend_refined", metadata)
+            self.assertIn("blend_refined_alpha_ratio", metadata)
+            self.assertIn("full_frame_mask_scale", metadata)
+
+    def test_composite_inpaint_writes_debug_artifacts_when_config_enabled(self) -> None:
+        original = Image.new("RGBA", (24, 24), (12, 34, 56, 255))
+        raw_output = Image.new("RGBA", (24, 24), (170, 210, 120, 255))
+        for y in range(8, 16):
+            for x in range(8, 16):
+                raw_output.putpixel((x, y), (220, 30, 30, 255))
+
+        mask = Image.new("RGBA", (24, 24), (255, 255, 255, 0))
+        for y in range(9, 15):
+            for x in range(9, 15):
+                mask.putpixel((x, y), (255, 255, 255, 255))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CHATGPT2API_SAVE_INPAINT_DEBUG_ARTIFACTS": "",
+                        "CHATGPT2API_INPAINT_DEBUG_DIR": temp_dir,
+                    },
+                    clear=False,
+                ),
+                mock.patch("services.image_service.config", mock.Mock(inpaint_debug_artifacts_enabled=True)),
+            ):
+                _composite_inpaint_onto_original(
+                    self._png_bytes(raw_output),
+                    self._png_bytes(original),
+                    self._png_bytes(mask),
+                )
+
+            bundle_dirs = [path for path in Path(temp_dir).rglob("*") if path.is_dir() and (path / "metadata.json").exists()]
+            self.assertEqual(1, len(bundle_dirs))
 
     def test_composite_inpaint_square_output_with_local_mask_uses_bbox_projection(self) -> None:
         original = Image.new("RGBA", (100, 100), (12, 34, 56, 255))
